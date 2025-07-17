@@ -645,25 +645,23 @@ class _opId(scipy.sparse.linalg.LinearOperator):
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
-    np.set_printoptions(precision=2)
-    degree = 3
-    tustin = Tustin(degree)
-    B0, B1 = np.array([[2, 0], [0, 3]]), np.zeros((2, 2))
-    # B0, B1 = 3, 2
-    M = 2*(degree+1)
-    S, K = tustin.matrix(B0, B1, M)
+    # Define delay system.
+    rng = np.random.default_rng(seed=288475)
+    B0 = 20 + rng.normal(0, 2, (4, 4)) + 1j * rng.normal(0, 5, (4, 4))
+    B1 = -5j + rng.normal(0, 10, (4, 3)) + 1j * rng.normal(0, 2, (4, 3))
+    B1 = np.hstack((B1, np.zeros((4, 1))), dtype=B0.dtype)
 
+    tustin = Tustin(degree=3, method='bspline')
+    # Compute eigenvalues using QR algorithm.
+    M = 150
+    eigs = tustin.eigvals(B0, B1, M)
 
-    w = scipy.sparse.linalg.eigs(-S+K, M=S, k=2, return_eigenvectors=False)
-
+    # Plot eigenvalues.
     fig, ax = plt.subplots()
-
-    # draw a unit circle.
-    theta = np.linspace(0, 2*np.pi, 500)
-    ax.plot(np.cos(theta), np.sin(theta), color='black')
-    ax.scatter(w.real, w.imag, color='b', s=100)
-    ax.set_aspect('equal', 'box')
-    ax.set_xlabel('Real')
-    ax.set_ylabel('Imaginary')
+    ax.plot(eigs.real, eigs.imag, 'o')
+    ax.set_xlim(-5, 10)
+    ax.set_ylim(-210, 210)
+    ax.set_xlabel('Re')
+    ax.set_ylabel('Im')
 
     plt.show()
