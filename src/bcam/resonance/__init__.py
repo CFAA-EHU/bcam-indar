@@ -1,1 +1,1 @@
-from bcam.resonance import diagrams, matrices
+from .core import *
