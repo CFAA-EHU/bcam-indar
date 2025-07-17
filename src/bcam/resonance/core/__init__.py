@@ -1,5 +1,6 @@
 from . import (
     diagrams,
     matrices,
-    lti
+    lti,
+    mechanical
 )

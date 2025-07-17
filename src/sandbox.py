@@ -5,7 +5,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-from bcam.resonance import lti
+# from bcam.resonance import lti
 
 # %%
 
+
+# %%
