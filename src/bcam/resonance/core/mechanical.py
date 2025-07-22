@@ -1,4 +1,6 @@
-#!/usr/bin/env python
+'''
+This is ...
+'''
 
 import numpy as np
 import scipy
@@ -50,6 +52,7 @@ def system_to_modal(M, C, K):
     mode_shapes : 2D-array
     Z : 1D-array
     '''
+    # Check parameters.
     N = M.shape[0]
     if N != M.shape[1]:
         msg = 'M must be a square matrix.'
@@ -58,6 +61,7 @@ def system_to_modal(M, C, K):
         msg = 'Incompatible shapes for M, C, and K.'
         raise ValueError(msg)
 
+    # Construct matrix for QEP.
     a = np.zeros((2 * N, 2 * N))
     b = np.zeros((2 * N, 2 * N))
     a[:N, N:] = K
@@ -87,48 +91,6 @@ def system_to_modal(M, C, K):
     return mode_shapes, Z
 
 
-def tensor_mode_shapes(amplitudes, poles, excitations, fs, Ni):
-    '''
-    Parameters
-    ----------
-    amplitude : 3D-array
-        Shape (n_responses, n_exitations, n_poles).
-    poles : 1D-array
-        The poles equal exp(Z / fs).
-    excitations : 2D-array
-        Shape (n_times, n_excitations).
-    fs : 2-tuple
-        Sampling frequencies for excitation and response, respectively.
-    Ni : int
-        Sample where the response starts, in response's sample rate.
-
-    Returns
-    -------
-    tensor : 3D-array
-        Shape (n_responses, n_excitations, n_poles).
-    '''
-    # Select poles with positive imaginary part.
-    idx = np.nonzero(poles.imag > -1e-6)[0]
-    poles = poles[idx]
-    amplitudes = amplitudes[..., idx]
-    
-    N = excitations.shape[0]
-    # tmp = exp(-Zt) with shape (n_times, n_poles)
-    tmp = poles[np.newaxis, :] ** (-(fs[1]/fs[0]) * np.arange(N)[:, np.newaxis])
-    tmp = np.expand_dims(tmp, axis=1) # (n_times, 1, n_poles)
-    # Laplace of f (Lf) has shape (n_excitations, n_poles)
-    Lf = scipy.integrate.simpson(
-            excitations[..., np.newaxis] * tmp, # (n_times, n_excitations, n_poles)
-            dx = 1/(fs[0]),
-            axis=0)
-    
-    Z = np.log(poles) * fs[1]
-    Z_ = Z[np.newaxis, ...] # (1, n_poles)
-    # factor has shape (n_excitations, n_poles).
-    factor = 2j * Z_.imag * (poles[np.newaxis, :]**(-Ni)) / ((Z_**2) * Lf)
-    # tensor has shape (n_responses, n_excitations, n_poles)
-    tensor = amplitudes * factor[np.newaxis, :]
-    return tensor
 
 
 # === Systems ===
@@ -183,7 +145,16 @@ def randomSystem(
     mode_shapes = mode_shapes[:, idxs]
     Z = Z[idxs]
 
-    return (M, C, K), (Z, mode_shapes)
+    mechanical = {
+        'mass': M,
+        'damping': C,
+        'stiffness': K
+    }
+    modal = {
+        'frequencies': Z,
+        'mode_shapes': mode_shapes
+    }
+    return mechanical, modal
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
