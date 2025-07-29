@@ -88,9 +88,10 @@ def _sum_exp_weighted(a, fs: float, ns: int):
     r = r * _sinh_m(a/fs) / a
     return r
 
-def _local_matrix(freqs, fs: float, ns: int):
+def _local_matrix(
+        freqs, fs: float, ns: int, penalty: float = 0.0):
     N = len(freqs)
-    r = np.zeros((2*N-1, 2*N-1))
+    r = np.zeros((2*N, 2*N))
 
     def _mult(x, y):
         r = x[np.newaxis, :] + y[:, np.newaxis]
@@ -102,60 +103,80 @@ def _local_matrix(freqs, fs: float, ns: int):
     r2 = _mult(freqs, freqs)
 
     r[:N, :N] = np.real(r1 - r2)
-    r[N:, :N] = _trig_fft(np.imag(r1 + r2).T)[..., 1:].T
+    r[N:, :N] = np.imag(r1 + r2)
     r[:N, N:] = r[N:, :N].T
-    r[N:, N:] = _trig_fft(_trig_fft(np.real(r1 + r2))[..., 1:].T)[..., 1:]
+    r[N:, N:] = np.real(r1 + r2)
     r *= 0.5
+    r += penalty * np.eye(2*N)
 
     return r
 
-def _reshape_injection(x, dof: int):
+def _reshape_injection(
+        x, dof: int, n_out:int, n_in:int):
     L = x.shape[-1]
-    x_ = np.zeros((dof, dof, 2*dof - 1, L), dtype=x.dtype)
-    x = x.reshape(dof*(dof+1)//2, 2*dof - 1, L)
-    x_[(np.arange(dof), np.arange(dof))] = x[:dof]
-    c = dof
-    for i in range(1, dof):
-        cn = c + dof - i
-        x_[(np.arange(dof-i), i+np.arange(dof-i))] = x[c:cn]/np.sqrt(2)
-        x_[(i+np.arange(dof-i), np.arange(dof-i))] = x[c:cn]/np.sqrt(2)
+    x_ = np.zeros((n_out, n_in, 2*dof - 1, L), dtype=x.dtype)
+    x = x.reshape(
+        n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof - 1, L)
+    x_[(np.arange(n_in), np.arange(n_in))] = x[:n_in]
+    c = n_in
+    for i in range(1, n_in):
+        cn = c + n_in - i
+        x_[(np.arange(n_in-i), i+np.arange(n_in-i))] = x[c:cn]/np.sqrt(2)
+        x_[(i+np.arange(n_in-i), np.arange(n_in-i))] = x[c:cn]/np.sqrt(2)
         c = cn
+    x_[n_in:, :] = x[c: c + (n_out-n_in)*n_in].reshape(n_out - n_in, n_in, 2*dof - 1, L)/np.sqrt(2)
     return x_
 
-def _reshape_projection(x, dof: int):
+def _reshape_projection(
+        x, dof: int, n_out:int, n_in:int):
     L = x.shape[-1]
-    x_ = np.zeros((dof*(dof+1)//2, 2*dof - 1, L), dtype=x.dtype)
-    x_[:dof] = x[(np.arange(dof), np.arange(dof))]
-    c = dof
-    for i in range(1, dof):
-        cn = c + dof - i
-        x_[c:cn] = (x[(np.arange(dof-i), i+np.arange(dof-i))] + x[(i+np.arange(dof-i), np.arange(dof-i))]) / np.sqrt(2)
+    x_ = np.zeros(
+        (n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof - 1, L),
+        dtype=x.dtype)
+    x_[:n_in] = x[(np.arange(n_in), np.arange(n_in))]
+    c = n_in
+    for i in range(1, n_in):
+        cn = c + n_in - i
+        x_[c:cn] = (x[(np.arange(n_in-i), i+np.arange(n_in-i))] + x[(i+np.arange(n_in-i), np.arange(n_in-i))]) / np.sqrt(2)
         c = cn
+    x_[c: c + (n_out - n_in)*n_in] = x[n_in:, :].reshape((n_out - n_in)*n_in, 2*dof - 1, L) * np.sqrt(2)
     return x_.reshape(-1, L)
 
 
 class _PreCoeff_to_Kernel(scipy.sparse.linalg.LinearOperator):
     
-    def __init__(self, freqs, fs: float, ns: int):
+    def __init__(
+            self,
+            freqs, fs: float, ns: int,
+            n_out:int, n_in:int,
+            penalty:float=0.0):
         self.freqs = freqs
         self.fs = fs
         self.ns = ns
+        self.n_out = n_out
+        self.n_in = n_in
+        self.penalty = penalty
 
         dof = len(self.freqs)
-        M = dof*(dof+1)//2 * (2*dof - 1)
+        M = (n_in*(n_in+1)//2 + (n_out-n_in)*n_in) * (2*dof - 1)
         super().__init__(
             dtype=np.float64,
-            shape=(M, M)
-        )
+            shape=(M, M))
 
-        self._local_matrix = _local_matrix(freqs, fs, ns)
+        # Change basis to mean im = 0.
+        lm = _local_matrix(freqs, fs, ns, penalty)
+        plm = np.zeros((2*dof-1, 2*dof-1), dtype=lm.dtype)
+        plm[dof:, :dof] = _trig_fft(lm[dof:, :dof].T)[..., 1:].T
+        plm[:dof, dof:] = plm[dof:, :dof].T
+        plm[dof:, dof:] = _trig_fft(_trig_fft(lm[dof:, dof:])[..., 1:].T)[..., 1:]
+        self._local_matrix = lm
 
     def _matmat(self, x):
         dof = len(self.freqs)
-        r = _reshape_injection(x, dof)
+        r = _reshape_injection(x, dof, self.n_out, self.n_in)
         M_local = self._local_matrix
         r = np.einsum('lk,ijkm->ijlm', M_local, r)
-        return _reshape_projection(r, dof) / dof
+        return _reshape_projection(r, dof, self.n_out, self.n_in)
 
     def _adjoint(self):
         return self
@@ -163,10 +184,15 @@ class _PreCoeff_to_Kernel(scipy.sparse.linalg.LinearOperator):
 
 class _PreCoeff():
 
-    def __init__(self, freqs, fs: float, ns: int):
+    def __init__(
+            self,
+            freqs, fs: float, ns: int,
+            n_out:int=None, n_in:int=None):
         self.freqs = freqs
         self.fs = fs
         self.ns = ns
+        self.n_out = len(freqs) if n_out is None else n_out
+        self.n_in = n_out if n_in is None else n_in
 
     @property
     def amplitudes_(self):
@@ -180,9 +206,7 @@ class _PreCoeff():
 
     def _rhs(self, y):
         freqs = self.freqs
-        fs = self.fs
-        ns = self.ns
-        dof = len(freqs)
+        fs, ns = self.fs, self.ns
 
         def prod(t):
             T = ns / fs
@@ -195,9 +219,8 @@ class _PreCoeff():
         r = np.einsum(
             'ijt,kt->ijk',
             y,
-            prod(np.arange(ns)/fs)
-        )
-        r = r / (dof*fs)
+            prod(np.arange(ns)/fs))
+        r = r / fs
         r = np.concatenate(
             [np.imag(r), _trig_fft(np.real(r))[..., 1:]],
             axis=-1
@@ -205,28 +228,72 @@ class _PreCoeff():
 
         return r
 
-    def fit(self, y, cg_kwargs=None):
+    def fit(
+            self, y,
+            penalty:float =0.0, cg_kwargs=None):
         dof = len(self.freqs)
         cg_kwargs = {} if cg_kwargs is None else cg_kwargs
-        lhs = _PreCoeff_to_Kernel(self.freqs, self.fs, self.ns)
+        lhs = _PreCoeff_to_Kernel(
+            self.freqs, self.fs, self.ns,
+            self.n_out, self.n_in,
+            penalty=penalty)
         rhs = self._rhs(y)
-        rhs = _reshape_projection(rhs[..., np.newaxis], dof)
+        rhs = _reshape_projection(
+            rhs[..., np.newaxis], dof, self.n_out, self.n_in)
         r, info = scipy.sparse.linalg.cg(lhs, rhs, **cg_kwargs)
         if info != 0:
             logger.warning(f'Conjugate gradient did not converge, info={info}')
 
-        r = _reshape_injection(r[..., np.newaxis], dof)
+        r = _reshape_injection(
+            r[..., np.newaxis], dof, self.n_out, self.n_in)
         self.raw_coeff_ = r[..., 0]
         return self.amplitudes_
-
-class Test(_PreCoeff):
-    '''Test class for _PreCoeff.'''
-    def __init__(self, freqs, fs: float, ns: int):
-        super().__init__(freqs, fs, ns)
 
 # =================================
 # Modal Parameters
 # =================================
+
+def _partial_mode_shapes_map(x, freqs, dof, n_outputs):
+    No = n_outputs
+    a = x[:dof*No].reshape(No, dof)
+    q, r, _ = scipy.linalg.qr(
+        a.T, overwrite_a=False, mode='full', pivoting=False)
+    r = np.min(r[(np.arange(No), np.arange(No))])
+    if r < 1e-8:
+        logging.warning('Real part does not have full rank.')
+        return np.nan
+
+    lu = x[dof*No: dof*No + No*(No-1)//2]
+    l_ = np.zeros((No, No))
+    init = 0
+    for i in range(No-1):
+        end = init + No - i - 1
+        l_[i, i+1:] = lu[init: end]
+        l_[i+1:, i] = -lu[init: end]
+        init = end
+    lu = l_
+    lc = x[dof*No + No*(No-1)//2:].reshape(No, dof - No)
+    l = np.concatenate((lu, lc), axis=1)
+
+    d = freqs.real, freqs.imag
+    tmp = q @ l.T
+    H = (d[0][:, np.newaxis] * q[:, :No]).T @ tmp
+    H += H.T
+    H += (d[1][:, np.newaxis] * q[:, :No]).T @ q[:, :No]
+    H += -tmp.T @ (d[1][:, np.newaxis] * tmp)
+
+    try:
+        scipy.linalg.cholesky(H, lower=False, overwrite_a=True)
+    except scipy.linalg.LinAlgError:
+        logging.warning('Mass matrix is not positive-definite.')
+        return np.nan
+
+    l = q[:, :No] @ l @ q.T
+
+    psi = a @ (np.eye(dof) + 1j * l)
+    psi = psi * np.sqrt(np.imag(freqs))[np.newaxis, :]
+
+    return psi
 
 def modal_to_system(mode_shapes, Z):
     '''Recover system matrices from mode shapes and complex frequencies.
@@ -418,3 +485,15 @@ class Spring:
 
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
+
+    seed = 1234345
+    rng = np.random.default_rng(seed)
+    dof, n_out, n_in = 4, 3, 2
+    L = 2
+    
+    x = rng.normal(
+        size=((n_in*(n_in+1)//2 + (n_out-n_in)*n_in)*(2*dof - 1), L))
+    ix = _reshape_injection(x, dof, n_out=n_out, n_in=n_in)
+    pix = _reshape_projection(ix, dof, n_out=n_out, n_in=n_in)
+
+    print('test reshapes: ', np.allclose(x, pix))
