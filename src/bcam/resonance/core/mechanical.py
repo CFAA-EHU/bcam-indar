@@ -233,13 +233,16 @@ class _PreCoeff():
             penalty:float =0.0, cg_kwargs=None):
         dof = len(self.freqs)
         cg_kwargs = {} if cg_kwargs is None else cg_kwargs
+
         lhs = _PreCoeff_to_Kernel(
             self.freqs, self.fs, self.ns,
             self.n_out, self.n_in,
             penalty=penalty)
+
         rhs = self._rhs(y)
         rhs = _reshape_projection(
             rhs[..., np.newaxis], dof, self.n_out, self.n_in)
+
         r, info = scipy.sparse.linalg.cg(lhs, rhs, **cg_kwargs)
         if info != 0:
             logger.warning(f'Conjugate gradient did not converge, info={info}')
@@ -253,47 +256,96 @@ class _PreCoeff():
 # Modal Parameters
 # =================================
 
-def _partial_mode_shapes_map(x, freqs, dof, n_outputs):
-    No = n_outputs
-    a = x[:dof*No].reshape(No, dof)
-    q, r, _ = scipy.linalg.qr(
-        a.T, overwrite_a=False, mode='full', pivoting=False)
-    r = np.min(r[(np.arange(No), np.arange(No))])
-    if r < 1e-8:
+# def _reshape_mode_shapes_input(
+#         x, dof: int, n_out: int, n_in: int):
+#     X = x[:dof*n_out].reshape(n_out, dof)
+#     Zu = x[dof*n_out: dof*n_out + n_out*(n_out-1)//2]
+#     Z_ = np.zeros((n_out, n_out))
+#     init = 0
+#     for i in range(n_out-1):
+#         end = init + n_out - i - 1
+#         Z_[i, i+1:] = Zu[init: end]
+#         Z_[i+1:, i] = -Zu[init: end]
+#         init = end
+#     Zu = Z_
+#     Zc = x[dof*n_out + n_out*(n_out-1)//2:].reshape(n_out, dof - n_out)
+#     Z = np.concatenate((Zu, Zc), axis=1)
+
+#     return X, Z
+
+def _partial_mode_shapes_map(
+        X, Z, freqs, coords=None):
+    n_out, dof = X.shape
+    q, r = scipy.linalg.qr(
+        X.T, overwrite_a=False, mode='full', pivoting=False)
+    if np.min(np.abs(r[(np.arange(n_out), np.arange(n_out))])) < 1e-8:
         logging.warning('Real part does not have full rank.')
         return np.nan
+    # Detect negative elements in the diagonal of R.
+    idx = np.argwhere(np.diag(r) < 0)
+    q[:, idx] *= -1
+    q, qc = q[:, :n_out], q[:, n_out:]
 
-    lu = x[dof*No: dof*No + No*(No-1)//2]
-    l_ = np.zeros((No, No))
-    init = 0
-    for i in range(No-1):
-        end = init + No - i - 1
-        l_[i, i+1:] = lu[init: end]
-        l_[i+1:, i] = -lu[init: end]
-        init = end
-    lu = l_
-    lc = x[dof*No + No*(No-1)//2:].reshape(No, dof - No)
-    l = np.concatenate((lu, lc), axis=1)
+    try:
+        coords_c = np.setdiff1d(np.arange(dof), coords, assume_unique=True)
+        upper = np.zeros((n_out, dof), dtype=X.dtype)
+        upper[:, coords_c] = scipy.linalg.inv(q[coords_c])
+        lower = scipy.linalg.solve(qc[coords].T, qc.T)
+    except scipy.linalg.LinAlgError:
+        logging.warning('Ill-defined coordinate patch.')
+        return np.nan
+    inv = np.concatenate((upper, lower), axis=0)
+    del upper, lower
+
+    if coords is None:
+        Z_ = q @ Z @ np.concatenate((q, qc), axis=1).T
+    else:
+        Z_ = q @ Z @ inv
 
     d = freqs.real, freqs.imag
-    tmp = q @ l.T
-    H = (d[0][:, np.newaxis] * q[:, :No]).T @ tmp
+    H = d[0][:, np.newaxis] * Z_.T
     H += H.T
-    H += (d[1][:, np.newaxis] * q[:, :No]).T @ q[:, :No]
-    H += -tmp.T @ (d[1][:, np.newaxis] * tmp)
-
+    H[(np.arange(dof), np.arange(dof))] += d[1]
+    H -= (Z_ * d[1][np.newaxis, :]) @ Z_.T
     try:
         scipy.linalg.cholesky(H, lower=False, overwrite_a=True)
     except scipy.linalg.LinAlgError:
         logging.warning('Mass matrix is not positive-definite.')
         return np.nan
 
-    l = q[:, :No] @ l @ q.T
-
-    psi = a @ (np.eye(dof) + 1j * l)
+    psi = X @ (np.eye(dof) + 1j * Z_)
     psi = psi * np.sqrt(np.imag(freqs))[np.newaxis, :]
 
     return psi
+
+def partial_mode_shapes_map(
+    X, Z, freqs, coords=None):
+
+    X = np.asarray(X)
+    Z = np.asarray(Z)
+    if X.shape[0] > X.shape[1]:
+        msg = 'Expected a 2D-array with more DoF (columns) than observations (rows).'
+        raise ValueError(msg)
+    if X.shape != Z.shape:
+        msg = 'Incompatible shapes for X and Z.'
+        raise ValueError(msg)
+    Z = np.triu(Z, k=1)
+    Z[:X.shape[0], :X.shape[0]] = Z[:X.shape[0], :X.shape[0]] - Z[:X.shape[0], :X.shape[0]].T
+
+    freqs = np.asarray(freqs).squeeze()
+    if freqs.ndim > 1:
+        msg = 'Expected a 1D-array for frequencies.'
+        raise ValueError(msg)
+    freqs = np.atleast_1d(freqs)
+
+    if coords is None:
+        coords = np.arange(X.shape[0], X.shape[1])
+    else:
+        coords = np.atleast_1d(coords, dtype=int)
+        coords = np.sort(np.unique(coords))
+
+    return _partial_mode_shapes_map(X, Z, freqs, coords)
+
 
 def modal_to_system(mode_shapes, Z):
     '''Recover system matrices from mode shapes and complex frequencies.
@@ -486,14 +538,17 @@ class Spring:
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
-    seed = 1234345
-    rng = np.random.default_rng(seed)
-    dof, n_out, n_in = 4, 3, 2
-    L = 2
-    
-    x = rng.normal(
-        size=((n_in*(n_in+1)//2 + (n_out-n_in)*n_in)*(2*dof - 1), L))
-    ix = _reshape_injection(x, dof, n_out=n_out, n_in=n_in)
-    pix = _reshape_projection(ix, dof, n_out=n_out, n_in=n_in)
+    # # ================================
+    # # Test reshapes
+    # # ================================
+    # seed = 1234345
+    # rng = np.random.default_rng(seed)
+    # dof, n_out, n_in = 4, 3, 2
+    # L = 2
 
-    print('test reshapes: ', np.allclose(x, pix))
+    # x = rng.normal(
+    #     size=((n_in*(n_in+1)//2 + (n_out-n_in)*n_in)*(2*dof - 1), L))
+    # ix = _reshape_injection(x, dof, n_out=n_out, n_in=n_in)
+    # pix = _reshape_projection(ix, dof, n_out=n_out, n_in=n_in)
+
+    # print('test reshapes: ', np.allclose(x, pix))
