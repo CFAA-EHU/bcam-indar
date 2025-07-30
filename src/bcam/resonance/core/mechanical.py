@@ -88,28 +88,28 @@ def _sum_exp_weighted(a, fs: float, ns: int):
     r = r * _sinh_m(a/fs) / a
     return r
 
-def _local_matrix(
-        freqs, fs: float, ns: int, penalty: float = 0.0):
-    N = len(freqs)
-    r = np.zeros((2*N, 2*N))
+# def _local_matrix(
+#         freqs, fs: float, ns: int, penalty: float = 0.0):
+#     N = len(freqs)
+#     r = np.zeros((2*N, 2*N))
 
-    def _mult(x, y):
-        r = x[np.newaxis, :] + y[:, np.newaxis]
-        r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
-        r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs)) * np.sinh(y[:, np.newaxis]/(2*fs))
-        return r
+#     def _mult(x, y):
+#         r = x[np.newaxis, :] + y[:, np.newaxis]
+#         r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
+#         r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs)) * np.sinh(y[:, np.newaxis]/(2*fs))
+#         return r
 
-    r1 = _mult(freqs, np.conj(freqs))
-    r2 = _mult(freqs, freqs)
+#     r1 = _mult(freqs, np.conj(freqs))
+#     r2 = _mult(freqs, freqs)
 
-    r[:N, :N] = np.real(r1 - r2)
-    r[N:, :N] = np.imag(r1 + r2)
-    r[:N, N:] = r[N:, :N].T
-    r[N:, N:] = np.real(r1 + r2)
-    r *= 0.5
-    r += penalty * np.eye(2*N)
+#     r[:N, :N] = np.real(r1 - r2)
+#     r[N:, :N] = np.imag(r1 + r2)
+#     r[:N, N:] = r[N:, :N].T
+#     r[N:, N:] = np.real(r1 + r2)
+#     r *= 0.5
+#     r += penalty * np.eye(2*N)
 
-    return r
+#     return r
 
 def _reshape_injection(
         x, dof: int, n_out:int, n_in:int):
@@ -144,7 +144,7 @@ def _reshape_projection(
 
 
 class _PreCoeff_to_Kernel(scipy.sparse.linalg.LinearOperator):
-    
+
     def __init__(
             self,
             freqs, fs: float, ns: int,
@@ -182,7 +182,34 @@ class _PreCoeff_to_Kernel(scipy.sparse.linalg.LinearOperator):
         return self
 
 
-class _PreCoeff():
+class _LocalToGlobal(scipy.sparse.linalg.LinearOperator):
+
+    def __init__(self, local_matrix, n_signals: int):
+        n, m = local_matrix.shape
+        if n != m:
+            msg = 'Expected a square matrix for local_matrix.'
+            raise ValueError(msg)
+        lm = np.triu(local_matrix, k=0)
+        lm += np.triu(local_matrix, k=1).T
+        self.local_matrix = lm
+        self.n_signals = n_signals
+        super().__init__(
+            dtype=local_matrix.dtype,
+            shape=(n * n_signals, n * n_signals))
+
+    def _matmat(self, x):
+        n = self.local_matrix.shape[0]
+        r = np.einsum(
+            'lk,ikm->ilm',
+            self.local_matrix,
+            x.reshape(-1, n, x.shape[1]))
+        return r.reshape(-1, x.shape[1])
+
+    def _adjoint(self):
+        return self
+
+
+class _Amplitudes():
 
     def __init__(
             self,
@@ -195,7 +222,7 @@ class _PreCoeff():
         self.n_in = n_out if n_in is None else n_in
 
     @property
-    def amplitudes_(self):
+    def values_(self):
         dof = len(self.freqs)
         x = self.raw_coeff_
         r = np.concatenate(
@@ -250,7 +277,104 @@ class _PreCoeff():
         r = _reshape_injection(
             r[..., np.newaxis], dof, self.n_out, self.n_in)
         self.raw_coeff_ = r[..., 0]
-        return self.amplitudes_
+        return self.values_
+
+class Amplitudes():
+
+    def __init__(
+            self,
+            freqs, fs: float, ns: int,
+            n_out:int=None, n_in:int=None):
+        self.freqs = freqs
+        self.fs = fs
+        self.ns = ns
+        self.n_out = len(freqs) if n_out is None else n_out
+        self.n_in = n_out if n_in is None else n_in
+
+    @property
+    def values_(self):
+        dof = len(self.freqs)
+        x = self.raw_coeff_
+        r = np.concatenate(
+            [np.zeros((*x.shape[:2], 1)), x[..., dof:]], axis=-1)
+        r = _trig_ifft(r).astype(np.complex128)
+        r = x[..., :dof] + 1j*r
+        return r
+
+    def _local_matrix(self, penalty: float = 0.0):
+        freqs = self.freqs
+        fs, ns = self.fs, self.ns
+        dof = len(freqs)
+        r = np.zeros((2*dof, 2*dof))
+
+        def _mult(x, y):
+            r = x[np.newaxis, :] + y[:, np.newaxis]
+            r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
+            r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs)) * np.sinh(y[:, np.newaxis]/(2*fs))
+            return r
+
+        r1 = _mult(freqs, np.conj(freqs))
+        r2 = _mult(freqs, freqs)
+
+        r[:dof, :dof] = np.real(r1 - r2)
+        r[dof:, :dof] = np.imag(r1 + r2)
+        r[:dof, dof:] = r[dof:, :dof].T
+        r[dof:, dof:] = np.real(r1 + r2)
+        r *= 0.5
+        r += penalty * np.eye(2*dof)
+        return r
+    
+    def _global_matrix(self, penalty: float = 0.0):
+        local_matrix = self._local_matrix(penalty)
+
+
+    def _rhs(self, y):
+        freqs = self.freqs
+        fs, ns = self.fs, self.ns
+
+        def prod(t):
+            T = ns / fs
+            t = t.reshape(1, -1)
+            freqs_ = 2*fs*np.exp(freqs/(2*fs)) * np.sinh(freqs/(2*fs))
+            r_ = np.exp(freqs[:, np.newaxis] * t) * (1 - t/T)
+            r_ *= freqs_[:, np.newaxis]
+            return r_
+
+        r = np.einsum(
+            'ijt,kt->ijk',
+            y,
+            prod(np.arange(ns)/fs))
+        r = r / fs
+        r = np.concatenate(
+            [np.imag(r), _trig_fft(np.real(r))[..., 1:]],
+            axis=-1
+        )
+
+        return r
+
+    def fit(
+            self, y,
+            penalty:float =0.0, cg_kwargs=None):
+        dof = len(self.freqs)
+        cg_kwargs = {} if cg_kwargs is None else cg_kwargs
+
+        lhs = _PreCoeff_to_Kernel(
+            self.freqs, self.fs, self.ns,
+            self.n_out, self.n_in,
+            penalty=penalty)
+
+        rhs = self._rhs(y)
+        rhs = _reshape_projection(
+            rhs[..., np.newaxis], dof, self.n_out, self.n_in)
+
+        r, info = scipy.sparse.linalg.cg(lhs, rhs, **cg_kwargs)
+        if info != 0:
+            logger.warning(f'Conjugate gradient did not converge, info={info}')
+
+        r = _reshape_injection(
+            r[..., np.newaxis], dof, self.n_out, self.n_in)
+        self.raw_coeff_ = r[..., 0]
+        return self.values_
 
 # =================================
 # Modal Parameters
@@ -320,6 +444,33 @@ def _partial_mode_shapes_map(
 
 def partial_mode_shapes_map(
     X, Z, freqs, coords=None):
+    '''
+    A parameterization of mode shapes.
+
+    Returns mode shapes with real part X with shape (N, dof), where N is the number of observations.
+    The mode shapes are :math:`\Psi = X(I + i Z)`.
+
+    The argument Z in the function is written in the basis :math:`\langle q_0, \ldots, q_{N-1}, e_{i_1}, \ldots \rangle`,
+    where :math:`q_i` is an orthogonal basis of the range of X, and
+    :math:`e_{i_j}` are elements of the canonical basis from coords, that is, coords = [i_1, i_2, ...].
+    The matrix Z[:N, :N] is antisymmetric (the function uses the upper triangular part).
+
+    Parameters
+    ----------
+    X : 2D-array (N, dof)
+        Real part of mode shapes.
+    Z : 2D-array (N, dof)
+        Multiplicative factor of complex part of mode shapes.
+    freqs : 1D-array
+        Modal frequencies.
+    coords : 1D-array, optional
+        Subset of canonical basis to complement the kernel of X.
+        By default, it takes [N, N+1, ..., dof-1].
+    Returns
+    -------
+    psi : 2D-array
+        Array where each column is a mode shape.
+    '''
 
     X = np.asarray(X)
     Z = np.asarray(Z)
