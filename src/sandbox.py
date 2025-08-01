@@ -66,3 +66,19 @@ axs.set_xlabel('Frequency')
 plt.show()
 
 # %%
+def _factor(freqs, fs):
+    return 2*fs*np.exp(freqs/(2*fs)) * np.sinh(freqs/(2*fs))
+
+ns, fs = 210, 100
+amplitudes = psi.reshape(DoF, 1, DoF) * psi.reshape(1, DoF, DoF)
+amplitudes = amplitudes * (1/np.imag(z)).reshape(1, 1, DoF)
+
+t = np.arange(ns) / fs
+factor = _factor(z, fs)
+r = amplitudes * factor.reshape(1, 1, DoF)
+r = r.reshape(DoF, DoF, 1, DoF)
+r = r * np.exp(z[np.newaxis, :] * t[:, np.newaxis]).reshape(1, 1, ns, DoF)
+kernel = np.imag(np.sum(r, axis=-1))
+del r
+
+# %%

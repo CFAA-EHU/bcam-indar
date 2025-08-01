@@ -88,35 +88,12 @@ def _sum_exp_weighted(a, fs: float, ns: int):
     r = r * _sinh_m(a/fs) / a
     return r
 
-# def _local_matrix(
-#         freqs, fs: float, ns: int, penalty: float = 0.0):
-#     N = len(freqs)
-#     r = np.zeros((2*N, 2*N))
-
-#     def _mult(x, y):
-#         r = x[np.newaxis, :] + y[:, np.newaxis]
-#         r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
-#         r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs)) * np.sinh(y[:, np.newaxis]/(2*fs))
-#         return r
-
-#     r1 = _mult(freqs, np.conj(freqs))
-#     r2 = _mult(freqs, freqs)
-
-#     r[:N, :N] = np.real(r1 - r2)
-#     r[N:, :N] = np.imag(r1 + r2)
-#     r[:N, N:] = r[N:, :N].T
-#     r[N:, N:] = np.real(r1 + r2)
-#     r *= 0.5
-#     r += penalty * np.eye(2*N)
-
-#     return r
-
 def _reshape_injection(
         x, dof: int, n_out:int, n_in:int):
     L = x.shape[-1]
     x_ = np.zeros((n_out, n_in, 2*dof - 1, L), dtype=x.dtype)
     x = x.reshape(
-        n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof - 1, L)
+        n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof-1, L)
     x_[(np.arange(n_in), np.arange(n_in))] = x[:n_in]
     c = n_in
     for i in range(1, n_in):
@@ -124,14 +101,14 @@ def _reshape_injection(
         x_[(np.arange(n_in-i), i+np.arange(n_in-i))] = x[c:cn]/np.sqrt(2)
         x_[(i+np.arange(n_in-i), np.arange(n_in-i))] = x[c:cn]/np.sqrt(2)
         c = cn
-    x_[n_in:, :] = x[c: c + (n_out-n_in)*n_in].reshape(n_out - n_in, n_in, 2*dof - 1, L)/np.sqrt(2)
+    x_[n_in:, :] = x[c: c + (n_out-n_in)*n_in].reshape(n_out - n_in, n_in, 2*dof-1, L)
     return x_
 
 def _reshape_projection(
         x, dof: int, n_out:int, n_in:int):
     L = x.shape[-1]
     x_ = np.zeros(
-        (n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof - 1, L),
+        (n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof-1, L),
         dtype=x.dtype)
     x_[:n_in] = x[(np.arange(n_in), np.arange(n_in))]
     c = n_in
@@ -139,47 +116,47 @@ def _reshape_projection(
         cn = c + n_in - i
         x_[c:cn] = (x[(np.arange(n_in-i), i+np.arange(n_in-i))] + x[(i+np.arange(n_in-i), np.arange(n_in-i))]) / np.sqrt(2)
         c = cn
-    x_[c: c + (n_out - n_in)*n_in] = x[n_in:, :].reshape((n_out - n_in)*n_in, 2*dof - 1, L) * np.sqrt(2)
+    x_[c: c + (n_out - n_in)*n_in] = x[n_in:, :].reshape((n_out - n_in)*n_in, 2*dof-1, L)
     return x_.reshape(-1, L)
 
 
-class _PreCoeff_to_Kernel(scipy.sparse.linalg.LinearOperator):
+# class _PreCoeff_to_Kernel(scipy.sparse.linalg.LinearOperator):
 
-    def __init__(
-            self,
-            freqs, fs: float, ns: int,
-            n_out:int, n_in:int,
-            penalty:float=0.0):
-        self.freqs = freqs
-        self.fs = fs
-        self.ns = ns
-        self.n_out = n_out
-        self.n_in = n_in
-        self.penalty = penalty
+#     def __init__(
+#             self,
+#             freqs, fs: float, ns: int,
+#             n_out:int, n_in:int,
+#             penalty:float=0.0):
+#         self.freqs = freqs
+#         self.fs = fs
+#         self.ns = ns
+#         self.n_out = n_out
+#         self.n_in = n_in
+#         self.penalty = penalty
 
-        dof = len(self.freqs)
-        M = (n_in*(n_in+1)//2 + (n_out-n_in)*n_in) * (2*dof - 1)
-        super().__init__(
-            dtype=np.float64,
-            shape=(M, M))
+#         dof = len(self.freqs)
+#         M = (n_in*(n_in+1)//2 + (n_out-n_in)*n_in) * (2*dof - 1)
+#         super().__init__(
+#             dtype=np.float64,
+#             shape=(M, M))
 
-        # Change basis to mean im = 0.
-        lm = _local_matrix(freqs, fs, ns, penalty)
-        plm = np.zeros((2*dof-1, 2*dof-1), dtype=lm.dtype)
-        plm[dof:, :dof] = _trig_fft(lm[dof:, :dof].T)[..., 1:].T
-        plm[:dof, dof:] = plm[dof:, :dof].T
-        plm[dof:, dof:] = _trig_fft(_trig_fft(lm[dof:, dof:])[..., 1:].T)[..., 1:]
-        self._local_matrix = lm
+#         # Change basis to mean im = 0.
+#         lm = _local_matrix(freqs, fs, ns, penalty)
+#         plm = np.zeros((2*dof-1, 2*dof-1), dtype=lm.dtype)
+#         plm[dof:, :dof] = _trig_fft(lm[dof:, :dof].T)[..., 1:].T
+#         plm[:dof, dof:] = plm[dof:, :dof].T
+#         plm[dof:, dof:] = _trig_fft(_trig_fft(lm[dof:, dof:])[..., 1:].T)[..., 1:]
+#         self._local_matrix = lm
 
-    def _matmat(self, x):
-        dof = len(self.freqs)
-        r = _reshape_injection(x, dof, self.n_out, self.n_in)
-        M_local = self._local_matrix
-        r = np.einsum('lk,ijkm->ijlm', M_local, r)
-        return _reshape_projection(r, dof, self.n_out, self.n_in)
+#     def _matmat(self, x):
+#         dof = len(self.freqs)
+#         r = _reshape_injection(x, dof, self.n_out, self.n_in)
+#         M_local = self._local_matrix
+#         r = np.einsum('lk,ijkm->ijlm', M_local, r)
+#         return _reshape_projection(r, dof, self.n_out, self.n_in)
 
-    def _adjoint(self):
-        return self
+#     def _adjoint(self):
+#         return self
 
 
 class _LocalToGlobal(scipy.sparse.linalg.LinearOperator):
@@ -209,75 +186,75 @@ class _LocalToGlobal(scipy.sparse.linalg.LinearOperator):
         return self
 
 
-class _Amplitudes():
+# class _Amplitudes():
 
-    def __init__(
-            self,
-            freqs, fs: float, ns: int,
-            n_out:int=None, n_in:int=None):
-        self.freqs = freqs
-        self.fs = fs
-        self.ns = ns
-        self.n_out = len(freqs) if n_out is None else n_out
-        self.n_in = n_out if n_in is None else n_in
+#     def __init__(
+#             self,
+#             freqs, fs: float, ns: int,
+#             n_out:int=None, n_in:int=None):
+#         self.freqs = freqs
+#         self.fs = fs
+#         self.ns = ns
+#         self.n_out = len(freqs) if n_out is None else n_out
+#         self.n_in = n_out if n_in is None else n_in
 
-    @property
-    def values_(self):
-        dof = len(self.freqs)
-        x = self.raw_coeff_
-        r = np.concatenate(
-            [np.zeros((*x.shape[:2], 1)), x[..., dof:]], axis=-1)
-        r = _trig_ifft(r).astype(np.complex128)
-        r = x[..., :dof] + 1j*r
-        return r
+#     @property
+#     def values_(self):
+#         dof = len(self.freqs)
+#         x = self.raw_coeff_
+#         r = np.concatenate(
+#             [np.zeros((*x.shape[:2], 1)), x[..., dof:]], axis=-1)
+#         r = _trig_ifft(r).astype(np.complex128)
+#         r = x[..., :dof] + 1j*r
+#         return r
 
-    def _rhs(self, y):
-        freqs = self.freqs
-        fs, ns = self.fs, self.ns
+#     def _rhs(self, y):
+#         freqs = self.freqs
+#         fs, ns = self.fs, self.ns
 
-        def prod(t):
-            T = ns / fs
-            t = t.reshape(1, -1)
-            freqs_ = 2*fs*np.exp(freqs/(2*fs)) * np.sinh(freqs/(2*fs))
-            r_ = np.exp(freqs[:, np.newaxis] * t) * (1 - t/T)
-            r_ *= freqs_[:, np.newaxis]
-            return r_
+#         def prod(t):
+#             T = ns / fs
+#             t = t.reshape(1, -1)
+#             freqs_ = 2*fs*np.exp(freqs/(2*fs)) * np.sinh(freqs/(2*fs))
+#             r_ = np.exp(freqs[:, np.newaxis] * t) * (1 - t/T)
+#             r_ *= freqs_[:, np.newaxis]
+#             return r_
 
-        r = np.einsum(
-            'ijt,kt->ijk',
-            y,
-            prod(np.arange(ns)/fs))
-        r = r / fs
-        r = np.concatenate(
-            [np.imag(r), _trig_fft(np.real(r))[..., 1:]],
-            axis=-1
-        )
+#         r = np.einsum(
+#             'ijt,kt->ijk',
+#             y,
+#             prod(np.arange(ns)/fs))
+#         r = r / fs
+#         r = np.concatenate(
+#             [np.imag(r), _trig_fft(np.real(r))[..., 1:]],
+#             axis=-1
+#         )
 
-        return r
+#         return r
 
-    def fit(
-            self, y,
-            penalty:float =0.0, cg_kwargs=None):
-        dof = len(self.freqs)
-        cg_kwargs = {} if cg_kwargs is None else cg_kwargs
+#     def fit(
+#             self, y,
+#             penalty:float =0.0, cg_kwargs=None):
+#         dof = len(self.freqs)
+#         cg_kwargs = {} if cg_kwargs is None else cg_kwargs
 
-        lhs = _PreCoeff_to_Kernel(
-            self.freqs, self.fs, self.ns,
-            self.n_out, self.n_in,
-            penalty=penalty)
+#         lhs = _PreCoeff_to_Kernel(
+#             self.freqs, self.fs, self.ns,
+#             self.n_out, self.n_in,
+#             penalty=penalty)
 
-        rhs = self._rhs(y)
-        rhs = _reshape_projection(
-            rhs[..., np.newaxis], dof, self.n_out, self.n_in)
+#         rhs = self._rhs(y)
+#         rhs = _reshape_projection(
+#             rhs[..., np.newaxis], dof, self.n_out, self.n_in)
 
-        r, info = scipy.sparse.linalg.cg(lhs, rhs, **cg_kwargs)
-        if info != 0:
-            logger.warning(f'Conjugate gradient did not converge, info={info}')
+#         r, info = scipy.sparse.linalg.cg(lhs, rhs, **cg_kwargs)
+#         if info != 0:
+#             logger.warning(f'Conjugate gradient did not converge, info={info}')
 
-        r = _reshape_injection(
-            r[..., np.newaxis], dof, self.n_out, self.n_in)
-        self.raw_coeff_ = r[..., 0]
-        return self.values_
+#         r = _reshape_injection(
+#             r[..., np.newaxis], dof, self.n_out, self.n_in)
+#         self.raw_coeff_ = r[..., 0]
+#         return self.values_
 
 class Amplitudes():
 
@@ -293,15 +270,14 @@ class Amplitudes():
 
     @property
     def values_(self):
+        if not hasattr(self, 'raw_coeff_'):
+            msg = 'Call fit() before accessing values_.'
+            raise ValueError(msg)
         dof = len(self.freqs)
         x = self.raw_coeff_
-        r = np.concatenate(
-            [np.zeros((*x.shape[:2], 1)), x[..., dof:]], axis=-1)
-        r = _trig_ifft(r).astype(np.complex128)
-        r = x[..., :dof] + 1j*r
-        return r
+        return x[..., :dof] + 1j*x[..., dof:]
 
-    def _local_matrix(self, penalty: float = 0.0):
+    def _local_matrix(self, penalty: float):
         freqs = self.freqs
         fs, ns = self.fs, self.ns
         dof = len(freqs)
@@ -323,10 +299,14 @@ class Amplitudes():
         r *= 0.5
         r += penalty * np.eye(2*dof)
         return r
-    
-    def _global_matrix(self, penalty: float = 0.0):
-        local_matrix = self._local_matrix(penalty)
 
+    def _lhs(self, penalty: float):
+        n_in, n_out = self.n_in, self.n_out
+        n_signals = n_in*(n_in+1)//2 + (n_out-n_in)*n_in
+        Q = _LocalToGlobal(
+            self._local_matrix(penalty),
+            n_signals)
+        return Q
 
     def _rhs(self, y):
         freqs = self.freqs
@@ -346,30 +326,28 @@ class Amplitudes():
             prod(np.arange(ns)/fs))
         r = r / fs
         r = np.concatenate(
-            [np.imag(r), _trig_fft(np.real(r))[..., 1:]],
+            [np.imag(r), np.real(r)],
             axis=-1
         )
-
+        # Project to space of 'symmetric' matrices.
+        r = _reshape_projection(
+            r[..., np.newaxis], len(freqs), self.n_out, self.n_in)
         return r
 
     def fit(
-            self, y,
-            penalty:float =0.0, cg_kwargs=None):
+        self,
+        y,
+        penalty:float=0.0,
+        cg_kwargs=None):
         dof = len(self.freqs)
         cg_kwargs = {} if cg_kwargs is None else cg_kwargs
 
-        lhs = _PreCoeff_to_Kernel(
-            self.freqs, self.fs, self.ns,
-            self.n_out, self.n_in,
-            penalty=penalty)
-
-        rhs = self._rhs(y)
-        rhs = _reshape_projection(
-            rhs[..., np.newaxis], dof, self.n_out, self.n_in)
-
-        r, info = scipy.sparse.linalg.cg(lhs, rhs, **cg_kwargs)
+        r, info = scipy.sparse.linalg.cg(
+            self._lhs(penalty),
+            self._rhs(y),
+            **cg_kwargs)
         if info != 0:
-            logger.warning(f'Conjugate gradient did not converge, info={info}')
+            logger.warning(f'Conjugate Gradient did not converge, info={info}')
 
         r = _reshape_injection(
             r[..., np.newaxis], dof, self.n_out, self.n_in)
@@ -444,7 +422,7 @@ def _partial_mode_shapes_map(
 
 def partial_mode_shapes_map(
     X, Z, freqs, coords=None):
-    '''
+    r'''
     A parameterization of mode shapes.
 
     Returns mode shapes with real part X with shape (N, dof), where N is the number of observations.
@@ -689,17 +667,17 @@ class Spring:
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
-    # # ================================
-    # # Test reshapes
-    # # ================================
-    # seed = 1234345
-    # rng = np.random.default_rng(seed)
-    # dof, n_out, n_in = 4, 3, 2
-    # L = 2
+    # ================================
+    # Test reshapes
+    # ================================
+    seed = 1234345
+    rng = np.random.default_rng(seed)
+    dof, n_out, n_in = 4, 3, 2
+    L = 2
 
-    # x = rng.normal(
-    #     size=((n_in*(n_in+1)//2 + (n_out-n_in)*n_in)*(2*dof - 1), L))
-    # ix = _reshape_injection(x, dof, n_out=n_out, n_in=n_in)
-    # pix = _reshape_projection(ix, dof, n_out=n_out, n_in=n_in)
+    x = rng.normal(
+        size=((n_in*(n_in+1)//2 + (n_out-n_in)*n_in)*(2*dof - 1), L))
+    ix = _reshape_injection(x, dof, n_out=n_out, n_in=n_in)
+    pix = _reshape_projection(ix, dof, n_out=n_out, n_in=n_in)
 
-    # print('test reshapes: ', np.allclose(x, pix))
+    print('- Test reshapes: ', np.allclose(x, pix))
