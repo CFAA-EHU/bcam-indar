@@ -88,12 +88,11 @@ def _sum_exp_weighted(a, fs: float, ns: int):
     r = r * _sinh_m(a/fs) / a
     return r
 
-def _reshape_injection(
-        x, dof: int, n_out:int, n_in:int):
-    L = x.shape[-1]
-    x_ = np.zeros((n_out, n_in, 2*dof - 1, L), dtype=x.dtype)
-    x = x.reshape(
-        n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof-1, L)
+def _reshape_injection(x, n_out:int, n_in:int):
+    nt, L = x.shape
+    m = n_in*(n_in+1)//2 + (n_out-n_in)*n_in
+    x = x.reshape(m, -1, L)
+    x_ = np.zeros((n_out, n_in, nt // m, L), dtype=x.dtype)
     x_[(np.arange(n_in), np.arange(n_in))] = x[:n_in]
     c = n_in
     for i in range(1, n_in):
@@ -101,14 +100,14 @@ def _reshape_injection(
         x_[(np.arange(n_in-i), i+np.arange(n_in-i))] = x[c:cn]/np.sqrt(2)
         x_[(i+np.arange(n_in-i), np.arange(n_in-i))] = x[c:cn]/np.sqrt(2)
         c = cn
-    x_[n_in:, :] = x[c: c + (n_out-n_in)*n_in].reshape(n_out - n_in, n_in, 2*dof-1, L)
+    if n_out > n_in:
+        x_[n_in:, :] = x[c: c + (n_out-n_in)*n_in].reshape(n_out - n_in, n_in, -1, L)
     return x_
 
-def _reshape_projection(
-        x, dof: int, n_out:int, n_in:int):
-    L = x.shape[-1]
+def _reshape_projection(x):
+    n_out, n_in, dof_, L = x.shape
     x_ = np.zeros(
-        (n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof-1, L),
+        (n_in*(n_in+1)//2 + (n_out-n_in)*n_in, dof_, L),
         dtype=x.dtype)
     x_[:n_in] = x[(np.arange(n_in), np.arange(n_in))]
     c = n_in
@@ -116,7 +115,8 @@ def _reshape_projection(
         cn = c + n_in - i
         x_[c:cn] = (x[(np.arange(n_in-i), i+np.arange(n_in-i))] + x[(i+np.arange(n_in-i), np.arange(n_in-i))]) / np.sqrt(2)
         c = cn
-    x_[c: c + (n_out - n_in)*n_in] = x[n_in:, :].reshape((n_out - n_in)*n_in, 2*dof-1, L)
+    if n_out > n_in:
+        x_[c: c + (n_out - n_in)*n_in] = x[n_in:, :].reshape((n_out - n_in)*n_in, dof_, L)
     return x_.reshape(-1, L)
 
 
@@ -262,7 +262,7 @@ class Amplitudes():
             self,
             freqs, fs: float, ns: int,
             n_out:int=None, n_in:int=None):
-        self.freqs = freqs
+        self.freqs = np.atleast_1d(freqs)
         self.fs = fs
         self.ns = ns
         self.n_out = len(freqs) if n_out is None else n_out
@@ -313,9 +313,9 @@ class Amplitudes():
         fs, ns = self.fs, self.ns
 
         def prod(t):
+            freqs_ = 2*fs*np.exp(freqs/(2*fs)) * np.sinh(freqs/(2*fs))
             T = ns / fs
             t = t.reshape(1, -1)
-            freqs_ = 2*fs*np.exp(freqs/(2*fs)) * np.sinh(freqs/(2*fs))
             r_ = np.exp(freqs[:, np.newaxis] * t) * (1 - t/T)
             r_ *= freqs_[:, np.newaxis]
             return r_
@@ -330,8 +330,7 @@ class Amplitudes():
             axis=-1
         )
         # Project to space of 'symmetric' matrices.
-        r = _reshape_projection(
-            r[..., np.newaxis], len(freqs), self.n_out, self.n_in)
+        r = _reshape_projection(r[..., np.newaxis])
         return r
 
     def fit(
@@ -339,7 +338,6 @@ class Amplitudes():
         y,
         penalty:float=0.0,
         cg_kwargs=None):
-        dof = len(self.freqs)
         cg_kwargs = {} if cg_kwargs is None else cg_kwargs
 
         r, info = scipy.sparse.linalg.cg(
@@ -350,7 +348,7 @@ class Amplitudes():
             logger.warning(f'Conjugate Gradient did not converge, info={info}')
 
         r = _reshape_injection(
-            r[..., np.newaxis], dof, self.n_out, self.n_in)
+            r[..., np.newaxis], self.n_out, self.n_in)
         self.raw_coeff_ = r[..., 0]
         return self.values_
 
@@ -667,17 +665,73 @@ class Spring:
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
-    # ================================
-    # Test reshapes
-    # ================================
-    seed = 1234345
-    rng = np.random.default_rng(seed)
-    dof, n_out, n_in = 4, 3, 2
-    L = 2
+    # # ================================
+    # # Test reshapes
+    # # ================================
+    # seed = 1234345
+    # rng = np.random.default_rng(seed)
+    # dof, n_out, n_in = 4, 3, 2
+    # L = 2
 
-    x = rng.normal(
-        size=((n_in*(n_in+1)//2 + (n_out-n_in)*n_in)*(2*dof - 1), L))
-    ix = _reshape_injection(x, dof, n_out=n_out, n_in=n_in)
-    pix = _reshape_projection(ix, dof, n_out=n_out, n_in=n_in)
+    # x = rng.normal(
+    #     size=((n_in*(n_in+1)//2 + (n_out-n_in)*n_in)*(2*dof - 1), L))
+    # ix = _reshape_injection(x, n_out=n_out, n_in=n_in)
+    # pix = _reshape_projection(ix)
 
-    print('- Test reshapes: ', np.allclose(x, pix))
+    # print('- Test reshapes: ', np.allclose(x, pix))
+
+    # ================================
+    rng = np.random.default_rng()
+    dof = 1
+    freqs = -rng.uniform(0.2, dof) + 2j*np.pi*rng.uniform(0.1, 0.2, dof)
+    ns, fs = 150, 100
+    n_out, n_in = 1, 1
+
+    def kernel(t, a, freqs):
+        K = 2*fs*np.exp(freqs/(2*fs)) * np.sinh(freqs/(2*fs))
+        K = a * K.reshape(1, 1, dof)
+        K = np.expand_dims(K, axis=2)
+        K = K * np.exp(freqs[np.newaxis, :] * t[:, np.newaxis]).reshape(1, 1, ns, dof)
+        K = np.imag(np.sum(K, axis=-1))
+        return K
+
+    t = np.arange(ns) / fs
+
+    amps = rng.normal(scale=1, size=(n_out, n_in, dof)).astype(np.complex128)
+    amps += 1j * rng.normal(scale=.1, size=(n_out, n_in, dof))
+    amps[:n_in] = 0.5 * (amps[:n_in] + amps[:n_in].transpose((1, 0, 2)))
+    data = kernel(t, amps, freqs)
+
+    model = Amplitudes(
+        freqs=freqs,
+        fs=fs,
+        ns=ns,
+        n_out=n_out,
+        n_in=n_in)
+    cg_kwargs = {'rtol': 1e-10}
+    cg_kwargs = None
+    amps_fit = model.fit(data, penalty=0., cg_kwargs=cg_kwargs)
+
+    pred = kernel(t, amps_fit, freqs)
+
+    fig, ax = plt.subplots(2, 1, sharex=True)
+    i, j = 0, 0
+    ax[0].plot(amps[i, j].real, 'o-', label='original')
+    ax[0].plot(amps_fit[i, j].real, 'o-', label='fit')
+    ax[1].plot(amps[i, j].imag, 'o-', label='original')
+    ax[1].plot(amps_fit[i, j].imag, 'o-', label='fit')
+
+    ax[0].legend()
+    ax[1].legend()
+    ax[0].set_ylabel('Real part')
+    ax[1].set_ylabel('Imaginary part')
+    ax[1].set_xlabel('DoF')
+    plt.show()
+
+    plt.plot(t, data[0, 0].real, label='original')
+    plt.plot(t, pred[0, 0].real, label='fit')
+    plt.xlabel('Time')
+    plt.ylabel('Velocity')
+    plt.legend()
+
+    plt.show()
