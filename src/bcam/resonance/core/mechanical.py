@@ -119,126 +119,22 @@ def _reshape_projection(x):
     return x_
 
 
-# class _PreCoeff_to_Kernel(scipy.sparse.linalg.LinearOperator):
-
-#     def __init__(
-#             self,
-#             freqs, fs: float, ns: int,
-#             n_out:int, n_in:int,
-#             penalty:float=0.0):
-#         self.freqs = freqs
-#         self.fs = fs
-#         self.ns = ns
-#         self.n_out = n_out
-#         self.n_in = n_in
-#         self.penalty = penalty
-
-#         dof = len(self.freqs)
-#         M = (n_in*(n_in+1)//2 + (n_out-n_in)*n_in) * (2*dof - 1)
-#         super().__init__(
-#             dtype=np.float64,
-#             shape=(M, M))
-
-#         # Change basis to mean im = 0.
-#         lm = _local_matrix(freqs, fs, ns, penalty)
-#         plm = np.zeros((2*dof-1, 2*dof-1), dtype=lm.dtype)
-#         plm[dof:, :dof] = _trig_fft(lm[dof:, :dof].T)[..., 1:].T
-#         plm[:dof, dof:] = plm[dof:, :dof].T
-#         plm[dof:, dof:] = _trig_fft(_trig_fft(lm[dof:, dof:])[..., 1:].T)[..., 1:]
-#         self._local_matrix = lm
-
-#     def _matmat(self, x):
-#         dof = len(self.freqs)
-#         r = _reshape_injection(x, dof, self.n_out, self.n_in)
-#         M_local = self._local_matrix
-#         r = np.einsum('lk,ijkm->ijlm', M_local, r)
-#         return _reshape_projection(r, dof, self.n_out, self.n_in)
-
-#     def _adjoint(self):
-#         return self
-
-
-# class _Amplitudes():
-
-#     def __init__(
-#             self,
-#             freqs, fs: float, ns: int,
-#             n_out:int=None, n_in:int=None):
-#         self.freqs = freqs
-#         self.fs = fs
-#         self.ns = ns
-#         self.n_out = len(freqs) if n_out is None else n_out
-#         self.n_in = n_out if n_in is None else n_in
-
-#     @property
-#     def values_(self):
-#         dof = len(self.freqs)
-#         x = self.raw_coeff_
-#         r = np.concatenate(
-#             [np.zeros((*x.shape[:2], 1)), x[..., dof:]], axis=-1)
-#         r = _trig_ifft(r).astype(np.complex128)
-#         r = x[..., :dof] + 1j*r
-#         return r
-
-#     def _rhs(self, y):
-#         freqs = self.freqs
-#         fs, ns = self.fs, self.ns
-
-#         def prod(t):
-#             T = ns / fs
-#             t = t.reshape(1, -1)
-#             freqs_ = 2*fs*np.exp(freqs/(2*fs)) * np.sinh(freqs/(2*fs))
-#             r_ = np.exp(freqs[:, np.newaxis] * t) * (1 - t/T)
-#             r_ *= freqs_[:, np.newaxis]
-#             return r_
-
-#         r = np.einsum(
-#             'ijt,kt->ijk',
-#             y,
-#             prod(np.arange(ns)/fs))
-#         r = r / fs
-#         r = np.concatenate(
-#             [np.imag(r), _trig_fft(np.real(r))[..., 1:]],
-#             axis=-1
-#         )
-
-#         return r
-
-#     def fit(
-#             self, y,
-#             penalty:float =0.0, cg_kwargs=None):
-#         dof = len(self.freqs)
-#         cg_kwargs = {} if cg_kwargs is None else cg_kwargs
-
-#         lhs = _PreCoeff_to_Kernel(
-#             self.freqs, self.fs, self.ns,
-#             self.n_out, self.n_in,
-#             penalty=penalty)
-
-#         rhs = self._rhs(y)
-#         rhs = _reshape_projection(
-#             rhs[..., np.newaxis], dof, self.n_out, self.n_in)
-
-#         r, info = scipy.sparse.linalg.cg(lhs, rhs, **cg_kwargs)
-#         if info != 0:
-#             logger.warning(f'Conjugate gradient did not converge, info={info}')
-
-#         r = _reshape_injection(
-#             r[..., np.newaxis], dof, self.n_out, self.n_in)
-#         self.raw_coeff_ = r[..., 0]
-#         return self.values_
-
 class Amplitudes():
 
     def __init__(
             self,
             freqs, fs: float, ns: int,
-            n_out:int=None, n_in:int=None):
+            n_out:int=None, n_in:int=None,
+            a_type:str='normal'):
         self.freqs = np.atleast_1d(freqs)
         self.fs = fs
         self.ns = ns
         self.n_out = len(freqs) if n_out is None else n_out
         self.n_in = n_out if n_in is None else n_in
+        if a_type in ['normal', 'mechanical']:
+            self.a_type = a_type
+        else:
+            raise ValueError(f"Unknown amplitude type: {a_type}")
 
     @property
     def values_(self):
@@ -247,13 +143,18 @@ class Amplitudes():
             raise ValueError(msg)
         dof = len(self.freqs)
         x = self.raw_coeff_
-        return x[..., :dof] + 1j*x[..., dof:]
+        if self.a_type == 'normal':
+            return x[..., :dof] + 1j*x[..., dof:]
+        elif self.a_type == 'mechanical':
+            r = np.concatenate(
+                [np.zeros((*x.shape[:2], 1)), x[..., dof:]], axis=-1)
+            r = _trig_ifft(r).astype(np.complex128)
+            return x[..., :dof] + 1j*r
 
     def _matrix(self, penalty: float):
         freqs = self.freqs
         fs, ns = self.fs, self.ns
         dof = len(freqs)
-        r = np.zeros((2*dof, 2*dof))
 
         def _mult(x, y):
             r = x[np.newaxis, :] + y[:, np.newaxis]
@@ -261,16 +162,27 @@ class Amplitudes():
             r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs)) * np.sinh(y[:, np.newaxis]/(2*fs))
             return r
 
-        r1 = _mult(freqs, np.conj(freqs))
-        r2 = _mult(freqs, freqs)
+        m1 = _mult(freqs, np.conj(freqs))
+        m2 = _mult(freqs, freqs)
 
-        r[:dof, :dof] = np.real(r1 - r2)
-        r[dof:, :dof] = np.imag(r1 + r2)
-        r[:dof, dof:] = r[dof:, :dof].T
-        r[dof:, dof:] = np.real(r1 + r2)
-        r *= 0.5
-        r += penalty * np.eye(2*dof)
-        return r
+        if self.a_type == 'normal':
+            L = 2*dof
+            m = np.zeros((L, L))
+            m[:dof, :dof] = np.real(m1 - m2)
+            m[dof:, :dof] = np.imag(m1 + m2)
+            m[:dof, dof:] = m[dof:, :dof].T
+            m[dof:, dof:] = np.real(m1 + m2)
+        elif self.a_type == 'mechanical':
+            L = 2*dof-1
+            m = np.zeros((L, L))
+            m[:dof, :dof] = np.real(m1 - m2)
+            m[dof:, :dof] = _trig_fft(np.imag(m1 + m2).T)[..., 1:].T
+            m[:dof, dof:] = m[dof:, :dof].T
+            m[dof:, dof:] = _trig_fft(_trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
+
+        m *= 0.5
+        m += penalty * np.eye(L)
+        return m
 
     def _rhs(self, y):
         freqs = self.freqs
@@ -289,16 +201,19 @@ class Amplitudes():
             y,
             prod(np.arange(ns)/fs))
         r = r / fs
-        r = np.concatenate(
-            [np.imag(r), np.real(r)],
-            axis=-1
-        )
+        if self.a_type == 'normal':
+            r = np.concatenate(
+                [np.imag(r), np.real(r)],
+                axis=-1)
+        elif self.a_type == 'mechanical':
+            r = np.concatenate(
+                [np.imag(r), _trig_fft(np.real(r))[..., 1:]],
+                axis=-1)
         # Project to space of 'symmetric' matrices.
         r = _reshape_projection(r)
         return r.T
 
     def fit(self, y, penalty:float=0.):
-
         r = scipy.linalg.solve(
             self._matrix(penalty),
             self._rhs(y),
