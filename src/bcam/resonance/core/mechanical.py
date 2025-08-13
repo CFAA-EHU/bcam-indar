@@ -43,6 +43,36 @@ def _validate_dims(M, C, K, check_symmetry=True):
 # Amplitudes
 # =================================
 
+def _metric_amps(freqs, fs, ns, a_type='normal'):
+    dof = len(freqs)
+    def _mult(x, y):
+        r = x[np.newaxis, :] + y[:, np.newaxis]
+        r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
+        r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs)) * np.sinh(y[:, np.newaxis]/(2*fs))
+        return r
+
+    m1 = _mult(freqs, np.conj(freqs))
+    m2 = _mult(freqs, freqs)
+
+    if a_type == 'normal':
+        L = 2*dof
+        m = np.zeros((L, L))
+        m[:dof, :dof] = np.real(m1 - m2)
+        m[dof:, :dof] = np.imag(m1 + m2)
+        m[:dof, dof:] = m[dof:, :dof].T
+        m[dof:, dof:] = np.real(m1 + m2)
+    elif a_type == 'mechanical':
+        L = 2*dof-1
+        m = np.zeros((L, L))
+        m[:dof, :dof] = np.real(m1 - m2)
+        m[dof:, :dof] = _trig_fft(np.imag(m1 + m2).T)[..., 1:].T
+        m[:dof, dof:] = m[dof:, :dof].T
+        m[dof:, dof:] = _trig_fft(_trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
+    m *= 0.5
+    return m
+
+test_metric_amps = _metric_amps
+
 def _trig_fft(x):
     '''
     Trigonometric expansion of a real signal.
@@ -152,35 +182,9 @@ class Amplitudes():
             return x[..., :dof] + 1j*r
 
     def _matrix(self, penalty: float):
-        freqs = self.freqs
-        fs, ns = self.fs, self.ns
-        dof = len(freqs)
-
-        def _mult(x, y):
-            r = x[np.newaxis, :] + y[:, np.newaxis]
-            r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
-            r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs)) * np.sinh(y[:, np.newaxis]/(2*fs))
-            return r
-
-        m1 = _mult(freqs, np.conj(freqs))
-        m2 = _mult(freqs, freqs)
-
-        if self.a_type == 'normal':
-            L = 2*dof
-            m = np.zeros((L, L))
-            m[:dof, :dof] = np.real(m1 - m2)
-            m[dof:, :dof] = np.imag(m1 + m2)
-            m[:dof, dof:] = m[dof:, :dof].T
-            m[dof:, dof:] = np.real(m1 + m2)
-        elif self.a_type == 'mechanical':
-            L = 2*dof-1
-            m = np.zeros((L, L))
-            m[:dof, :dof] = np.real(m1 - m2)
-            m[dof:, :dof] = _trig_fft(np.imag(m1 + m2).T)[..., 1:].T
-            m[:dof, dof:] = m[dof:, :dof].T
-            m[dof:, dof:] = _trig_fft(_trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
-
-        m *= 0.5
+        dof = len(self.freqs)
+        L = 2*dof if self.a_type == 'normal' else 2*dof-1
+        m = _metric_amps(self.freqs, self.fs, self.ns, self.a_type)
         m += penalty * np.eye(L)
         return m
 
@@ -249,22 +253,24 @@ def _partial_mode_shapes_map(
     n_out, dof = X.shape
     q, r = scipy.linalg.qr(
         X.T, overwrite_a=False, mode='full', pivoting=False)
-    if np.min(np.abs(r[(np.arange(n_out), np.arange(n_out))])) < 1e-8:
-        logging.warning('Real part does not have full rank.')
-        return np.nan
     # Detect negative elements in the diagonal of R.
     idx = np.argwhere(np.diag(r) < 0)
     q[:, idx] *= -1
     q, qc = q[:, :n_out], q[:, n_out:]
+    c_X = np.abs(np.prod(r[(np.arange(n_out), np.arange(n_out))]))
+    if c_X < 1e-12:
+        logging.warning('Real part does not have full rank.')
+        return np.nan, (c_X)
 
     try:
         coords_c = np.setdiff1d(np.arange(dof), coords, assume_unique=True)
         upper = np.zeros((n_out, dof), dtype=X.dtype)
         upper[:, coords_c] = scipy.linalg.inv(q[coords_c])
         lower = scipy.linalg.solve(qc[coords].T, qc.T)
+        c_coords = np.abs(scipy.linalg.det(q[coords_c]))
     except scipy.linalg.LinAlgError:
         logging.warning('Ill-defined coordinate patch.')
-        return np.nan
+        return np.nan, (c_X, c_coords)
     inv = np.concatenate((upper, lower), axis=0)
     del upper, lower
 
@@ -279,15 +285,16 @@ def _partial_mode_shapes_map(
     H[(np.arange(dof), np.arange(dof))] += d[1]
     H -= (Z_ * d[1][np.newaxis, :]) @ Z_.T
     try:
-        scipy.linalg.cholesky(H, lower=False, overwrite_a=True)
+        chk = scipy.linalg.cholesky(H, lower=False, overwrite_a=True)
     except scipy.linalg.LinAlgError:
         logging.warning('Mass matrix is not positive-definite.')
-        return np.nan
+        return np.nan, (c_X, c_coords, 0)
+    c_pos = np.prod(chk[(np.arange(dof), np.arange(dof))])
 
     psi = X @ (np.eye(dof) + 1j * Z_)
     psi = psi * np.sqrt(np.imag(freqs))[np.newaxis, :]
 
-    return psi
+    return psi, (c_X, c_coords, c_pos)
 
 def partial_mode_shapes_map(
     X, Z, freqs, coords=None):
