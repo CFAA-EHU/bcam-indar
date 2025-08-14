@@ -320,6 +320,20 @@ def _partial_mode_shapes_map(
     psi = X + 1j * X @ Z_
     return psi, (c_X, c_coords, c_pos)
 
+class ModesFitter:
+
+    def __init__(
+        self,
+        freqs,
+        dof:int,
+        n_out:int=None,
+        n_in:int=None,
+    ):
+        self.freqs = freqs
+        self.dof = dof
+        self.n_out = dof if n_out is None else n_out
+        self.n_in = n_out if n_in is None else n_in
+
 def partial_mode_shapes_map(
     X, Z, freqs, coords=None):
     r'''
@@ -374,9 +388,11 @@ def partial_mode_shapes_map(
         coords = np.arange(X.shape[0], X.shape[1])
     
     psi = _partial_mode_shapes_map(X, Z, freqs, coords)[0]
-    psi *= np.sqrt(np.imag(freqs))[np.newaxis, :]
-    return psi
-
+    if psi == np.nan:
+        return psi
+    else:
+        psi *= np.sqrt(np.imag(freqs))[np.newaxis, :]
+        return psi
 
 def modal_to_system(mode_shapes, Z):
     '''Recover system matrices from mode shapes and complex frequencies.
