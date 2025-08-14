@@ -71,8 +71,6 @@ def _metric_amps(freqs, fs, ns, a_type='normal'):
     m *= 0.5
     return m
 
-test_metric_amps = _metric_amps
-
 def _trig_fft(x):
     '''
     Trigonometric expansion of a real signal.
@@ -266,6 +264,17 @@ def _reshape_mode_shapes_output(X, Z):
 def _mode_to_amps(mode_shape, n_out, n_in):
     return mode_shape[:n_out, np.newaxis] * mode_shape[np.newaxis, :n_in]
 
+def _amps_to_modes(amps):
+    n_out, n_in, dof = amps.shape
+    psi = np.zeros((n_out, dof), dtype=amps.dtype)
+    psi[:n_in] = np.sqrt(amps[np.arange(n_in), np.arange(n_in)])
+
+    dom_idxs = np.argmax(np.abs(psi[:n_in]), axis=0)
+    dom = psi[dom_idxs, np.arange(dof)]
+    psi = amps[:, dom_idxs, np.arange(dof)]
+    psi /= dom[np.newaxis, :]
+    return psi
+
 def _partial_mode_shapes_map(
         X, Z, freqs, coords=None):
     n_out, dof = X.shape
@@ -358,13 +367,15 @@ def partial_mode_shapes_map(
         raise ValueError(msg)
     freqs = np.atleast_1d(freqs)
 
-    if coords is None:
-        coords = np.arange(X.shape[0], X.shape[1])
-    else:
+    if coords is not None:
         coords = np.atleast_1d(coords, dtype=int)
         coords = np.sort(np.unique(coords))
-
-    return _partial_mode_shapes_map(X, Z, freqs, coords)[0]
+    elif X.shape[0] < X.shape[1]:
+        coords = np.arange(X.shape[0], X.shape[1])
+    
+    psi = _partial_mode_shapes_map(X, Z, freqs, coords)[0]
+    psi *= np.sqrt(np.imag(freqs))[np.newaxis, :]
+    return psi
 
 
 def modal_to_system(mode_shapes, Z):
@@ -573,22 +584,22 @@ if __name__ == '__main__':
     # print('- Test reshapes: ', np.allclose(x, pix))
 
 
-    # ================================
-    # Test reshapes mode shapes
-    # ================================
-    dof, n_out, n_in = 4, 3, 2
-    coords = np.arange(n_out, dof)
-    rng = np.random.default_rng(1268)
-    freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+    # # ================================
+    # # Test reshapes mode shapes
+    # # ================================
+    # dof, n_out, n_in = 4, 3, 2
+    # coords = np.arange(n_out, dof)
+    # rng = np.random.default_rng(1268)
+    # freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
 
-    # Reference mode shape.
-    X0 = 0.1*rng.normal(size=(n_out, dof))
-    Z0 = 0.01*rng.normal(size=(n_out, dof))
-    Z0 = np.triu(Z0, k=1)
-    Z0[:n_out, :n_out] = Z0[:n_out, :n_out] - Z0[:n_out, :n_out].T
-    psi0 = _partial_mode_shapes_map(X0, Z0, freqs, coords=coords)[0]
-    amps0 = _mode_to_amps(psi0, n_out, n_in)
-    x = _reshape_mode_shapes_output(X0, Z0)
-    X0_, Z0_ = _reshape_mode_shapes_input(x, dof, n_out)
+    # # Reference mode shape.
+    # X0 = 0.1*rng.normal(size=(n_out, dof))
+    # Z0 = 0.01*rng.normal(size=(n_out, dof))
+    # Z0 = np.triu(Z0, k=1)
+    # Z0[:n_out, :n_out] = Z0[:n_out, :n_out] - Z0[:n_out, :n_out].T
+    # psi0 = _partial_mode_shapes_map(X0, Z0, freqs, coords=coords)[0]
+    # amps0 = _mode_to_amps(psi0, n_out, n_in)
+    # x = _reshape_mode_shapes_output(X0, Z0)
+    # X0_, Z0_ = _reshape_mode_shapes_input(x, dof, n_out)
 
-    print('- Test reshapes: ', np.allclose(X0_, X0), np.allclose(Z0_, Z0))
+    # print('- Test reshapes: ', np.allclose(X0_, X0), np.allclose(Z0_, Z0))

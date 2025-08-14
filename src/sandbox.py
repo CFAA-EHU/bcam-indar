@@ -36,49 +36,29 @@ n_out, n_in = 3, 2
 # kernel = np.imag(np.sum(kernel, axis=-1))
 
 # %%
-def mode_to_amps(mode_shape, n_out, n_in):
-    amps = mode_shape[:n_out, np.newaxis] * mode_shape[np.newaxis, :n_in]
-    amps = amps * (1/np.imag(freqs)).reshape(1, 1, -1)
-    return amps
-
-def guess(amps, freqs):
-    n_out, n_in, dof = amps.shape
-    amps_ = amps * np.imag(freqs).reshape(1, 1, -1)
-    psi = np.zeros((n_out, dof), dtype=amps.dtype)
-    psi[:n_in] = np.sqrt(amps_[np.arange(n_in), np.arange(n_in)])
-
-    dom_idxs = np.argmax(np.abs(psi[:n_in]), axis=0)
-    dom = psi[dom_idxs, np.arange(dof)]
-    psi = amps_[:, dom_idxs, np.arange(dof)]
-    psi /= dom[np.newaxis, :]
-    return np.real(psi)
-
-rng = np.random.default_rng()
-
-# Reference mode shape.
-X0 = 0.1*rng.normal(size=(n_out, DoF))
-Z0 = 0.01*rng.normal(size=(n_out, DoF))
-Z0 = np.triu(Z0, k=1)
-Z0[:n_out, :n_out] = Z0[:n_out, :n_out] - Z0[:n_out, :n_out].T
-psi0, cns0 = mechanical.partial_mode_shapes_map(X0, Z0, freqs)
-amps0 = mode_to_amps(psi0, n_out, n_in)
-
-# Test mode shape
-X = 0.1*rng.normal(size=(n_out, DoF))
-Z = 0.01*rng.normal(size=(n_out, DoF))
-Z = np.triu(Z, k=1)
-Z[:n_out, :n_out] = Z[:n_out, :n_out] - Z[:n_out, :n_out].T
-psi, cns = mechanical.partial_mode_shapes_map(X, Z, freqs)
-amps = mode_to_amps(psi, n_out, n_in)
-
-psi_guess = guess(amps, freqs)
-
-from scipy.optimize import basinhopping
-
+m = _metric_amps(freqs, fs, ns)
 def fun(x):
+    X, Z = _reshape_mode_shapes_input(x, DoF, n_out)
+    psi, _ = _partial_mode_shapes_map(X, Z, freqs, coords=coords)
+    if psi is np.nan:
+        return 1e10
+    amps = _mode_to_amps(psi, n_out, n_in)
+
     dif = amps - amps0
     dif = np.concatenate(
         [np.real(dif), np.imag(dif)], axis=-1)
+    return np.einsum('kl,ijk,ijl', m, dif, dif)
 
-    m = mechanical.test_metric_amps(freqs, fs, ns)
-    D = np.einsum('kl,ijk,ijl', m, dif, dif)
+# x = rng.normal(size=(2*n_out*DoF - n_out*(n_out+1)//2))
+x0 = _amps_to_modes(amps0)
+x0 = _reshape_mode_shapes_output(x0, np.zeros_like(x0))
+print(fun(x0))
+
+# %%
+from scipy.optimize import basinhopping
+
+r = basinhopping(fun, x0)
+
+# %%
+psi_min = _reshape_mode_shapes_input(r.x, DoF, n_out)
+psi_min = _partial_mode_shapes_map(psi_min[0], psi_min[1], freqs, coords=coords)[0]
