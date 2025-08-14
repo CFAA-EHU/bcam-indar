@@ -121,12 +121,12 @@ def _sum_exp_weighted(a, fs: float, ns: int):
 def _reshape_injection(x, n_out:int, n_in:int):
     L = x.shape[-1]
     x_ = np.zeros((n_out, n_in, L), dtype=x.dtype)
-    x_[(np.arange(n_in), np.arange(n_in))] = x[:n_in]
+    x_[np.arange(n_in), np.arange(n_in)] = x[:n_in]
     c = n_in
     for i in range(1, n_in):
         cn = c + n_in - i
-        x_[(np.arange(n_in-i), i+np.arange(n_in-i))] = x[c:cn] / np.sqrt(2)
-        x_[(i+np.arange(n_in-i), np.arange(n_in-i))] = x[c:cn] / np.sqrt(2)
+        x_[np.arange(n_in-i), i+np.arange(n_in-i)] = x[c:cn] / np.sqrt(2)
+        x_[i+np.arange(n_in-i), np.arange(n_in-i)] = x[c:cn] / np.sqrt(2)
         c = cn
     if n_out > n_in:
         x_[n_in:, :] = x[c: c + (n_out-n_in)*n_in].reshape(n_out - n_in, n_in, -1)
@@ -136,12 +136,12 @@ def _reshape_projection(x):
     n_out, n_in, L = x.shape
     x_ = np.zeros_like(x, dtype=x.dtype)
     x_ = np.zeros((n_in*(n_in+1)//2 + (n_out-n_in)*n_in, L), dtype=x.dtype)
-    x_[:n_in] = x[(np.arange(n_in), np.arange(n_in))]
+    x_[:n_in] = x[np.arange(n_in), np.arange(n_in)]
     c = n_in
     for i in range(1, n_in):
         cn = c + n_in - i
-        x_[c:cn] = x[(np.arange(n_in-i), i+np.arange(n_in-i))]
-        x_[c:cn] += x[(i+np.arange(n_in-i), np.arange(n_in-i))]
+        x_[c:cn] = x[np.arange(n_in-i), i+np.arange(n_in-i)]
+        x_[c:cn] += x[i+np.arange(n_in-i), np.arange(n_in-i)]
         x_[c:cn] /= np.sqrt(2)
         c = cn
     if n_out > n_in:
@@ -231,22 +231,40 @@ class Amplitudes():
 # Modal Parameters
 # =================================
 
-# def _reshape_mode_shapes_input(
-#         x, dof: int, n_out: int, n_in: int):
-#     X = x[:dof*n_out].reshape(n_out, dof)
-#     Zu = x[dof*n_out: dof*n_out + n_out*(n_out-1)//2]
-#     Z_ = np.zeros((n_out, n_out))
-#     init = 0
-#     for i in range(n_out-1):
-#         end = init + n_out - i - 1
-#         Z_[i, i+1:] = Zu[init: end]
-#         Z_[i+1:, i] = -Zu[init: end]
-#         init = end
-#     Zu = Z_
-#     Zc = x[dof*n_out + n_out*(n_out-1)//2:].reshape(n_out, dof - n_out)
-#     Z = np.concatenate((Zu, Zc), axis=1)
+def _reshape_mode_shapes_input(x, dof:int, n_out:int):
+    X = x[:dof*n_out].reshape(n_out, dof)
+    
+    Zu = np.zeros((n_out, n_out))
+    init = dof*n_out
+    for i in range(n_out-1):
+        end = init + n_out - i - 1
+        Zu[i, i+1:] = x[init:end]
+        Zu[i+1:, i] = -x[init:end]
+        init = end
+    Zc = x[dof*n_out + n_out*(n_out-1)//2:].reshape(n_out, dof - n_out)
+    Z = np.concatenate((Zu, Zc), axis=1)
 
-#     return X, Z
+    return X, Z
+
+def _reshape_mode_shapes_output(X, Z):
+    n_out, dof = X.shape
+    
+    x = np.zeros(
+        (2*n_out*dof - n_out*(n_out+1)//2,), dtype=X.dtype)
+    x[:dof*n_out] = X.flatten()
+    
+    Zu = Z[:n_out, :n_out]
+    init = dof*n_out
+    for i in range(n_out-1):
+        end = init + n_out - i - 1
+        x[init:end] = Zu[i, i+1:]
+        init = end
+    x[dof*n_out + n_out*(n_out-1)//2:] = Z[:n_out, n_out:].flatten()
+
+    return x
+
+def _mode_to_amps(mode_shape, n_out, n_in):
+    return mode_shape[:n_out, np.newaxis] * mode_shape[np.newaxis, :n_in]
 
 def _partial_mode_shapes_map(
         X, Z, freqs, coords=None):
@@ -262,38 +280,35 @@ def _partial_mode_shapes_map(
         logging.warning('Real part does not have full rank.')
         return np.nan, (c_X)
 
-    try:
-        coords_c = np.setdiff1d(np.arange(dof), coords, assume_unique=True)
-        upper = np.zeros((n_out, dof), dtype=X.dtype)
-        upper[:, coords_c] = scipy.linalg.inv(q[coords_c])
-        lower = scipy.linalg.solve(qc[coords].T, qc.T)
-        c_coords = np.abs(scipy.linalg.det(q[coords_c]))
-    except scipy.linalg.LinAlgError:
-        logging.warning('Ill-defined coordinate patch.')
-        return np.nan, (c_X, c_coords)
-    inv = np.concatenate((upper, lower), axis=0)
-    del upper, lower
-
     if coords is None:
-        Z_ = q @ Z @ np.concatenate((q, qc), axis=1).T
+        Z_ = q @ Z @ q.T
     else:
+        try:
+            coords_c = np.setdiff1d(np.arange(dof), coords, assume_unique=True)
+            upper = np.zeros((n_out, dof), dtype=X.dtype)
+            upper[:, coords_c] = scipy.linalg.inv(q[coords_c])
+            lower = scipy.linalg.solve(qc[coords].T, qc.T)
+            c_coords = np.abs(scipy.linalg.det(q[coords_c]))
+        except scipy.linalg.LinAlgError:
+            logging.warning('Ill-defined coordinate patch.')
+            return np.nan, (c_X, c_coords)
+        inv = np.concatenate((upper, lower), axis=0)
+        del upper, lower
         Z_ = q @ Z @ inv
 
     d = freqs.real, freqs.imag
     H = d[0][:, np.newaxis] * Z_.T
     H += H.T
-    H[(np.arange(dof), np.arange(dof))] += d[1]
+    H[np.arange(dof), np.arange(dof)] += d[1]
     H -= (Z_ * d[1][np.newaxis, :]) @ Z_.T
     try:
         chk = scipy.linalg.cholesky(H, lower=False, overwrite_a=True)
     except scipy.linalg.LinAlgError:
         logging.warning('Mass matrix is not positive-definite.')
         return np.nan, (c_X, c_coords, 0)
-    c_pos = np.prod(chk[(np.arange(dof), np.arange(dof))])
+    c_pos = np.prod(chk[np.arange(dof), np.arange(dof)])
 
-    psi = X @ (np.eye(dof) + 1j * Z_)
-    psi = psi * np.sqrt(np.imag(freqs))[np.newaxis, :]
-
+    psi = X + 1j * X @ Z_
     return psi, (c_X, c_coords, c_pos)
 
 def partial_mode_shapes_map(
@@ -349,7 +364,7 @@ def partial_mode_shapes_map(
         coords = np.atleast_1d(coords, dtype=int)
         coords = np.sort(np.unique(coords))
 
-    return _partial_mode_shapes_map(X, Z, freqs, coords)
+    return _partial_mode_shapes_map(X, Z, freqs, coords)[0]
 
 
 def modal_to_system(mode_shapes, Z):
@@ -544,7 +559,7 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
     # # ================================
-    # # Test reshapes
+    # # Test reshapes amplitudes
     # # ================================
     # seed = 1234345
     # rng = np.random.default_rng(seed)
@@ -556,3 +571,24 @@ if __name__ == '__main__':
     # pix = _reshape_projection(ix)
 
     # print('- Test reshapes: ', np.allclose(x, pix))
+
+
+    # ================================
+    # Test reshapes mode shapes
+    # ================================
+    dof, n_out, n_in = 4, 3, 2
+    coords = np.arange(n_out, dof)
+    rng = np.random.default_rng(1268)
+    freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+
+    # Reference mode shape.
+    X0 = 0.1*rng.normal(size=(n_out, dof))
+    Z0 = 0.01*rng.normal(size=(n_out, dof))
+    Z0 = np.triu(Z0, k=1)
+    Z0[:n_out, :n_out] = Z0[:n_out, :n_out] - Z0[:n_out, :n_out].T
+    psi0 = _partial_mode_shapes_map(X0, Z0, freqs, coords=coords)[0]
+    amps0 = _mode_to_amps(psi0, n_out, n_in)
+    x = _reshape_mode_shapes_output(X0, Z0)
+    X0_, Z0_ = _reshape_mode_shapes_input(x, dof, n_out)
+
+    print('- Test reshapes: ', np.allclose(X0_, X0), np.allclose(Z0_, Z0))
