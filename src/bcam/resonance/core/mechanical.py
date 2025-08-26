@@ -368,6 +368,40 @@ class _ModesProp:
             [2*t1[:self.n_in] + t2, t1[self.n_in:]], axis=0)
 
         return f, df.flatten()
+    
+    def _hessp(self, x, p, amps, dof:int):
+        x = x.reshape(self.n_out, dof)
+        p = p.reshape(self.n_out, dof)
+
+        amps_ = _mode_to_amps(x, self.n_out, self.n_in)
+        A = amps_ - amps
+        A = np.concatenate(
+            [np.real(A), np.imag(A)], axis=-1)
+
+        B = p[:, np.newaxis]*x[np.newaxis, :self.n_in]
+        B += x[:, np.newaxis]*p[np.newaxis, :self.n_in]
+
+        Ap = np.einsum('ijk,kl->ijl', A, self._metric[:, :dof])
+        t1 = np.array(
+            [np.sum(Ap[q, :self.n_in] * p[:self.n_in], axis=0)
+             for q in range(self.n_out)])
+        t2 = np.array(
+            [np.sum(Ap[self.n_in:self.n_out, q] * p[self.n_in:self.n_out], axis=0)
+             for q in range(self.n_in)])
+        Ap = 2*np.concatenate(
+            [2*t1[:self.n_in] + t2, t1[self.n_in:]], axis=0)
+
+        Bx = np.einsum('ijk,kl->ijl', B, self._metric[:dof, :dof])
+        t1 = np.array(
+            [np.sum(Bx[q, :self.n_in] * x[:self.n_in], axis=0)
+             for q in range(self.n_out)])
+        t2 = np.array(
+            [np.sum(Bx[self.n_in:self.n_out, q] * x[self.n_in:self.n_out], axis=0)
+             for q in range(self.n_in)])
+        Bx = 2*np.concatenate(
+            [2*t1[:self.n_in] + t2, t1[self.n_in:]], axis=0)
+
+        return (Ap + Bx).flatten()
 
     def fit(self, amps):
         dof = len(self.freqs)
@@ -385,9 +419,10 @@ class _ModesProp:
             args=(amps, dof),
             bounds=bounds,
             minimizer_kwargs={
-                'method': 'trust-constr',
+                'method': 'Newton-CG',
                 'bounds': bounds,
-                # 'jac': 
+                'jac': True,
+                'hessp': self._hessp
             }
         )
 
@@ -440,10 +475,16 @@ def partial_modes_map(
 
     if coords is not None:
         coords = np.atleast_1d(coords, dtype=int)
+        if coords.ndim > 1:
+            msg = 'Expected a 1D-array for coords.'
+            raise ValueError(msg)
+        elif len(coords) != X.shape[1] - X.shape[0]:
+            msg = 'Incompatible shapes for coords and mode shapes.'
+            raise ValueError(msg)
         coords = np.sort(np.unique(coords))
     elif X.shape[0] < X.shape[1]:
         coords = np.arange(X.shape[0], X.shape[1])
-    
+
     psi = _partial_modes_map(X, Z, freqs, coords)[0]
     if np.isnan(psi).any():
         return psi
@@ -694,12 +735,20 @@ if __name__ == '__main__':
     x = rng.normal(scale=.1, size=n_out*dof)
     v = rng.normal(scale=.1, size=n_out*dof)
     fx, dfx = modes._fun(x, amps, dof)
+    ddfxp = modes._hessp(x, v, amps, dof)
 
-    L = 1e-2 * np.arange(-20, 21)
+    L = 1e-3 * np.arange(-40, 41)
     f_line = [modes._fun(x + l*v, amps, dof)[0] for l in L]
     f_line = np.array(f_line)
 
-    plt.plot(L, f_line, label='f')
-    plt.plot(L, fx + (dfx@v)*L, label='tangent')
-    plt.legend()
+    fig, ax = plt.subplots(ncols=2, sharex=True, figsize=(10, 5))
+    fig.suptitle('Test derivatives of objective for real mode shapes fitting')
+
+    ax[0].set_title('1st order')
+    ax[0].plot(L, f_line - (fx + (dfx@v)*L))
+    ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
+
+    ax[1].set_title('2nd order')
+    ax[1].plot(L, f_line - (fx + (dfx@v)*L + 0.5*(ddfxp@v)*(L**2)))
+    ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
     plt.show()
