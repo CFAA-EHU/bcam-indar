@@ -18,7 +18,7 @@ class TestModeMap:
         Z = rng.normal(scale=1e-3, size=(n_out, dof))
         Z[:n_out, :n_out] = (Z[:n_out, :n_out] - Z[:n_out, :n_out].T)/2
         freqs = -rng.uniform(0.1, 10, size=dof) + 1j * rng.uniform(size=dof)
-        psi = mechanical.partial_mode_shapes_map(X, Z, freqs)
+        psi = mechanical.partial_modes_map(X, Z, freqs)
 
         return psi, freqs
 

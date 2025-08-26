@@ -275,7 +275,7 @@ def _amps_to_modes(amps):
     psi /= dom[np.newaxis, :]
     return psi
 
-def _partial_mode_shapes_map(
+def _partial_modes_map(
         X, Z, freqs, coords=None):
     n_out, dof = X.shape
     q, r = scipy.linalg.qr(
@@ -320,21 +320,78 @@ def _partial_mode_shapes_map(
     psi = X + 1j * X @ Z_
     return psi, (c_X, c_coords, c_pos)
 
-class ModesFitter:
+class _ModesProp:
 
     def __init__(
         self,
         freqs,
-        dof:int,
+        fs:int,
+        ns:int,
         n_out:int=None,
-        n_in:int=None,
+        n_in:int=None
     ):
         self.freqs = freqs
-        self.dof = dof
-        self.n_out = dof if n_out is None else n_out
+        self.fs = fs
+        self.ns = ns
+        self.n_out = len(freqs) if n_out is None else n_out
         self.n_in = n_out if n_in is None else n_in
 
-def partial_mode_shapes_map(
+        self._get_metric()
+
+    def _get_metric(self):
+        self._metric = _metric_amps(
+            self.freqs, self.fs, self.ns, a_type='normal')
+
+    def _fun(self, x, amps, dof:int):
+        x = x.reshape(self.n_out, dof)
+        amps_ = _mode_to_amps(x, self.n_out, self.n_in)
+
+        dif = amps_ - amps
+        dif = np.concatenate(
+            [np.real(dif), np.imag(dif)], axis=-1)
+        trans = np.einsum('ijk,kl->ijl', dif, self._metric)
+
+        # Compute f(x).
+        f = np.einsum('ijk,ijk', trans, dif)
+        
+        # Compute df(x).
+        trans = trans[..., :dof]
+        t1 = np.array(
+            [np.sum(trans[q, :self.n_in] * x[:self.n_in], axis=0)
+             for q in range(self.n_out)]
+        )
+        t2 = np.array(
+            [np.sum(trans[self.n_in:self.n_out, q] * x[self.n_in:self.n_out], axis=0)
+             for q in range(self.n_in)]
+        )
+        df = 2*np.concatenate(
+            [2*t1[:self.n_in] + t2, t1[self.n_in:]], axis=0)
+
+        return f, df.flatten()
+
+    def fit(self, amps):
+        dof = len(self.freqs)
+        if dof != amps.shape[2]:
+            msg = f'The number of frequencies (dof) must match the last dimension of the amplitudes.'
+            raise ValueError(msg)
+        
+        x0 = _amps_to_modes(amps)
+        x0 = x0.flatten()
+        bounds = dof * [(0, np.inf)]
+        bounds += (self.n_out-1) * dof * [(-np.inf, np.inf)]
+        scipy.optimize.dual_annealing(
+            self._fun,
+            x0=x0,
+            args=(amps, dof),
+            bounds=bounds,
+            minimizer_kwargs={
+                'method': 'trust-constr',
+                'bounds': bounds,
+                # 'jac': 
+            }
+        )
+
+def partial_modes_map(
     X, Z, freqs, coords=None):
     r'''
     A parameterization of mode shapes.
@@ -387,8 +444,8 @@ def partial_mode_shapes_map(
     elif X.shape[0] < X.shape[1]:
         coords = np.arange(X.shape[0], X.shape[1])
     
-    psi = _partial_mode_shapes_map(X, Z, freqs, coords)[0]
-    if psi == np.nan:
+    psi = _partial_modes_map(X, Z, freqs, coords)[0]
+    if np.isnan(psi).any():
         return psi
     else:
         psi *= np.sqrt(np.imag(freqs))[np.newaxis, :]
@@ -489,7 +546,7 @@ def randomSystem(
         mass_range=(1, 2),
         damping_range=(0.125, 0.25),
         freqs_range=(4, 8),
-        damping_type='proportional',
+        damping_type='prop',
         seed=None
     ):
     rng = np.random.default_rng(seed)
@@ -502,12 +559,12 @@ def randomSystem(
         U = scipy.stats.ortho_group(dim=dofs, seed=seed)
         Um = U.rvs()
         Uk = U.rvs()
-        if damping_type == 'proportional':
+        if damping_type == 'prop':
             Uc = Uk
-        elif damping_type == 'non-proportional':
+        elif damping_type == 'nop':
             Uc = U.rvs()
         else:
-            msg = 'Invalid damping type. Choose between "proportional" and "non-proportional".'
+            msg = 'Invalid damping type. Choose between "prop" and "nop".'
             raise ValueError(msg)
     else:
         Um = np.array([[1]])
@@ -520,7 +577,7 @@ def randomSystem(
     K = invModes_.T @ Uk @ np.diag(freqs**2) @ Uk.T @ invModes_
     normal_modes = modes_ @ Uk
 
-    if damping_type == 'proportional':
+    if damping_type == 'prop':
         mode_shapes = normal_modes
         Z = freqs * (-zeta + 1j * np.sqrt(1 - zeta**2))
     else:
@@ -613,9 +670,36 @@ if __name__ == '__main__':
     # Z0 = 0.01*rng.normal(size=(n_out, dof))
     # Z0 = np.triu(Z0, k=1)
     # Z0[:n_out, :n_out] = Z0[:n_out, :n_out] - Z0[:n_out, :n_out].T
-    # psi0 = _partial_mode_shapes_map(X0, Z0, freqs, coords=coords)[0]
+    # psi0 = _partial_modes_map(X0, Z0, freqs, coords=coords)[0]
     # amps0 = _mode_to_amps(psi0, n_out, n_in)
     # x = _reshape_mode_shapes_output(X0, Z0)
     # X0_, Z0_ = _reshape_mode_shapes_input(x, dof, n_out)
 
     # print('- Test reshapes: ', np.allclose(X0_, X0), np.allclose(Z0_, Z0))
+
+
+    # ================================
+    # Test loss function and df
+    # for real mode shapes
+    # ================================
+    dof, n_out, n_in = 4, 3, 2
+    rng = np.random.default_rng()
+    freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+    X = 0.1*rng.normal(size=(n_out, dof))
+    amps = _mode_to_amps(X, n_out, n_in)
+    ns, fs = 210, 100
+
+    modes = _ModesProp(
+        freqs, fs, ns, n_out=n_out, n_in=n_in)
+    x = rng.normal(scale=.1, size=n_out*dof)
+    v = rng.normal(scale=.1, size=n_out*dof)
+    fx, dfx = modes._fun(x, amps, dof)
+
+    L = 1e-2 * np.arange(-20, 21)
+    f_line = [modes._fun(x + l*v, amps, dof)[0] for l in L]
+    f_line = np.array(f_line)
+
+    plt.plot(L, f_line, label='f')
+    plt.plot(L, fx + (dfx@v)*L, label='tangent')
+    plt.legend()
+    plt.show()
