@@ -353,22 +353,29 @@ class _ModesProp:
 
         # Compute f(x).
         f = np.einsum('ijk,ijk', trans, dif)
-        
+        return f
+    
+    def _jac(self, x, amps, dof:int):
+        x = x.reshape(self.n_out, dof)
+        amps_ = _mode_to_amps(x, self.n_out, self.n_in)
+
+        dif = amps_ - amps
+        dif = np.concatenate(
+            [np.real(dif), np.imag(dif)], axis=-1)
+        trans = np.einsum('ijk,kl->ijl', dif, self._metric)
+
         # Compute df(x).
         trans = trans[..., :dof]
         t1 = np.array(
             [np.sum(trans[q, :self.n_in] * x[:self.n_in], axis=0)
-             for q in range(self.n_out)]
-        )
+             for q in range(self.n_out)])
         t2 = np.array(
             [np.sum(trans[self.n_in:self.n_out, q] * x[self.n_in:self.n_out], axis=0)
-             for q in range(self.n_in)]
-        )
+             for q in range(self.n_in)])
         df = 2*np.concatenate(
             [2*t1[:self.n_in] + t2, t1[self.n_in:]], axis=0)
+        return df.flatten()
 
-        return f, df.flatten()
-    
     def _hessp(self, x, p, amps, dof:int):
         x = x.reshape(self.n_out, dof)
         p = p.reshape(self.n_out, dof)
@@ -408,23 +415,23 @@ class _ModesProp:
         if dof != amps.shape[2]:
             msg = f'The number of frequencies (dof) must match the last dimension of the amplitudes.'
             raise ValueError(msg)
-        
+
         x0 = _amps_to_modes(amps)
         x0 = x0.flatten()
-        bounds = dof * [(0, np.inf)]
-        bounds += (self.n_out-1) * dof * [(-np.inf, np.inf)]
-        scipy.optimize.dual_annealing(
+        bounds = scipy.optimize.Bounds(
+            lb=-1*np.ones(self.n_out * dof),
+            ub=1*np.ones(self.n_out * dof))
+        res = scipy.optimize.dual_annealing(
             self._fun,
             x0=x0,
-            args=(amps, dof),
             bounds=bounds,
+            args=(amps, dof),
             minimizer_kwargs={
                 'method': 'Newton-CG',
-                'bounds': bounds,
-                'jac': True,
+                'jac': self._jac,
                 'hessp': self._hessp
-            }
-        )
+            })
+        return res
 
 def partial_modes_map(
     X, Z, freqs, coords=None):
@@ -683,6 +690,22 @@ class Spring:
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
+    dof, n_out, n_in = 4, 3, 2
+    rng = np.random.default_rng()
+    freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+    X = 0.1*rng.normal(size=(n_out, dof))
+    amps = _mode_to_amps(X, n_out, n_in)
+    ns, fs = 210, 100
+
+    modes = _ModesProp(
+        freqs, fs, ns, n_out=n_out, n_in=n_in)
+    res = modes.fit(amps)
+    print('Original:\n', X)
+    print('Fitted:\n', res.x.reshape(n_out, dof))
+
+    print(res.success, res.message)
+
+
     # # ================================
     # # Test reshapes amplitudes
     # # ================================
@@ -719,36 +742,36 @@ if __name__ == '__main__':
     # print('- Test reshapes: ', np.allclose(X0_, X0), np.allclose(Z0_, Z0))
 
 
-    # ================================
-    # Test loss function and df
-    # for real mode shapes
-    # ================================
-    dof, n_out, n_in = 4, 3, 2
-    rng = np.random.default_rng()
-    freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-    X = 0.1*rng.normal(size=(n_out, dof))
-    amps = _mode_to_amps(X, n_out, n_in)
-    ns, fs = 210, 100
+    # # ================================
+    # # Test loss function and df
+    # # for real mode shapes
+    # # ================================
+    # dof, n_out, n_in = 4, 3, 2
+    # rng = np.random.default_rng()
+    # freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+    # X = 0.1*rng.normal(size=(n_out, dof))
+    # amps = _mode_to_amps(X, n_out, n_in)
+    # ns, fs = 210, 100
 
-    modes = _ModesProp(
-        freqs, fs, ns, n_out=n_out, n_in=n_in)
-    x = rng.normal(scale=.1, size=n_out*dof)
-    v = rng.normal(scale=.1, size=n_out*dof)
-    fx, dfx = modes._fun(x, amps, dof)
-    ddfxp = modes._hessp(x, v, amps, dof)
+    # modes = _ModesProp(
+    #     freqs, fs, ns, n_out=n_out, n_in=n_in)
+    # x = rng.normal(scale=.1, size=n_out*dof)
+    # v = rng.normal(scale=.1, size=n_out*dof)
+    # fx, dfx = modes._fun(x, amps, dof)
+    # ddfxp = modes._hessp(x, v, amps, dof)
 
-    L = 1e-3 * np.arange(-40, 41)
-    f_line = [modes._fun(x + l*v, amps, dof)[0] for l in L]
-    f_line = np.array(f_line)
+    # L = 1e-3 * np.arange(-40, 41)
+    # f_line = [modes._fun(x + l*v, amps, dof)[0] for l in L]
+    # f_line = np.array(f_line)
 
-    fig, ax = plt.subplots(ncols=2, sharex=True, figsize=(10, 5))
-    fig.suptitle('Test derivatives of objective for real mode shapes fitting')
+    # fig, ax = plt.subplots(ncols=2, sharex=True, figsize=(10, 5))
+    # fig.suptitle('Test derivatives of objective for real mode shapes fitting')
 
-    ax[0].set_title('1st order')
-    ax[0].plot(L, f_line - (fx + (dfx@v)*L))
-    ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
+    # ax[0].set_title('1st order')
+    # ax[0].plot(L, f_line - (fx + (dfx@v)*L))
+    # ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
 
-    ax[1].set_title('2nd order')
-    ax[1].plot(L, f_line - (fx + (dfx@v)*L + 0.5*(ddfxp@v)*(L**2)))
-    ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
-    plt.show()
+    # ax[1].set_title('2nd order')
+    # ax[1].plot(L, f_line - (fx + (dfx@v)*L + 0.5*(ddfxp@v)*(L**2)))
+    # ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
+    # plt.show()
