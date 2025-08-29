@@ -327,8 +327,8 @@ def _reshape_mode_shapes_output(X, Z):
 
     return x
 
-def _mode_to_amps(mode_shape, n_out, n_in):
-    return mode_shape[:n_out, np.newaxis] * mode_shape[np.newaxis, :n_in]
+def _mode_to_amps(modes, n_out, n_in):
+    return modes[:n_out, np.newaxis] * modes[np.newaxis, :n_in]
 
 def _amps_to_modes(amps):
     n_out, n_in, dof = amps.shape
@@ -399,7 +399,26 @@ def _jac_modes(p, dp, aux):
 
     return a + b
 
-class _ModesProp:
+def _jac_amps(p, dp, n_out, n_in):
+    r = p[:n_out, np.newaxis] * dp[np.newaxis, :n_in]
+    r += dp[:n_out, np.newaxis] * p[np.newaxis, :n_in]
+    return r
+
+def _jac_dist(p, dp, metric):
+    return 2*np.einsum('ijk,kl,ijl->', p, metric, dp)
+
+def _jac_dist(p, dp, aux):
+    x, _ = p
+    dx, _ = dp
+    qr, inv, modes, n_out, n_in, amps, metric = aux
+
+    dq, _ = _jac_qr(x, dx, qr)
+    d_modes = _jac_modes(p, dp, (qr[0], dq, inv))
+    d_amps = _jac_amps(modes, d_modes, n_out, n_in)
+    d_dist = _jac_dist(amps, d_amps, metric)
+    return d_dist
+
+class ModesProp:
 
     def __init__(
         self,
