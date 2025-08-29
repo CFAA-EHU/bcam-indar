@@ -80,7 +80,7 @@ class TestAmplitudes:
             mass_range=(1, 2),
             damping_range=(0.02, 0.05),
             freqs_range=(2 * np.pi * 1, 2 * np.pi * 20),
-            damping_type='non-proportional',
+            damping_type='nop',
             seed=123456)[1]
         psi = modal['mode_shapes']
         freqs = modal['frequencies']
@@ -102,3 +102,15 @@ class TestAmplitudes:
         amps_fit = model.fit(data)
         error = np.linalg.norm(amps_fit - amps, axis=-1) / np.linalg.norm(amps, axis=-1)
         assert np.max(error) < 1e-2
+
+def test_jac_qr():
+    rng = np.random.default_rng()
+    X = rng.normal(size=(4, 3))
+    q, r = scipy.linalg.qr(
+        X, overwrite_a=False, mode='economic', pivoting=False)
+    idx = np.argwhere(np.diag(r) < 0)
+    q[:, idx] *= -1
+    r[idx, :] *= -1
+    dX = rng.normal(size=(4, 3))
+    dq, dr = mechanical.jac_qr(X)(dX)
+    assert np.allclose(dX, dq@r + q@dr)

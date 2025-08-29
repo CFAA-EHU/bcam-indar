@@ -39,6 +39,72 @@ def _validate_dims(M, C, K, check_symmetry=True):
     
     return M, C, K
 
+# Jacobian of the QR decomposition
+# ----------------------------
+def _jac_qr(x, dx, qr):
+    # dx = dq@r + q@dr.
+    q, r = qr
+    # x.T@dx + x@dx.T = r.T@dr + dr.T@r. To prove this,
+    # notice that q.T@q = I, so dq.T@q + q.T@dq = 0.
+    a = x.T@dx
+    a += a.T
+    dr = np.zeros(r.shape, dtype=r.dtype)
+    u = np.zeros(a.shape[1], dtype=x.dtype)
+
+    # u_{ij} = \sum_{i<k} (r_{ki}dr_{kj} + r_{kj}dr_{ki}), for j >=i.
+    # Then, a_{ij} = u_{ij} + r_{ii}dr_{ij} + r_{ij}dr_{ii}.
+    for i in range(a.shape[0]-1):
+        dr[i, i] = (a[i, i] - u[i])/(2*r[i, i])
+        dr[i, i+1:] = (a[i, i+1:] - u[i+1:] - r[i, i+1:]*dr[i, i])/r[i, i]
+        u[i+1:] = [
+            np.sum(r[:i, i+1]*dr[:i, j] + dr[:i, i+1]*r[:i, j], axis=0)
+            for j in range(i+1, a.shape[1])]
+    dr[-1, -1] = (a[-1, -1] - u[-1])/(2*r[-1, -1])
+
+    dq = scipy.linalg.solve(
+        r.T, dx.T - dr.T@q.T, assume_a='lower triangular',
+        overwrite_b=True).T
+    return dq, dr
+
+class jac_qr:
+    '''
+    Computes the derivative of the qr decomposition.
+
+    Attributes
+    ----------
+    x : np.ndarray
+        The input array.
+    qr : tuple, optional
+        The QR decomposition of the input array as (Q, R).
+    '''
+
+    def __init__(self, x, qr=None):
+        self.x = np.atleast_2d(x)
+        if self.x.ndim != 2:
+            raise ValueError('Expected a 2D-array.')
+        if self.x.shape[0] < self.x.shape[1]:
+            raise ValueError('Expected a 2D-array with shape (N, M) and N >= M.')
+        if qr is None:
+            q, r = scipy.linalg.qr(
+                x, overwrite_a=False, mode='economic', pivoting=False)
+            idx = np.argwhere(np.diag(r) < 0)
+            q[:, idx] *= -1
+            r[idx, :] *= -1
+            self.qr = (q, r)
+        else:
+            self.qr = qr
+
+    def __call__(self, dx):
+        r'''
+        If :math:`f:x \mapsto (q, r)`, then this method returns
+        :math:`df(x)(dx) = (dq, dr)`
+        '''
+        dx = np.atleast_2d(dx)
+        if dx.shape != self.x.shape:
+            raise ValueError('Expected a 2D-array with the same shape as x.')
+        dq, dr = _jac_qr(self.x, dx, self.qr)
+        return dq, dr
+
 # =================================
 # Amplitudes
 # =================================
@@ -319,52 +385,19 @@ def _partial_modes_map(
     psi = X + 1j * X @ Z_
     return psi, (c_coords, c_pos)
 
+def _jac_modes(p, dp, aux):
+    x, z = p
+    dx, dz = dp
+    q, dq, inv = aux
 
-def _jac_qr(x, dx, qr):
-    # dx = dq@r + q@dr.
-    q, r = qr
-    # x.T@dx + x@dx.T = r.T@dr + dr.T@r. To prove this,
-    # notice that q.T@q = I, so dq.T@q + q.T@dq = 0.
-    a = x.T@dx
-    a += a.T
-    dr = np.zeros(r.shape, dtype=r.dtype)
-    u = np.zeros(a.shape, dtype=r.dtype)
+    a = 1j * q@z@inv
+    a[range(q.shape[0]), range(q.shape[0])] += 1
+    a = dx @ a
 
-    # u_{ij} = \sum_{i<k} (r_{ki}dr_{kj} + r_{kj}dr_{ki}), for j >=i.
-    # Then, a_{ij} = u_{ij} + r_{ii}dr_{ij} + r_{ij}dr_{ii}.
-    for i in range(a.shape[0]-1):
-        dr[i, i] = (a[i, i] - u[i, i])/(2*r[i, i])
-        dr[i, i+1:] = (a[i, i+1:] - u[i, i+1:] - r[i, i+1:]*dr[i, i])/r[i, i]
-        u[i+1, i+1:] = [
-            np.sum(r[:i, i+1]*dr[:i, j] + dr[:i, i+1]*r[:i, j], axis=0)
-            for j in range(i+1, a.shape[1])]
-    dr[-1, -1] = (a[-1, -1] - u[-1, -1])/(2*r[-1, -1])
-    del u
+    b = dq@z@inv + q@dz@inv - q@z@(inv@dq@inv[:dq.shape[0]])
+    b = 1j * x@b
 
-    dq = scipy.linalg.solve(
-        r.T, dx.T - dr.T@q.T, assume_a='lower triangular',
-        overwrite_b=True).T
-    return dq, dr
-
-class jac_qr:
-
-    def __init__(self, x, qr=None):
-        self.x = np.atleast_2d(x)
-        if self.x.shape[0] < self.x.shape[1]:
-            raise ValueError('Expected a 2D-array with shape (N, M) and N >= M.')
-        if qr is None:
-            q, r = scipy.linalg.qr(
-                x, overwrite_a=False, mode='economic', pivoting=False)
-            idx = np.argwhere(np.diag(r) < 0)
-            q[:, idx] *= -1
-            r[idx, :] *= -1
-            self.qr = (q, r)
-        else:
-            self.qr = qr
-
-    def __call__(self, dx):
-        dq, dr = _jac_qr(self.x, dx, self.qr)
-        return dq, dr
+    return a + b
 
 class _ModesProp:
 
@@ -772,15 +805,21 @@ if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
     rng = np.random.default_rng()
-    X = rng.normal(size=(4, 3))
+    X = rng.normal(size=(10, 6))
     q, r = scipy.linalg.qr(
         X, overwrite_a=False, mode='economic', pivoting=False)
     idx = np.argwhere(np.diag(r) < 0)
     q[:, idx] *= -1
     r[idx, :] *= -1
-    dX = rng.normal(size=(4, 3))
+    dX = np.zeros_like(X)
+    l, m = 3, 1
+    dX[l, m] = 1
     dq, dr = jac_qr(X)(dX)
-    print(np.allclose(dX, dq@r + q@dr))
+
+    p = np.int16(dq != 0)
+    print(p)
+
+
 
     # dof, n_out, n_in = 4, 3, 2
     # rng = np.random.default_rng()
