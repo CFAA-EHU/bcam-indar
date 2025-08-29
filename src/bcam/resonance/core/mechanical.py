@@ -284,10 +284,9 @@ def _partial_modes_map(
     idx = np.argwhere(np.diag(r) < 0)
     q[:, idx] *= -1
     q, qc = q[:, :n_out], q[:, n_out:]
-    c_X = np.abs(np.prod(r[(np.arange(n_out), np.arange(n_out))]))
+    c_X = np.abs(np.prod(r[np.arange(n_out), np.arange(n_out)]))
     if c_X < 1e-12:
         logging.warning('Real part does not have full rank.')
-        return np.nan, (c_X)
 
     if coords is None:
         Z_ = q @ Z @ q.T
@@ -300,7 +299,7 @@ def _partial_modes_map(
             c_coords = np.abs(scipy.linalg.det(q[coords_c]))
         except scipy.linalg.LinAlgError:
             logging.warning('Ill-defined coordinate patch.')
-            return np.nan, (c_X, c_coords)
+            return np.nan, (c_coords)
         inv = np.concatenate((upper, lower), axis=0)
         del upper, lower
         Z_ = q @ Z @ inv
@@ -314,11 +313,58 @@ def _partial_modes_map(
         chk = scipy.linalg.cholesky(H, lower=False, overwrite_a=True)
     except scipy.linalg.LinAlgError:
         logging.warning('Mass matrix is not positive-definite.')
-        return np.nan, (c_X, c_coords, 0)
+        return np.nan, (c_coords, 0)
     c_pos = np.prod(chk[np.arange(dof), np.arange(dof)])
 
     psi = X + 1j * X @ Z_
-    return psi, (c_X, c_coords, c_pos)
+    return psi, (c_coords, c_pos)
+
+
+def _jac_qr(x, dx, qr):
+    # dx = dq@r + q@dr.
+    q, r = qr
+    # x.T@dx + x@dx.T = r.T@dr + dr.T@r. To prove this,
+    # notice that q.T@q = I, so dq.T@q + q.T@dq = 0.
+    a = x.T@dx
+    a += a.T
+    dr = np.zeros(r.shape, dtype=r.dtype)
+    u = np.zeros(a.shape, dtype=r.dtype)
+
+    # u_{ij} = \sum_{i<k} (r_{ki}dr_{kj} + r_{kj}dr_{ki}), for j >=i.
+    # Then, a_{ij} = u_{ij} + r_{ii}dr_{ij} + r_{ij}dr_{ii}.
+    for i in range(a.shape[0]-1):
+        dr[i, i] = (a[i, i] - u[i, i])/(2*r[i, i])
+        dr[i, i+1:] = (a[i, i+1:] - u[i, i+1:] - r[i, i+1:]*dr[i, i])/r[i, i]
+        u[i+1, i+1:] = [
+            np.sum(r[:i, i+1]*dr[:i, j] + dr[:i, i+1]*r[:i, j], axis=0)
+            for j in range(i+1, a.shape[1])]
+    dr[-1, -1] = (a[-1, -1] - u[-1, -1])/(2*r[-1, -1])
+    del u
+
+    dq = scipy.linalg.solve(
+        r.T, dx.T - dr.T@q.T, assume_a='lower triangular',
+        overwrite_b=True).T
+    return dq, dr
+
+class jac_qr:
+
+    def __init__(self, x, qr=None):
+        self.x = np.atleast_2d(x)
+        if self.x.shape[0] < self.x.shape[1]:
+            raise ValueError('Expected a 2D-array with shape (N, M) and N >= M.')
+        if qr is None:
+            q, r = scipy.linalg.qr(
+                x, overwrite_a=False, mode='economic', pivoting=False)
+            idx = np.argwhere(np.diag(r) < 0)
+            q[:, idx] *= -1
+            r[idx, :] *= -1
+            self.qr = (q, r)
+        else:
+            self.qr = qr
+
+    def __call__(self, dx):
+        dq, dr = _jac_qr(self.x, dx, self.qr)
+        return dq, dr
 
 class _ModesProp:
 
@@ -416,7 +462,7 @@ class _ModesProp:
             msg = f'The number of frequencies (dof) must match the last dimension of the amplitudes.'
             raise ValueError(msg)
 
-        x0 = _amps_to_modes(amps)
+        x0 = np.real(_amps_to_modes(amps))
         x0 = x0.flatten()
         bounds = scipy.optimize.Bounds(
             lb=-1*np.ones(self.n_out * dof),
@@ -432,6 +478,41 @@ class _ModesProp:
                 'hessp': self._hessp
             })
         return res
+
+class Modes:
+
+    def __init__(
+        self,
+        freqs,
+        fs:int,
+        ns:int,
+        n_out:int=None,
+        n_in:int=None
+    ):
+        self.freqs = freqs
+        self.fs = fs
+        self.ns = ns
+        self.n_out = len(freqs) if n_out is None else n_out
+        self.n_in = n_out if n_in is None else n_in
+
+        self._get_metric()
+
+    def _get_metric(self):
+        self._metric = _metric_amps(
+            self.freqs, self.fs, self.ns, a_type='normal')
+
+    def _fun(self, x, amps, dof:int):
+        x = x.reshape(self.n_out, dof)
+        amps_ = _mode_to_amps(x, self.n_out, self.n_in)
+
+        dif = amps_ - amps
+        dif = np.concatenate(
+            [np.real(dif), np.imag(dif)], axis=-1)
+        trans = np.einsum('ijk,kl->ijl', dif, self._metric)
+
+        # Compute f(x).
+        f = np.einsum('ijk,ijk', trans, dif)
+        return f
 
 def partial_modes_map(
     X, Z, freqs, coords=None):
@@ -690,20 +771,35 @@ class Spring:
 if __name__ == '__main__':
     import matplotlib.pyplot as plt
 
-    dof, n_out, n_in = 4, 3, 2
     rng = np.random.default_rng()
-    freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-    X = 0.1*rng.normal(size=(n_out, dof))
-    amps = _mode_to_amps(X, n_out, n_in)
-    ns, fs = 210, 100
+    X = rng.normal(size=(4, 3))
+    q, r = scipy.linalg.qr(
+        X, overwrite_a=False, mode='economic', pivoting=False)
+    idx = np.argwhere(np.diag(r) < 0)
+    q[:, idx] *= -1
+    r[idx, :] *= -1
+    dX = rng.normal(size=(4, 3))
+    dq, dr = jac_qr(X)(dX)
+    print(np.allclose(dX, dq@r + q@dr))
 
-    modes = _ModesProp(
-        freqs, fs, ns, n_out=n_out, n_in=n_in)
-    res = modes.fit(amps)
-    print('Original:\n', X)
-    print('Fitted:\n', res.x.reshape(n_out, dof))
+    # dof, n_out, n_in = 4, 3, 2
+    # rng = np.random.default_rng()
+    # freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+    # X = 0.1*rng.normal(size=(n_out, dof))
+    # amps0 = _mode_to_amps(X, n_out, n_in)
+    # amps = amps0 + 1e-4*(rng.normal(size=amps0.shape) + 1j*rng.normal(size=amps0.shape))
+    # ns, fs = 210, 100
 
-    print(res.success, res.message)
+    # modes = _ModesProp(
+    #     freqs, fs, ns, n_out=n_out, n_in=n_in)
+    # res = modes.fit(amps)
+    # print('Original amps:\n', amps0)
+    # print('Noisy amps:\n', amps)
+    # print('===================')
+    # print('Original:\n', X)
+    # print('Fitted:\n', res.x.reshape(n_out, dof))
+
+    # print(res.success, res.message)
 
 
     # # ================================
