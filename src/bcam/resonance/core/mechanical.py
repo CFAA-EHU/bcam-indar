@@ -341,20 +341,20 @@ def _amps_to_modes(amps):
     psi /= dom[np.newaxis, :]
     return psi
 
-def _inv_qe(q, a, lu, coords_div):
-    r'''
-    Computes :math:`\hat{a} = a\,[q e_\sigma]^{-1}`.
-    '''
-    dof, n_out = q.shape
-    coords, coords_c = coords_div
-    if coords.size == 0:
-        a_ = a @ q.T
-    else:
-        a_ = np.zeros((dof, dof), dtype=a.dtype)
-        a_[:, coords] = a[:, n_out:]
-        a_[:, coords_c] = scipy.linalg.lu_solve(
-            lu, (a[:, :n_out] - a_[:, coords]@q[coords, :]).T).T
-    return a_
+# def _inv_qe(q, a, lu, coords_div):
+#     r'''
+#     Computes :math:`\hat{a} = a\,[q e_\sigma]^{-1}`.
+#     '''
+#     dof, n_out = q.shape
+#     coords, coords_c = coords_div
+#     if coords.size == 0:
+#         a_ = a @ q.T
+#     else:
+#         a_ = np.zeros((dof, dof), dtype=a.dtype)
+#         a_[:, coords] = a[:, n_out:]
+#         a_[:, coords_c] = scipy.linalg.lu_solve(
+#             lu, (a[:, :n_out] - a_[:, coords]@q[coords, :]).T).T
+#     return a_
 
 class _PartialModesMap:
 
@@ -448,14 +448,14 @@ class _PartialModesMap:
 
         # d(q@z_@[q e]^{-1})
         # b1 = dq@z_@[q e]^{-1} + q@dz_@[q e]^{-1}.
-        b1 = _inv_qe(q, dq@z + q@dz)
+        b1 = self._inv_qe(q, dq@z + q@dz)
         # b2 = [q e]d([q e]^{-1}) = -[dq 0][q e]^{-1}
-        b2 = _inv_qe(q, -np.pad(dq, (0, dof-n_out)))
+        b2 = self._inv_qe(q, -np.pad(dq, ((0, 0), (0, dof-n_out))))
 
         return b1 + self._z_@b2
 
     def jac(self, x, z, dx, dz):
-        dq, dr = _jac_qr(x, dx, (self._q, self._r))
+        dq, dr = _jac_qr(x.T, dx.T, (self._q, self._r))
         self._dqr = (dq, dr)
         z_ = self._z_
         _, dof = x.shape
@@ -564,7 +564,7 @@ def _jac_fun(x, z, dx, dz, freqs, coords, n_out, n_in, metric, amps0):
     amps = _mode_to_amps(modes, n_out, n_in)
 
     def composition(dx_, dz_):
-        d_modes = modes.jac(x, z, dx_, dz_)
+        d_modes = modes_map.jac(x, z, dx_, dz_)
         d_amps = _jac_amps(modes, d_modes, n_out, n_in)
         return _jac_dist(amps - amps0, d_amps, metric)
 
@@ -925,18 +925,20 @@ if __name__ == '__main__':
     zi = 1e-3*rng.normal(size=(n_out, dof))
     dx = 0.1*rng.normal(size=(n_out, dof))
     dz = 1e-3*rng.normal(size=(n_out, dof))
-    ll = 1e-2 * np.arange(-40, 41)
+    ll = 1e-3 * np.arange(-40, 41)
     f_line = [
         _fun(xi+l*dx, zi+l*dz, freqs, coords, n_out, n_in, metric, amps0)
         for l in ll]
     f_line = np.array(f_line)
+    f = _fun(xi, zi, freqs, coords, n_out, n_in, metric, amps0)
+    df = _jac_fun(xi, zi, dx, dz, freqs, coords, n_out, n_in, metric, amps0)
 
     fig, ax = plt.subplots(ncols=1, sharex=True, figsize=(5, 5))
     fig.suptitle('Test derivatives of objective for real mode shapes fitting')
 
     ax.set_title('1st order')
-    ax.plot(ll, f_line)
-    # ax.axhline(0, color='k', linestyle='--', linewidth=1)
+    ax.plot(ll, f_line - (f + df*ll))
+    ax.axhline(0, color='k', linestyle='--', linewidth=1)
 
     # ax[1].set_title('2nd order')
     # ax[1].plot(L, f_line - (fx + (dfx@v)*L + 0.5*(ddfxp@v)*(L**2)))
