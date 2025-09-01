@@ -39,6 +39,72 @@ def _validate_dims(M, C, K, check_symmetry=True):
     
     return M, C, K
 
+# Jacobian of the QR decomposition
+# ----------------------------
+def _jac_qr(x, dx, qr):
+    # dx = dq@r + q@dr.
+    q, r = qr
+    # x.T@dx + x@dx.T = r.T@dr + dr.T@r. To prove this,
+    # notice that q.T@q = I, so dq.T@q + q.T@dq = 0.
+    a = x.T@dx
+    a += a.T
+    dr = np.zeros(r.shape, dtype=r.dtype)
+    u = np.zeros(a.shape[1], dtype=x.dtype)
+
+    # u_{ij} = \sum_{i<k} (r_{ki}dr_{kj} + r_{kj}dr_{ki}), for j >=i.
+    # Then, a_{ij} = u_{ij} + r_{ii}dr_{ij} + r_{ij}dr_{ii}.
+    for i in range(a.shape[0]-1):
+        dr[i, i] = (a[i, i] - u[i])/(2*r[i, i])
+        dr[i, i+1:] = (a[i, i+1:] - u[i+1:] - r[i, i+1:]*dr[i, i])/r[i, i]
+        u[i+1:] = [
+            np.sum(r[:i, i+1]*dr[:i, j] + dr[:i, i+1]*r[:i, j], axis=0)
+            for j in range(i+1, a.shape[1])]
+    dr[-1, -1] = (a[-1, -1] - u[-1])/(2*r[-1, -1])
+
+    dq = scipy.linalg.solve(
+        r.T, dx.T - dr.T@q.T, assume_a='lower triangular',
+        overwrite_b=True).T
+    return dq, dr
+
+class jac_qr:
+    '''
+    Computes the derivative of the qr decomposition.
+
+    Attributes
+    ----------
+    x : np.ndarray
+        The input array.
+    qr : tuple, optional
+        The QR decomposition of the input array as (Q, R).
+    '''
+
+    def __init__(self, x, qr=None):
+        self.x = np.atleast_2d(x)
+        if self.x.ndim != 2:
+            raise ValueError('Expected a 2D-array.')
+        if self.x.shape[0] < self.x.shape[1]:
+            raise ValueError('Expected a 2D-array with shape (N, M) and N >= M.')
+        if qr is None:
+            q, r = scipy.linalg.qr(
+                x, overwrite_a=False, mode='economic', pivoting=False)
+            idx = np.argwhere(np.diag(r) < 0)
+            q[:, idx] *= -1
+            r[idx, :] *= -1
+            self.qr = (q, r)
+        else:
+            self.qr = qr
+
+    def __call__(self, dx):
+        r'''
+        If :math:`f:x \mapsto (q, r)`, then this method returns
+        :math:`df(x)(dx) = (dq, dr)`
+        '''
+        dx = np.atleast_2d(dx)
+        if dx.shape != self.x.shape:
+            raise ValueError('Expected a 2D-array with the same shape as x.')
+        dq, dr = _jac_qr(self.x, dx, self.qr)
+        return dq, dr
+
 # =================================
 # Amplitudes
 # =================================
@@ -261,8 +327,8 @@ def _reshape_mode_shapes_output(X, Z):
 
     return x
 
-def _mode_to_amps(mode_shape, n_out, n_in):
-    return mode_shape[:n_out, np.newaxis] * mode_shape[np.newaxis, :n_in]
+def _mode_to_amps(modes, n_out, n_in):
+    return modes[:n_out, np.newaxis] * modes[np.newaxis, :n_in]
 
 def _amps_to_modes(amps):
     n_out, n_in, dof = amps.shape
@@ -275,52 +341,236 @@ def _amps_to_modes(amps):
     psi /= dom[np.newaxis, :]
     return psi
 
-def _partial_modes_map(
-        X, Z, freqs, coords=None):
-    n_out, dof = X.shape
-    q, r = scipy.linalg.qr(
-        X.T, overwrite_a=False, mode='full', pivoting=False)
-    # Detect negative elements in the diagonal of R.
-    idx = np.argwhere(np.diag(r) < 0)
-    q[:, idx] *= -1
-    q, qc = q[:, :n_out], q[:, n_out:]
-    c_X = np.abs(np.prod(r[(np.arange(n_out), np.arange(n_out))]))
-    if c_X < 1e-12:
-        logging.warning('Real part does not have full rank.')
-        return np.nan, (c_X)
-
-    if coords is None:
-        Z_ = q @ Z @ q.T
+def _inv_qe(q, a, lu, coords_div):
+    r'''
+    Computes :math:`\hat{a} = a\,[q e_\sigma]^{-1}`.
+    '''
+    dof, n_out = q.shape
+    coords, coords_c = coords_div
+    if coords.size == 0:
+        a_ = a @ q.T
     else:
-        try:
-            coords_c = np.setdiff1d(np.arange(dof), coords, assume_unique=True)
-            upper = np.zeros((n_out, dof), dtype=X.dtype)
-            upper[:, coords_c] = scipy.linalg.inv(q[coords_c])
-            lower = scipy.linalg.solve(qc[coords].T, qc.T)
-            c_coords = np.abs(scipy.linalg.det(q[coords_c]))
-        except scipy.linalg.LinAlgError:
+        a_ = np.zeros((dof, dof), dtype=a.dtype)
+        a_[:, coords] = a[:, n_out:]
+        a_[:, coords_c] = scipy.linalg.lu_solve(
+            lu, (a[:, :n_out] - a_[:, coords]@q[coords, :]).T).T
+    return a_
+
+class _PartialModesMap:
+
+    def __init__(self, freqs, coords):
+        self.freqs = freqs
+        self.point = (None, None)
+
+        if coords is None:
+            self._inv_qe = self._inv_qe_full
+            self._z_new = self._z_new_full
+            self._jac_z_ = self._jac_z_full
+        else:
+            coords_c = np.setdiff1d(
+                np.arange(len(freqs)), coords, assume_unique=True)
+            self.coords = (coords, coords_c)
+            self._inv_qe = self._inv_qe_def
+            self._z_new = self._z_new_def
+            self._jac_z_ = self._jac_z_def
+
+        self._psi = None
+
+    def _inv_qe_full(self, q, a):
+        return a @ q.T
+    
+    def _inv_qe_def(self, q, a):
+        dof, n_out = q.shape
+        coords, coords_c = self.coords
+        a_ = np.zeros((dof, dof), dtype=a.dtype)
+        a_[:, coords] = a[:, n_out:]
+        a_[:, coords_c] = scipy.linalg.lu_solve(
+            self._lu,
+            (a[:, :n_out] - a_[:, coords]@q[coords, :]).T).T
+        return a_
+
+    def _z_new_full(self, z):
+        return self._inv_qe(self._q, self._q@z)
+
+    def _z_new_def(self, z):
+        lu = scipy.linalg.lu_factor(self._q[self.coords[1]].T)
+        self._lu = lu
+        if np.min(np.abs(np.diag(lu[0]))) < 1e-12:
             logging.warning('Ill-defined coordinate patch.')
-            return np.nan, (c_X, c_coords)
-        inv = np.concatenate((upper, lower), axis=0)
-        del upper, lower
-        Z_ = q @ Z @ inv
+            return np.nan
+        return self._inv_qe(self._q, self._q@z)
 
-    d = freqs.real, freqs.imag
-    H = d[0][:, np.newaxis] * Z_.T
-    H += H.T
-    H[np.arange(dof), np.arange(dof)] += d[1]
-    H -= (Z_ * d[1][np.newaxis, :]) @ Z_.T
-    try:
-        chk = scipy.linalg.cholesky(H, lower=False, overwrite_a=True)
-    except scipy.linalg.LinAlgError:
-        logging.warning('Mass matrix is not positive-definite.')
-        return np.nan, (c_X, c_coords, 0)
-    c_pos = np.prod(chk[np.arange(dof), np.arange(dof)])
+    def __call__(self, x, z):
+        n_out, dof = x.shape
+        q, r = scipy.linalg.qr(
+            x.T, overwrite_a=False, mode='economic', pivoting=False)
+        # Detect negative elements in the diagonal of R.
+        idx = np.argwhere(np.diag(r) < 0)
+        r[idx, :] *= -1
+        q[:, idx] *= -1
+        self._q, self._r = q, r
+        c_X = np.abs(np.prod(r[np.arange(n_out), np.arange(n_out)]))
+        if c_X < 1e-12:
+            logging.warning('Real part does not have full rank.')
 
-    psi = X + 1j * X @ Z_
-    return psi, (c_X, c_coords, c_pos)
+        z_ = self._z_new(z)
+        self._z_ = z_
+        if np.isnan(self._z_.any()):
+            self._psi = np.nan
+            return
 
-class _ModesProp:
+        d = self.freqs.real, self.freqs.imag
+        H = d[0][:, np.newaxis] * z_.T
+        H += H.T
+        H[np.arange(dof), np.arange(dof)] += d[1]
+        H -= (z_ * d[1][np.newaxis, :]) @ z_.T
+        try:
+            self._chk = scipy.linalg.cholesky(
+                H, lower=False, overwrite_a=True)
+        except scipy.linalg.LinAlgError:
+            self._chk = np.nan
+            logging.warning('Mass matrix is not positive-definite.')
+            self._psi = np.nan
+            return
+
+        self._psi = x + 1j * x @ z_
+        return self._psi
+
+    def _jac_z_full(self, z, dz):
+        q = self._q
+        dq, _ = self._dqr
+        return dq@z@q.T + q@dz@q.T + q@z@dq.T
+
+    def _jac_z_def(self, z, dz):
+        n_out, dof = z.shape
+        q = self._q
+        dq, _ = self._dqr
+
+        # d(q@z_@[q e]^{-1})
+        # b1 = dq@z_@[q e]^{-1} + q@dz_@[q e]^{-1}.
+        b1 = _inv_qe(q, dq@z + q@dz)
+        # b2 = [q e]d([q e]^{-1}) = -[dq 0][q e]^{-1}
+        b2 = _inv_qe(q, -np.pad(dq, (0, dof-n_out)))
+
+        return b1 + self._z_@b2
+
+    def jac(self, x, z, dx, dz):
+        dq, dr = _jac_qr(x, dx, (self._q, self._r))
+        self._dqr = (dq, dr)
+        z_ = self._z_
+        _, dof = x.shape
+
+        a = 1j * z_
+        a[range(dof), range(dof)] += 1
+        a = dx@a
+
+        dz_ = self._jac_z_(z, dz)
+
+        return a + 1j * x@dz_
+
+def partial_modes_map(
+    x, z, freqs, coords=None):
+    r'''
+    A parameterization of mode shapes.
+
+    Returns mode shapes with real part X with shape (N, dof), where N is the number of observations.
+    The mode shapes are :math:`\Psi = X(I + i Z)`.
+
+    The argument Z in the function is written in the basis :math:`\langle q_0, \ldots, q_{N-1}, e_{i_1}, \ldots \rangle`,
+    where :math:`q_i` is an orthogonal basis of the range of X, and
+    :math:`e_{i_j}` are elements of the canonical basis from coords, that is, coords = [i_1, i_2, ...].
+    The matrix Z[:N, :N] is antisymmetric (the function uses the upper triangular part).
+
+    Parameters
+    ----------
+    X : 2D-array (N, dof)
+        Real part of mode shapes.
+    Z : 2D-array (N, dof)
+        Multiplicative factor of complex part of mode shapes.
+    freqs : 1D-array
+        Modal frequencies.
+    coords : 1D-array, optional
+        Subset of canonical basis to complement the kernel of X.
+        By default, it takes [N, N+1, ..., dof-1].
+    Returns
+    -------
+    psi : 2D-array
+        Array where each column is a mode shape.
+    '''
+
+    x = np.asarray(x)
+    z = np.asarray(z)
+    if x.shape[0] > x.shape[1]:
+        msg = 'Expected a 2D-array with more DoF (columns) than observations (rows).'
+        raise ValueError(msg)
+    if x.shape != z.shape:
+        msg = 'Incompatible shapes for X and Z.'
+        raise ValueError(msg)
+    z = np.triu(z, k=1)
+    z[:x.shape[0], :x.shape[0]] = z[:x.shape[0], :x.shape[0]] - z[:x.shape[0], :x.shape[0]].T
+
+    freqs = np.asarray(freqs).squeeze()
+    if freqs.ndim > 1:
+        msg = 'Expected a 1D-array for frequencies.'
+        raise ValueError(msg)
+    freqs = np.atleast_1d(freqs)
+
+    if coords is not None:
+        coords = np.atleast_1d(coords, dtype=int)
+        if coords.ndim > 1:
+            msg = 'Expected a 1D-array for coords.'
+            raise ValueError(msg)
+        elif len(coords) != x.shape[1] - x.shape[0]:
+            msg = 'Incompatible shapes for coords and mode shapes.'
+            raise ValueError(msg)
+        coords = np.sort(np.unique(coords))
+    elif x.shape[0] < x.shape[1]:
+        coords = np.arange(x.shape[0], x.shape[1])
+
+    modes_map = _PartialModesMap(freqs, coords)
+    psi = modes_map(x, z)
+    if np.isnan(psi.any()):
+        return psi
+    else:
+        psi *= np.sqrt(np.imag(freqs))[np.newaxis, :]
+        return psi
+
+
+def _jac_amps(p, dp, n_out, n_in):
+    r = p[:n_out, np.newaxis] * dp[np.newaxis, :n_in]
+    r += dp[:n_out, np.newaxis] * p[np.newaxis, :n_in]
+    return r
+
+def _jac_dist(p, dp, metric):
+    p = np.concatenate(
+        [np.real(p), np.imag(p)], axis=-1)
+    dp = np.concatenate(
+        [np.real(dp), np.imag(dp)], axis=-1)
+    return 2*np.einsum('ijk,kl,ijl->', p, metric, dp)
+
+def _fun(x, z, freqs, coords, n_out, n_in, metric, amps0):
+    modes_map = _PartialModesMap(freqs, coords)
+    modes = modes_map(x, z)
+    amps = _mode_to_amps(modes, n_out, n_in)
+    diff = amps - amps0
+    diff = np.concatenate(
+            [np.real(diff), np.imag(diff)], axis=-1)
+    dist = np.einsum('ijk,kl,ijl->', diff, metric, diff)
+    return dist
+
+def _jac_fun(x, z, dx, dz, freqs, coords, n_out, n_in, metric, amps0):
+    modes_map = _PartialModesMap(freqs, coords)
+    modes = modes_map(x, z)
+    amps = _mode_to_amps(modes, n_out, n_in)
+
+    def composition(dx_, dz_):
+        d_modes = modes.jac(x, z, dx_, dz_)
+        d_amps = _jac_amps(modes, d_modes, n_out, n_in)
+        return _jac_dist(amps - amps0, d_amps, metric)
+
+    return composition(dx, dz)
+
+class ModesProp:
 
     def __init__(
         self,
@@ -416,7 +666,7 @@ class _ModesProp:
             msg = f'The number of frequencies (dof) must match the last dimension of the amplitudes.'
             raise ValueError(msg)
 
-        x0 = _amps_to_modes(amps)
+        x0 = np.real(_amps_to_modes(amps))
         x0 = x0.flatten()
         bounds = scipy.optimize.Bounds(
             lb=-1*np.ones(self.n_out * dof),
@@ -433,71 +683,41 @@ class _ModesProp:
             })
         return res
 
-def partial_modes_map(
-    X, Z, freqs, coords=None):
-    r'''
-    A parameterization of mode shapes.
+class Modes:
 
-    Returns mode shapes with real part X with shape (N, dof), where N is the number of observations.
-    The mode shapes are :math:`\Psi = X(I + i Z)`.
+    def __init__(
+        self,
+        freqs,
+        fs:int,
+        ns:int,
+        n_out:int=None,
+        n_in:int=None
+    ):
+        self.freqs = freqs
+        self.fs = fs
+        self.ns = ns
+        self.n_out = len(freqs) if n_out is None else n_out
+        self.n_in = n_out if n_in is None else n_in
 
-    The argument Z in the function is written in the basis :math:`\langle q_0, \ldots, q_{N-1}, e_{i_1}, \ldots \rangle`,
-    where :math:`q_i` is an orthogonal basis of the range of X, and
-    :math:`e_{i_j}` are elements of the canonical basis from coords, that is, coords = [i_1, i_2, ...].
-    The matrix Z[:N, :N] is antisymmetric (the function uses the upper triangular part).
+        self._get_metric()
 
-    Parameters
-    ----------
-    X : 2D-array (N, dof)
-        Real part of mode shapes.
-    Z : 2D-array (N, dof)
-        Multiplicative factor of complex part of mode shapes.
-    freqs : 1D-array
-        Modal frequencies.
-    coords : 1D-array, optional
-        Subset of canonical basis to complement the kernel of X.
-        By default, it takes [N, N+1, ..., dof-1].
-    Returns
-    -------
-    psi : 2D-array
-        Array where each column is a mode shape.
-    '''
+    def _get_metric(self):
+        self._metric = _metric_amps(
+            self.freqs, self.fs, self.ns, a_type='normal')
 
-    X = np.asarray(X)
-    Z = np.asarray(Z)
-    if X.shape[0] > X.shape[1]:
-        msg = 'Expected a 2D-array with more DoF (columns) than observations (rows).'
-        raise ValueError(msg)
-    if X.shape != Z.shape:
-        msg = 'Incompatible shapes for X and Z.'
-        raise ValueError(msg)
-    Z = np.triu(Z, k=1)
-    Z[:X.shape[0], :X.shape[0]] = Z[:X.shape[0], :X.shape[0]] - Z[:X.shape[0], :X.shape[0]].T
+    def _fun(self, x, amps, dof:int):
+        x = x.reshape(self.n_out, dof)
+        amps_ = _mode_to_amps(x, self.n_out, self.n_in)
 
-    freqs = np.asarray(freqs).squeeze()
-    if freqs.ndim > 1:
-        msg = 'Expected a 1D-array for frequencies.'
-        raise ValueError(msg)
-    freqs = np.atleast_1d(freqs)
+        dif = amps_ - amps
+        dif = np.concatenate(
+            [np.real(dif), np.imag(dif)], axis=-1)
+        trans = np.einsum('ijk,kl->ijl', dif, self._metric)
 
-    if coords is not None:
-        coords = np.atleast_1d(coords, dtype=int)
-        if coords.ndim > 1:
-            msg = 'Expected a 1D-array for coords.'
-            raise ValueError(msg)
-        elif len(coords) != X.shape[1] - X.shape[0]:
-            msg = 'Incompatible shapes for coords and mode shapes.'
-            raise ValueError(msg)
-        coords = np.sort(np.unique(coords))
-    elif X.shape[0] < X.shape[1]:
-        coords = np.arange(X.shape[0], X.shape[1])
-
-    psi = _partial_modes_map(X, Z, freqs, coords)[0]
-    if np.isnan(psi).any():
-        return psi
-    else:
-        psi *= np.sqrt(np.imag(freqs))[np.newaxis, :]
-        return psi
+        # Compute f(x).
+        f = np.einsum('ijk,ijk', trans, dif)
+        return f
+    
 
 def modal_to_system(mode_shapes, Z):
     '''Recover system matrices from mode shapes and complex frequencies.
@@ -693,17 +913,56 @@ if __name__ == '__main__':
     dof, n_out, n_in = 4, 3, 2
     rng = np.random.default_rng()
     freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-    X = 0.1*rng.normal(size=(n_out, dof))
-    amps = _mode_to_amps(X, n_out, n_in)
+    x0 = 0.1*rng.normal(size=(n_out, dof))
+    z0 = 1e-3*rng.normal(size=(n_out, dof))
+    amps0 = _mode_to_amps(x0, n_out, n_in)
+    coords = np.arange(n_out, dof)
+
     ns, fs = 210, 100
+    metric = _metric_amps(freqs, fs, ns)
 
-    modes = _ModesProp(
-        freqs, fs, ns, n_out=n_out, n_in=n_in)
-    res = modes.fit(amps)
-    print('Original:\n', X)
-    print('Fitted:\n', res.x.reshape(n_out, dof))
+    xi = 0.1*rng.normal(size=(n_out, dof))
+    zi = 1e-3*rng.normal(size=(n_out, dof))
+    dx = 0.1*rng.normal(size=(n_out, dof))
+    dz = 1e-3*rng.normal(size=(n_out, dof))
+    ll = 1e-2 * np.arange(-40, 41)
+    f_line = [
+        _fun(xi+l*dx, zi+l*dz, freqs, coords, n_out, n_in, metric, amps0)
+        for l in ll]
+    f_line = np.array(f_line)
 
-    print(res.success, res.message)
+    fig, ax = plt.subplots(ncols=1, sharex=True, figsize=(5, 5))
+    fig.suptitle('Test derivatives of objective for real mode shapes fitting')
+
+    ax.set_title('1st order')
+    ax.plot(ll, f_line)
+    # ax.axhline(0, color='k', linestyle='--', linewidth=1)
+
+    # ax[1].set_title('2nd order')
+    # ax[1].plot(L, f_line - (fx + (dfx@v)*L + 0.5*(ddfxp@v)*(L**2)))
+    # # ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
+    plt.show()
+
+
+
+    # dof, n_out, n_in = 4, 3, 2
+    # rng = np.random.default_rng()
+    # freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+    # X = 0.1*rng.normal(size=(n_out, dof))
+    # amps0 = _mode_to_amps(X, n_out, n_in)
+    # amps = amps0 + 1e-4*(rng.normal(size=amps0.shape) + 1j*rng.normal(size=amps0.shape))
+    # ns, fs = 210, 100
+
+    # modes = _ModesProp(
+    #     freqs, fs, ns, n_out=n_out, n_in=n_in)
+    # res = modes.fit(amps)
+    # print('Original amps:\n', amps0)
+    # print('Noisy amps:\n', amps)
+    # print('===================')
+    # print('Original:\n', X)
+    # print('Fitted:\n', res.x.reshape(n_out, dof))
+
+    # print(res.success, res.message)
 
 
     # # ================================
