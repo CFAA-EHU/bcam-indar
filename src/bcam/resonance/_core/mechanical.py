@@ -297,6 +297,8 @@ def reshape_modes_input(x, dof:int, n_out:int):
     '''
     Transform 1darray into (x, z) for use in PartialModesMap.
     '''
+    assert len(x) == 2*n_out*dof - n_out*(n_out+1)//2, 'Unexpected length for x.'
+
     X = x[:dof*n_out].reshape(n_out, dof)
     
     Zu = np.zeros((n_out, n_out))
@@ -314,13 +316,16 @@ def reshape_modes_input(x, dof:int, n_out:int):
 def reshape_modes_output(X, Z):
     '''
     Transform (x, z) into 1darray compatible with scipy.optimize.
+
+    If z[:n_out, :n_out] is not anti-symmetric, then the upper triangle is used
+    to construct an anti-symmetric matrix, and the lower triangle is ignored.
     '''
     n_out, dof = X.shape
     
     x = np.zeros(
         (2*n_out*dof - n_out*(n_out+1)//2,), dtype=X.dtype)
     x[:dof*n_out] = X.flatten()
-    
+
     Zu = Z[:n_out, :n_out]
     init = dof*n_out
     for i in range(n_out-1):
@@ -387,7 +392,6 @@ class PartialModesMap:
             self._jac_z_ = self._jac_z_def
 
         self._point = None
-        self._dqr = None
         self._psi = None
         self._dpsi = None
 
@@ -509,11 +513,10 @@ class PartialModesMap:
     def _expensive_jac(self):
         x, _ = self.point
         self._dqr = jac_qr(x.T, dx.T, (self._q, self._r))
-        z_ = self._z_
         _, dof = x.shape
 
         def dpsi(dx, dz):
-            a = 1j * z_
+            a = 1j * self._z_
             a[range(dof), range(dof)] += 1
             a = dx@a
             dz_ = self._jac_z_(dz)
@@ -523,44 +526,10 @@ class PartialModesMap:
 
     def jac(self, x, z):
         self.point = (x, z)
-
         if self._dpsi is None:
             self._dpsi = self._expensive_jac()
         return self._dpsi
 
-def _jac_amps(p, dp, n_out, n_in):
-    r = p[:n_out, np.newaxis] * dp[np.newaxis, :n_in]
-    r += dp[:n_out, np.newaxis] * p[np.newaxis, :n_in]
-    return r
-
-def _jac_dist(p, dp, metric):
-    p = np.concatenate(
-        [np.real(p), np.imag(p)], axis=-1)
-    dp = np.concatenate(
-        [np.real(dp), np.imag(dp)], axis=-1)
-    return 2*np.einsum('ijk,kl,ijl->', p, metric, dp)
-
-def _fun(x, z, freqs, coords, n_out, n_in, metric, amps0):
-    modes_map = PartialModesMap(freqs, coords)
-    modes = modes_map(x, z)
-    amps = mode_to_amps(modes, n_out, n_in)
-    diff = amps - amps0
-    diff = np.concatenate(
-            [np.real(diff), np.imag(diff)], axis=-1)
-    dist = np.einsum('ijk,kl,ijl->', diff, metric, diff)
-    return dist
-
-def _jac_fun(x, z, dx, dz, freqs, coords, n_out, n_in, metric, amps0):
-    modes_map = PartialModesMap(freqs, coords)
-    modes = modes_map(x, z)
-    amps = mode_to_amps(modes, n_out, n_in)
-
-    def composition(dx_, dz_):
-        d_modes = modes_map.jac(x, z, dx_, dz_)
-        d_amps = _jac_amps(modes, d_modes, n_out, n_in)
-        return _jac_dist(amps - amps0, d_amps, metric)
-
-    return composition(dx, dz)
 
 class ModesProp:
 
@@ -680,16 +649,21 @@ class Modes:
     def __init__(
         self,
         freqs,
+        amps,
+        coords,
         fs:int,
         ns:int,
-        n_out:int=None,
-        n_in:int=None
     ):
         self.freqs = freqs
+        assert freqs.ndim == 1, 'Expected 1D array for frequencies.'
+        
+        self.amps = amps
+        assert amps.ndim == 3, 'Expected 3D array for amplitudes.'
+        assert amps.shape[2] == len(freqs), 'Incompatible shapes for frequencies and amplitudes.'
+        
         self.fs = fs
         self.ns = ns
-        self.n_out = len(freqs) if n_out is None else n_out
-        self.n_in = n_out if n_in is None else n_in
+        self._modes_map = PartialModesMap(freqs, coords)
 
         self._get_metric()
 
@@ -697,19 +671,52 @@ class Modes:
         self._metric = _metric_amps(
             self.freqs, self.fs, self.ns, a_type='normal')
 
-    def _fun(self, x, amps, dof:int):
-        x = x.reshape(self.n_out, dof)
-        amps_ = mode_to_amps(x, self.n_out, self.n_in)
+    def _fun(self, x):
+        n_out, n_in, dof = self.amps.shape
+        x_, z_ = reshape_modes_input(x, dof, n_out)
 
-        dif = amps_ - amps
-        dif = np.concatenate(
-            [np.real(dif), np.imag(dif)], axis=-1)
-        trans = np.einsum('ijk,kl->ijl', dif, self._metric)
+        modes = self._modes_map(x_, z_)
+        amps = mode_to_amps(modes, n_out, n_in)
+        diff = amps - self.amps
+        diff = np.concatenate(
+                [np.real(diff), np.imag(diff)], axis=-1)
+        dist = np.einsum('ijk,kl,ijl->', diff, self._metric, diff)
+        return dist
 
-        # Compute f(x).
-        f = np.einsum('ijk,ijk', trans, dif)
-        return f
-    
+    def _jac_amps(self, p, dp):
+        n_out, n_in, _ = self.amps.shape
+        r = p[:n_out, np.newaxis] * dp[np.newaxis, :n_in]
+        r += dp[:n_out, np.newaxis] * p[np.newaxis, :n_in]
+        r = np.concatenate(
+            [np.real(r), np.imag(r)], axis=-1)
+        return r
+
+    def _basis_iterator(self):
+        n_out, _, dof = self.amps.shape
+        e = np.zeros(2*n_out*dof - n_out*(n_out+1)//2)
+        e[0] = 1
+        for _ in range(len(e)):
+            yield reshape_modes_input(e, dof, n_out)
+            e = np.roll(e, 1)
+
+    def _jac(self, x):
+        n_out, n_in, dof = self.amps.shape
+        x_, z_ = reshape_modes_input(x, dof, n_out)
+
+        modes = self._modes_map(x_, z_)
+        d_modes = self._modes_map.jac(x_, z_)
+
+        amps = mode_to_amps(modes, n_out, n_in)
+        diff = np.concatenate(
+            [np.real(amps - self.amps), np.imag(amps - self.amps)], axis=-1)
+        del amps
+        diff = 2*np.einsum('ijk,kl->ijl', diff, self._metric)
+
+        jac = [np.einsum('ijl,ijl', diff, self._jac_amps(modes, d_modes(dx, dz)))
+               for dx, dz in self._basis_iterator()]
+        return np.array(jac)
+
+
 
 def modal_to_system(mode_shapes, Z):
     '''Recover system matrices from mode shapes and complex frequencies.
@@ -911,25 +918,26 @@ if __name__ == '__main__':
     coords = np.arange(n_out, dof)
 
     ns, fs = 210, 100
-    metric = _metric_amps(freqs, fs, ns)
+    modes = Modes(freqs, amps0, coords, fs, ns)
 
     xi = 0.1*rng.normal(size=(n_out, dof))
     zi = 1e-3*rng.normal(size=(n_out, dof))
+    pi = reshape_modes_output(xi, zi)
     dx = 0.1*rng.normal(size=(n_out, dof))
     dz = 1e-3*rng.normal(size=(n_out, dof))
+    dp = reshape_modes_output(dx, dz)
     ll = 1e-3 * np.arange(-40, 41)
     f_line = [
-        _fun(xi+l*dx, zi+l*dz, freqs, coords, n_out, n_in, metric, amps0)
-        for l in ll]
+        modes._fun(pi+l*dp) for l in ll]
     f_line = np.array(f_line)
-    f = _fun(xi, zi, freqs, coords, n_out, n_in, metric, amps0)
-    df = _jac_fun(xi, zi, dx, dz, freqs, coords, n_out, n_in, metric, amps0)
+    fpi = modes._fun(pi)
+    df = modes._jac(pi) @ dp
 
     fig, ax = plt.subplots(ncols=1, sharex=True, figsize=(5, 5))
     fig.suptitle('Test derivatives of objective for real mode shapes fitting')
 
     ax.set_title('1st order')
-    ax.plot(ll, f_line - (f + df*ll))
+    ax.plot(ll, f_line - (fpi + df*ll))
     ax.axhline(0, color='k', linestyle='--', linewidth=1)
 
     # ax[1].set_title('2nd order')
