@@ -7,6 +7,32 @@ import scipy
 import bcam.resonance._core.mechanical as mechanical
 
 
+def test_jac_qr():
+    rng = np.random.default_rng()
+    x = rng.normal(size=(4, 3))
+    q, r = scipy.linalg.qr(
+        x, overwrite_a=False, mode='economic', pivoting=False)
+    idx = np.argwhere(np.diag(r) < 0)
+    q[:, idx] *= -1
+    r[idx, :] *= -1
+    dx = rng.normal(size=(4, 3))
+    dq, dr = mechanical.jac_qr(x, dx, (q, r))
+    assert np.allclose(dx, dq@r + q@dr)
+
+def test_reshape_modes():
+    dof, n_out = 4, 3
+    rng = np.random.default_rng(1268)
+
+    # Reference mode shape.
+    x0 = 0.1*rng.normal(size=(n_out, dof))
+    z0 = 0.01*rng.normal(size=(n_out, dof))
+    z0 = np.triu(z0, k=1)
+    z0[:n_out, :n_out] = z0[:n_out, :n_out] - z0[:n_out, :n_out].T
+    x = mechanical.reshape_modes_output(x0, z0)
+    x0_, z0_ = mechanical.reshape_modes_input(x, dof, n_out)
+
+    assert np.allclose(x0_, x0), np.allclose(z0_, z0)
+
 class TestModeMap:
 
     @pytest.fixture(scope='class')
@@ -53,6 +79,17 @@ class TestAmplitudes:
         K = np.imag(np.sum(K, axis=-1))
         return K
     
+    def test_reshape(self):
+        rng = np.random.default_rng(1234345)
+        dof, n_out, n_in = 4, 3, 2
+
+        x = rng.normal(
+            size=(n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof - 1))
+        ix = mechanical.reshape_injection(x, n_out=n_out, n_in=n_in)
+        pix = mechanical.reshape_projection(ix)
+
+        assert np.allclose(x, pix)
+
     def test_amps(self):
         rng = np.random.default_rng(12345)
         dof = 4
@@ -105,15 +142,3 @@ class TestAmplitudes:
         amps_fit = model.fit(data)
         error = np.linalg.norm(amps_fit - amps, axis=-1) / np.linalg.norm(amps, axis=-1)
         assert np.max(error) < 1e-2
-
-def test_jac_qr():
-    rng = np.random.default_rng()
-    x = rng.normal(size=(4, 3))
-    q, r = scipy.linalg.qr(
-        x, overwrite_a=False, mode='economic', pivoting=False)
-    idx = np.argwhere(np.diag(r) < 0)
-    q[:, idx] *= -1
-    r[idx, :] *= -1
-    dx = rng.normal(size=(4, 3))
-    dq, dr = mechanical.jac_qr(x, dx, (q, r))
-    assert np.allclose(dx, dq@r + q@dr)

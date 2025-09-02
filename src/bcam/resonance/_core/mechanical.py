@@ -165,6 +165,15 @@ def _sum_exp_weighted(a, fs: float, ns: int):
     return r
 
 def reshape_injection(x, n_out:int, n_in:int):
+    '''
+    2darray (n_in*(n_in+1)//2 + (n_out-n_in)*n_in, dof) to 3darray (n_out, n_in, dof).
+
+    The returned slice [:n_in, :n_in] is symmetric.
+    '''
+    assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
+    assert x.ndim == 2, 'Expected a 2D-array.'
+    assert x.shape[0] == n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 'Unexpected array shape.'
+
     L = x.shape[-1]
     x_ = np.zeros((n_out, n_in, L), dtype=x.dtype)
     x_[np.arange(n_in), np.arange(n_in)] = x[:n_in]
@@ -179,8 +188,15 @@ def reshape_injection(x, n_out:int, n_in:int):
     return x_
 
 def reshape_projection(x):
+    '''
+    3darray (n_out, n_in, dof) to 2darray (flatten*, dof).
+
+    When the array is flattened, the symmetry of x[:n_in, :n_in] is taken into account.
+    '''
+    assert x.ndim == 3, 'Expected a 3D-array.'
     n_out, n_in, L = x.shape
-    x_ = np.zeros_like(x, dtype=x.dtype)
+    assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
+
     x_ = np.zeros((n_in*(n_in+1)//2 + (n_out-n_in)*n_in, L), dtype=x.dtype)
     x_[:n_in] = x[np.arange(n_in), np.arange(n_in)]
     c = n_in
@@ -277,7 +293,10 @@ class Amplitudes():
 # Modal Parameters
 # =================================
 
-def _reshape_mode_shapes_input(x, dof:int, n_out:int):
+def reshape_modes_input(x, dof:int, n_out:int):
+    '''
+    Transform 1darray into (x, z) for use in PartialModesMap.
+    '''
     X = x[:dof*n_out].reshape(n_out, dof)
     
     Zu = np.zeros((n_out, n_out))
@@ -292,7 +311,10 @@ def _reshape_mode_shapes_input(x, dof:int, n_out:int):
 
     return X, Z
 
-def _reshape_mode_shapes_output(X, Z):
+def reshape_modes_output(X, Z):
+    '''
+    Transform (x, z) into 1darray compatible with scipy.optimize.
+    '''
     n_out, dof = X.shape
     
     x = np.zeros(
@@ -309,10 +331,10 @@ def _reshape_mode_shapes_output(X, Z):
 
     return x
 
-def _mode_to_amps(modes, n_out, n_in):
+def mode_to_amps(modes, n_out, n_in):
     return modes[:n_out, np.newaxis] * modes[np.newaxis, :n_in]
 
-def _amps_to_modes(amps):
+def amps_to_modes(amps):
     n_out, n_in, dof = amps.shape
     psi = np.zeros((n_out, dof), dtype=amps.dtype)
     psi[:n_in] = np.sqrt(amps[np.arange(n_in), np.arange(n_in)])
@@ -521,7 +543,7 @@ def _jac_dist(p, dp, metric):
 def _fun(x, z, freqs, coords, n_out, n_in, metric, amps0):
     modes_map = PartialModesMap(freqs, coords)
     modes = modes_map(x, z)
-    amps = _mode_to_amps(modes, n_out, n_in)
+    amps = mode_to_amps(modes, n_out, n_in)
     diff = amps - amps0
     diff = np.concatenate(
             [np.real(diff), np.imag(diff)], axis=-1)
@@ -531,7 +553,7 @@ def _fun(x, z, freqs, coords, n_out, n_in, metric, amps0):
 def _jac_fun(x, z, dx, dz, freqs, coords, n_out, n_in, metric, amps0):
     modes_map = PartialModesMap(freqs, coords)
     modes = modes_map(x, z)
-    amps = _mode_to_amps(modes, n_out, n_in)
+    amps = mode_to_amps(modes, n_out, n_in)
 
     def composition(dx_, dz_):
         d_modes = modes_map.jac(x, z, dx_, dz_)
@@ -564,7 +586,7 @@ class ModesProp:
 
     def _fun(self, x, amps, dof:int):
         x = x.reshape(self.n_out, dof)
-        amps_ = _mode_to_amps(x, self.n_out, self.n_in)
+        amps_ = mode_to_amps(x, self.n_out, self.n_in)
 
         dif = amps_ - amps
         dif = np.concatenate(
@@ -577,7 +599,7 @@ class ModesProp:
     
     def _jac(self, x, amps, dof:int):
         x = x.reshape(self.n_out, dof)
-        amps_ = _mode_to_amps(x, self.n_out, self.n_in)
+        amps_ = mode_to_amps(x, self.n_out, self.n_in)
 
         dif = amps_ - amps
         dif = np.concatenate(
@@ -600,7 +622,7 @@ class ModesProp:
         x = x.reshape(self.n_out, dof)
         p = p.reshape(self.n_out, dof)
 
-        amps_ = _mode_to_amps(x, self.n_out, self.n_in)
+        amps_ = mode_to_amps(x, self.n_out, self.n_in)
         A = amps_ - amps
         A = np.concatenate(
             [np.real(A), np.imag(A)], axis=-1)
@@ -636,7 +658,7 @@ class ModesProp:
             msg = f'The number of frequencies (dof) must match the last dimension of the amplitudes.'
             raise ValueError(msg)
 
-        x0 = np.real(_amps_to_modes(amps))
+        x0 = np.real(amps_to_modes(amps))
         x0 = x0.flatten()
         bounds = scipy.optimize.Bounds(
             lb=-1*np.ones(self.n_out * dof),
@@ -677,7 +699,7 @@ class Modes:
 
     def _fun(self, x, amps, dof:int):
         x = x.reshape(self.n_out, dof)
-        amps_ = _mode_to_amps(x, self.n_out, self.n_in)
+        amps_ = mode_to_amps(x, self.n_out, self.n_in)
 
         dif = amps_ - amps
         dif = np.concatenate(
@@ -885,7 +907,7 @@ if __name__ == '__main__':
     freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
     x0 = 0.1*rng.normal(size=(n_out, dof))
     z0 = 1e-3*rng.normal(size=(n_out, dof))
-    amps0 = _mode_to_amps(x0, n_out, n_in)
+    amps0 = mode_to_amps(x0, n_out, n_in)
     coords = np.arange(n_out, dof)
 
     ns, fs = 210, 100
@@ -935,43 +957,6 @@ if __name__ == '__main__':
     # print('Fitted:\n', res.x.reshape(n_out, dof))
 
     # print(res.success, res.message)
-
-
-    # # ================================
-    # # Test reshapes amplitudes
-    # # ================================
-    # seed = 1234345
-    # rng = np.random.default_rng(seed)
-    # dof, n_out, n_in = 4, 3, 2
-
-    # x = rng.normal(
-    #     size=(n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof - 1))
-    # ix = _reshape_injection(x, n_out=n_out, n_in=n_in)
-    # pix = _reshape_projection(ix)
-
-    # print('- Test reshapes: ', np.allclose(x, pix))
-
-
-    # # ================================
-    # # Test reshapes mode shapes
-    # # ================================
-    # dof, n_out, n_in = 4, 3, 2
-    # coords = np.arange(n_out, dof)
-    # rng = np.random.default_rng(1268)
-    # freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-
-    # # Reference mode shape.
-    # X0 = 0.1*rng.normal(size=(n_out, dof))
-    # Z0 = 0.01*rng.normal(size=(n_out, dof))
-    # Z0 = np.triu(Z0, k=1)
-    # Z0[:n_out, :n_out] = Z0[:n_out, :n_out] - Z0[:n_out, :n_out].T
-    # psi0 = _partial_modes_map(X0, Z0, freqs, coords=coords)[0]
-    # amps0 = _mode_to_amps(psi0, n_out, n_in)
-    # x = _reshape_mode_shapes_output(X0, Z0)
-    # X0_, Z0_ = _reshape_mode_shapes_input(x, dof, n_out)
-
-    # print('- Test reshapes: ', np.allclose(X0_, X0), np.allclose(Z0_, Z0))
-
 
     # # ================================
     # # Test loss function and df
