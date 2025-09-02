@@ -4,7 +4,7 @@ import pytest
 import numpy as np
 import scipy
 
-import bcam.resonance.core.mechanical as mechanical
+import bcam.resonance._core.mechanical as mechanical
 
 
 class TestModeMap:
@@ -14,11 +14,14 @@ class TestModeMap:
         dof, n_out = 6, 4
         rng = np.random.default_rng(123455)
 
-        X = rng.normal(size=(n_out, dof))
-        Z = rng.normal(scale=1e-3, size=(n_out, dof))
-        Z[:n_out, :n_out] = (Z[:n_out, :n_out] - Z[:n_out, :n_out].T)/2
+        x = rng.normal(size=(n_out, dof))
+        z = rng.normal(scale=1e-3, size=(n_out, dof))
+        z[:n_out, :n_out] = (z[:n_out, :n_out] - z[:n_out, :n_out].T)/2
         freqs = -rng.uniform(0.1, 10, size=dof) + 1j * rng.uniform(size=dof)
-        psi = mechanical.partial_modes_map(X, Z, freqs)
+        coords = np.arange(n_out, dof)
+        modes = mechanical.PartialModesMap(freqs, coords)
+        psi = modes(x, z)
+        psi *= np.sqrt(np.imag(freqs))[np.newaxis, :]
 
         return psi, freqs
 
@@ -105,12 +108,12 @@ class TestAmplitudes:
 
 def test_jac_qr():
     rng = np.random.default_rng()
-    X = rng.normal(size=(4, 3))
+    x = rng.normal(size=(4, 3))
     q, r = scipy.linalg.qr(
-        X, overwrite_a=False, mode='economic', pivoting=False)
+        x, overwrite_a=False, mode='economic', pivoting=False)
     idx = np.argwhere(np.diag(r) < 0)
     q[:, idx] *= -1
     r[idx, :] *= -1
-    dX = rng.normal(size=(4, 3))
-    dq, dr = mechanical.jac_qr(X)(dX)
-    assert np.allclose(dX, dq@r + q@dr)
+    dx = rng.normal(size=(4, 3))
+    dq, dr = mechanical.jac_qr(x, dx, (q, r))
+    assert np.allclose(dx, dq@r + q@dr)
