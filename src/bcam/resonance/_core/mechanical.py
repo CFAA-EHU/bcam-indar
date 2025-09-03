@@ -87,11 +87,45 @@ def jac_qr(x, dx, qr):
         overwrite_b=True).T
     return dq, dr
 
+def jac_lu(dx, lu):
+    '''
+    Computes the derivative of the lu decomposition at x.
+
+    Parameters
+    ----------
+    dx : np.ndarray
+    lu : np.ndarray
+        The LU decomposition of x.
+
+    Returns
+    -------
+    dlu : np.ndarray
+        The derivative of the LU decomposition.
+        The zero diagonal terms of l are not stored.
+    '''
+    assert dx.shape == lu.shape, 'Incompatible shapes for dx and lu.'
+    dlu = np.zeros_like(lu)
+
+    dlu[0] = dx[0]
+    for i in range(1, lu.shape[0]):
+        # We start with j > i.
+        dlu[i, :i] = scipy.linalg.solve(
+            np.triu(lu[:i, :i]).T,
+            dx[i, :i] - lu[i, :i]@np.triu(dlu[:i, :i]),
+            assume_a='lower triangular'
+        )
+        # w = \sum_{1\le k<i} dl_{ik}u_{kj} + l_{ik}du_{kj}, for i <= j.
+        w = dlu[i, :i]@lu[:i, i:] + lu[i, :i]@dlu[:i, i:]
+        # This gives us du_{ij}, for j \ge i.
+        dlu[i, i:] = dx[i, i:] - w
+
+    return dlu
+
 # =================================
 # Amplitudes
 # =================================
 
-def _metric_amps(freqs, fs, ns, a_type='normal'):
+def metric_amps(freqs, fs, ns, a_type='normal'):
     dof = len(freqs)
     def _mult(x, y):
         r = x[np.newaxis, :] + y[:, np.newaxis]
@@ -246,7 +280,7 @@ class Amplitudes():
     def _matrix(self, penalty: float):
         dof = len(self.freqs)
         L = 2*dof if self.a_type == 'normal' else 2*dof-1
-        m = _metric_amps(self.freqs, self.fs, self.ns, self.a_type)
+        m = metric_amps(self.freqs, self.fs, self.ns, self.a_type)
         m += penalty * np.eye(L)
         return m
 
@@ -393,7 +427,6 @@ class PartialModesMap:
 
         self._point = None
         self._psi = None
-        self._dpsi = None
 
     @property
     def point(self):
@@ -412,7 +445,6 @@ class PartialModesMap:
             (not np.allclose(x, self._point[0]) & np.allclose(z, self._point[1])):
             self._expensive_fun(x, z)
             self._point = value
-            self._dpsi = None
 
     def _inv_qe_full(self, a):
         return a @ self._q.T
@@ -450,13 +482,12 @@ class PartialModesMap:
         r[idx, :] *= -1
         q[:, idx] *= -1
         self._q, self._r = q, r
-        c_X = np.abs(np.prod(r[np.arange(n_out), np.arange(n_out)]))
-        if c_X < 1e-12:
+        if np.min(np.diag(self._r)) < 1e-12:
             logging.warning('Real part does not have full rank.')
 
         z_ = self._z_new(z)
         self._z_ = z_
-        if np.isnan(self._z_.any()):
+        if np.isnan(z_.any()):
             self._psi = np.nan
             return
 
@@ -470,7 +501,7 @@ class PartialModesMap:
             self._chk = scipy.linalg.cholesky(
                 H, lower=False, overwrite_a=True)
         except scipy.linalg.LinAlgError:
-            self._chk = np.nan
+            self._chk = [[np.nan]]
             logging.warning('Mass matrix is not positive-definite.')
             self._psi = np.nan
             return
@@ -491,16 +522,14 @@ class PartialModesMap:
         self.point = (x, z)
         return self._psi
 
-    def _jac_z_full(self, dz):
+    def _jac_z_full(self, dz, dq):
         _, z = self.point
         q = self._q
-        dq, _ = self._dqr
         return dq@z@q.T + q@dz@q.T + q@z@dq.T
 
-    def _jac_z_def(self, dz):
+    def _jac_z_def(self, dz, dq):
         _, z = self.point
         q = self._q
-        dq, _ = self._dqr
 
         # d(q@z_@[q e]^{-1})
         # b1 = dq@z_@[q e]^{-1} + q@dz_@[q e]^{-1}.
@@ -510,25 +539,37 @@ class PartialModesMap:
 
         return b1 + self._z_@b2
 
-    def _expensive_jac(self):
-        x, _ = self.point
-        self._dqr = jac_qr(x.T, dx.T, (self._q, self._r))
-        _, dof = x.shape
-
+    def jac(self, x, z):
+        self.point = (x, z)
         def dpsi(dx, dz):
+            # TODO: The jacobian of constrains may be computed at this step.
+            dq, _ = jac_qr(x.T, dx.T, (self._q, self._r))
             a = 1j * self._z_
             a[range(dof), range(dof)] += 1
             a = dx@a
-            dz_ = self._jac_z_(dz)
+            dz_ = self._jac_z_(dz, dq)
             return a + 1j * x@dz_
-
         return dpsi
 
-    def jac(self, x, z):
+    def constraints(self, x, z):
         self.point = (x, z)
-        if self._dpsi is None:
-            self._dpsi = self._expensive_jac()
-        return self._dpsi
+        self._c_x = -np.sum(np.log(np.diag(self._r)))
+        self._c_coords = -np.sum(np.log(np.abs(np.diag(self._lu[0]))))
+        self._c_pos = -np.sum(np.log(np.diag(self._chk))) if not np.isnan(self._chk[0, 0]) else np.inf
+        return np.array([self._c_x, self._c_coords, self._c_pos])
+
+    def _jac_lu(self):
+        pass
+
+    def jac_constraints(self, x, z):
+        self.point = (x, z)
+        def dconstr(dx, dz):
+            df = np.zeros(3)
+            _, dr = jac_qr(x.T, dx.T, (self._q, self._r))
+            df[0] = -np.sum(dr/self._r)
+            return df
+        return dconstr
+
 
 
 class ModesProp:
@@ -550,7 +591,7 @@ class ModesProp:
         self._get_metric()
 
     def _get_metric(self):
-        self._metric = _metric_amps(
+        self._metric = metric_amps(
             self.freqs, self.fs, self.ns, a_type='normal')
 
     def _fun(self, x, amps, dof:int):
@@ -668,7 +709,7 @@ class Modes:
         self._get_metric()
 
     def _get_metric(self):
-        self._metric = _metric_amps(
+        self._metric = metric_amps(
             self.freqs, self.fs, self.ns, a_type='normal')
 
     def _fun(self, x):
@@ -945,26 +986,6 @@ if __name__ == '__main__':
     # # ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
     plt.show()
 
-
-
-    # dof, n_out, n_in = 4, 3, 2
-    # rng = np.random.default_rng()
-    # freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-    # X = 0.1*rng.normal(size=(n_out, dof))
-    # amps0 = _mode_to_amps(X, n_out, n_in)
-    # amps = amps0 + 1e-4*(rng.normal(size=amps0.shape) + 1j*rng.normal(size=amps0.shape))
-    # ns, fs = 210, 100
-
-    # modes = _ModesProp(
-    #     freqs, fs, ns, n_out=n_out, n_in=n_in)
-    # res = modes.fit(amps)
-    # print('Original amps:\n', amps0)
-    # print('Noisy amps:\n', amps)
-    # print('===================')
-    # print('Original:\n', X)
-    # print('Fitted:\n', res.x.reshape(n_out, dof))
-
-    # print(res.success, res.message)
 
     # # ================================
     # # Test loss function and df

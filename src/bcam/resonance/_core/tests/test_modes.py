@@ -1,4 +1,3 @@
-from xml.parsers.expat import model
 import pytest
 
 import numpy as np
@@ -18,6 +17,18 @@ def test_jac_qr():
     dx = rng.normal(size=(4, 3))
     dq, dr = mechanical.jac_qr(x, dx, (q, r))
     assert np.allclose(dx, dq@r + q@dr)
+
+def test_jac_lu():
+    rng = np.random.default_rng()
+    n = 4
+    x = rng.normal(size=(n, n))
+    dx = rng.normal(size=(n, n))
+    lu, _ = scipy.linalg.lu_factor(x)
+    dlu = mechanical.jac_lu(dx, lu)
+
+    l, u = np.tril(lu, k=-1)+np.eye(n), np.triu(lu)
+    dl, du = np.tril(dlu, k=-1), np.triu(dlu)
+    assert np.allclose(dx, dl@u + l@du)
 
 def test_reshape_modes():
     dof, n_out = 4, 3
