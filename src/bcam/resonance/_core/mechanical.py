@@ -39,8 +39,37 @@ def _validate_dims(M, C, K, check_symmetry=True):
     
     return M, C, K
 
+# Grassmannian decomposition
+# --------------------------
+def grass(x):
+    '''
+    Computes Grassmannian decomposition of x.
+
+    The matrix x is decomposed as x = q@s, where q is orthogonal
+    with 
+    '''
+    assert x.ndim == 2, 'x should be a 2D-array.'
+    assert x.shape[0] >= x.shape[1], 'x should be a 2D-array with shape (N, M) and N >= M.'
+
+    _, m = x.shape
+    x_ = x.copy()
+    p, l, u = scipy.linalg.lu(
+        x_[:m, :m].T,
+        overwrite_a=True, permute_l=False, p_indices=True)
+    x_[:m] = u.T
+    p_inv = np.argsort(p)
+    x_[m:] = scipy.linalg.solve(
+        l, x[m:, p_inv].T, assume_a='lower triangular').T
+    x_ = x_[:, ::-1]
+
+    q, r = scipy.linalg.qr(x_, mode='economic')
+    q = q[:, ::-1]
+    s = r[::-1][:, ::-1]@l[p].T
+
+    return q, s
+
 # Jacobian of the QR decomposition
-# ----------------------------
+# --------------------------------
 def jac_qr(x, dx, qr):
     '''
     Computes the derivative of the qr decomposition at x.
@@ -87,15 +116,24 @@ def jac_qr(x, dx, qr):
         overwrite_b=True).T
     return dq, dr
 
-def jac_lu(dx, lu):
+def pivot_to_permutation(piv):
+    perm = np.arange(len(piv))
+    for i in range(len(piv)):
+        perm[i], perm[piv[i]] = perm[piv[i]], perm[i]
+    return perm
+
+def jac_lu(dx, lu_piv):
     '''
     Computes the derivative of the lu decomposition at x.
+
+    If x = plu, where p is a permutation, then
+    dx = p(dl@u + l@du).
 
     Parameters
     ----------
     dx : np.ndarray
-    lu : np.ndarray
-        The LU decomposition of x.
+    (lu, piv) : tuple
+        Factorization of the coefficient matrix a, as given by lu_factor.
 
     Returns
     -------
@@ -103,7 +141,9 @@ def jac_lu(dx, lu):
         The derivative of the LU decomposition.
         The zero diagonal terms of l are not stored.
     '''
+    lu, piv = lu_piv
     assert dx.shape == lu.shape, 'Incompatible shapes for dx and lu.'
+    dx = dx[pivot_to_permutation(piv)].copy()
     dlu = np.zeros_like(lu)
 
     dlu[0] = dx[0]
@@ -112,8 +152,7 @@ def jac_lu(dx, lu):
         dlu[i, :i] = scipy.linalg.solve(
             np.triu(lu[:i, :i]).T,
             dx[i, :i] - lu[i, :i]@np.triu(dlu[:i, :i]),
-            assume_a='lower triangular'
-        )
+            assume_a='lower triangular')
         # w = \sum_{1\le k<i} dl_{ik}u_{kj} + l_{ik}du_{kj}, for i <= j.
         w = dlu[i, :i]@lu[:i, i:] + lu[i, :i]@dlu[:i, i:]
         # This gives us du_{ij}, for j \ge i.
@@ -558,15 +597,20 @@ class PartialModesMap:
         self._c_pos = -np.sum(np.log(np.diag(self._chk))) if not np.isnan(self._chk[0, 0]) else np.inf
         return np.array([self._c_x, self._c_coords, self._c_pos])
 
-    def _jac_lu(self):
-        pass
+    def _jac_det_q(self, dq, inv_qc):
+        a = dq[self.coords[1]].T
+        return -np.sum(inv_qc[i]@a[:, i] for i in range(a.shape[1]))
 
     def jac_constraints(self, x, z):
         self.point = (x, z)
+        inv_qc = scipy.linalg.lu_solve(
+            self._lu, np.eye(self._lu[0].shape[0]), overwrite_b=True)
         def dconstr(dx, dz):
             df = np.zeros(3)
-            _, dr = jac_qr(x.T, dx.T, (self._q, self._r))
+            dq, dr = jac_qr(x.T, dx.T, (self._q, self._r))
             df[0] = -np.sum(dr/self._r)
+            df[1] = -self._jac_det_q(dq, inv_qc)
+            # df[2] = ?
             return df
         return dconstr
 

@@ -7,12 +7,6 @@ import matplotlib.pyplot as plt
 
 from bcam.resonance import mechanical
 
-# %%
-rng = np.random.default_rng()
-n = 4
-x = rng.normal(size=(n, n))
-lu, piv = scipy.linalg.lu_factor(x)
-print(piv)
 
 # %%
 

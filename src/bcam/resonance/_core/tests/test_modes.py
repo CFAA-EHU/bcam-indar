@@ -6,6 +6,14 @@ import scipy
 import bcam.resonance._core.mechanical as mechanical
 
 
+def test_grass():
+    rng = np.random.default_rng()
+    n, m = 5, 3
+    x = rng.normal(size=(n, m))
+
+    q, s = mechanical.grass(x)
+    assert np.allclose(x, q@s)
+
 def test_jac_qr():
     rng = np.random.default_rng()
     x = rng.normal(size=(4, 3))
@@ -23,11 +31,13 @@ def test_jac_lu():
     n = 4
     x = rng.normal(size=(n, n))
     dx = rng.normal(size=(n, n))
-    lu, _ = scipy.linalg.lu_factor(x)
-    dlu = mechanical.jac_lu(dx, lu)
+    lu_piv = scipy.linalg.lu_factor(x)
+    dlu = mechanical.jac_lu(dx, lu_piv)
 
+    lu, piv = lu_piv
     l, u = np.tril(lu, k=-1)+np.eye(n), np.triu(lu)
     dl, du = np.tril(dlu, k=-1), np.triu(dlu)
+    dx = dx[mechanical.pivot_to_permutation(piv)]
     assert np.allclose(dx, dl@u + l@du)
 
 def test_reshape_modes():
