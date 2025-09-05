@@ -6,5 +6,6 @@ from . import (
     diagrams,
     matrices,
     lti,
-    mechanical
+    mechanical,
+    derivatives
 )

@@ -3,8 +3,10 @@ import pytest
 import numpy as np
 import scipy
 
-import bcam.resonance._core.mechanical as mechanical
+from bcam.resonance._core import mechanical, derivatives
 
+# Derivatives tests
+# -----------------
 
 class TestGrass:
 
@@ -22,23 +24,23 @@ class TestGrass:
 
     def test_grass(self, initial):
         x, _, coords = initial
-        q, s, inv_s = mechanical.grass(x, coords)
+        q, s, inv_s = derivatives.grass(x, coords)
         assert np.allclose(x, q@s)
         assert np.allclose(np.eye(len(coords)), s@inv_s)
 
     def test_jac(self, initial):
         x, dx, coords = initial
-        q, s, s_inv = mechanical.grass(x, coords)
-        dq, ds = mechanical.jac_grass(dx, coords, (q, s, s_inv))
+        q, s, s_inv = derivatives.grass(x, coords)
+        dq, ds = derivatives.jac_grass(dx, coords, (q, s, s_inv))
         assert np.allclose(dx, dq@s + q@ds)
         assert np.allclose(q.T@dq, -dq.T@q)
         assert np.allclose(np.triu(dq[coords], k=1), 0)
 
     def test_jac_minimal(self, initial):
         x, dx, coords = initial
-        q, s, s_inv = mechanical.grass(x, coords)
-        dq = mechanical.jac_grass(dx, coords, (q, s, s_inv))[0]
-        dq_r = mechanical.jac_grass_minimal(dx, coords, (q, s, s_inv))
+        q, s, s_inv = derivatives.grass(x, coords)
+        dq = derivatives.jac_grass(dx, coords, (q, s, s_inv))[0]
+        dq_r = derivatives.jac_grass_minimal(dx, coords, (q, s, s_inv))
         assert np.allclose(dq_r, dq[coords])
 
 def test_jac_cho():
@@ -48,7 +50,7 @@ def test_jac_cho():
     dx = rng.normal(size=(n, n))
     dx = (dx + dx.T)/2
     u = np.triu(u)
-    du = mechanical.jac_cho(u, dx)
+    du = derivatives.jac_cho(u, dx)
     assert np.allclose(dx, du.T@u+ u.T@du)
 
 def test_jac_qr():
@@ -60,7 +62,7 @@ def test_jac_qr():
     q[:, idx] *= -1
     r[idx, :] *= -1
     dx = rng.normal(size=(4, 3))
-    dq, dr = mechanical.jac_qr(x, dx, (q, r))
+    dq, dr = derivatives.jac_qr(x, dx, (q, r))
     assert np.allclose(dx, dq@r + q@dr)
 
 def test_jac_lu():
@@ -69,13 +71,16 @@ def test_jac_lu():
     x = rng.normal(size=(n, n))
     dx = rng.normal(size=(n, n))
     lu_piv = scipy.linalg.lu_factor(x)
-    dlu = mechanical.jac_lu(dx, lu_piv)
+    dlu = derivatives.jac_lu(dx, lu_piv)
 
     lu, piv = lu_piv
     l, u = np.tril(lu, k=-1)+np.eye(n), np.triu(lu)
     dl, du = np.tril(dlu, k=-1), np.triu(dlu)
-    dx = dx[mechanical.pivot_to_permutation(piv)]
+    dx = dx[derivatives.pivot_to_permutation(piv)]
     assert np.allclose(dx, dl@u + l@du)
+
+# Mechanical tests
+# ----------------
 
 def test_reshape_modes():
     dof, n_out = 4, 3

@@ -5,14 +5,31 @@ import numpy as np
 import scipy
 import matplotlib.pyplot as plt
 
-from bcam.resonance import mechanical
+from bcam.resonance import mechanical, derivatives
 
 # %%
+dof, n_out, n_in = 4, 3, 2
 rng = np.random.default_rng()
-n, m = 5, 3
-x = rng.normal(size=(n, m))
-q, s = mechanical.grass(x, coords=np.arange(m))
+freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+x0 = 0.1*rng.normal(size=(n_out, dof))
+z0 = 1e-3*rng.normal(size=(n_out, dof))
+amps0 = mechanical.mode_to_amps(x0, n_out, n_in)
+coords = np.arange(n_out)
 
+ns, fs = 210, 100
+modes = mechanical.Modes(freqs, amps0, coords, fs, ns)
+
+xi = 0.1*rng.normal(size=(n_out, dof))
+zi = 1e-3*rng.normal(size=(n_out, dof))
+pi = mechanical.reshape_modes_output(xi, zi)
+dx = 0.1*rng.normal(size=(n_out, dof))
+dz = 1e-3*rng.normal(size=(n_out, dof))
+dp = mechanical.reshape_modes_output(dx, dz)
+ll = 1e-3 * np.arange(-40, 41)
+f_line = [
+    modes._fun(pi+l*dp) for l in ll]
+f_line = np.array(f_line)
+fpi = modes._fun(pi)
 
 # %%
 

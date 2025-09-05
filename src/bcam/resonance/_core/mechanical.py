@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 '''
 This is ...
 '''
@@ -6,6 +7,9 @@ import logging
 
 import numpy as np
 import scipy
+
+from . import derivatives
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,207 +43,6 @@ def _validate_dims(M, C, K, check_symmetry=True):
     
     return M, C, K
 
-# Grassmannian decomposition
-# --------------------------
-# TODO: the complexity of grass should be in between LU and QR.
-# Improve the algorithm.
-def grass(x, coords):
-    '''
-    Computes Grassmannian decomposition of x.
-
-    The matrix x is decomposed as x = q s, where the columns of q are orthogonal,
-    and q[coords] is lower triangular.
-
-    Parameters
-    ----------
-    x : np.ndarray, (N, M)
-        2D-array with N >= M.
-    coords : 1D-array
-        Indices of rows of x to be used.
-
-    Returns
-    -------
-    q : np.ndarray, (N, M)
-    s : np.ndarray, (M, M)
-    inv_s : np.ndarray, (M, M)
-        Inverse of s.
-    '''
-    assert x.ndim == 2, 'x should be a 2D-array.'
-    n, m = x.shape
-    assert n >= m, 'x should be a 2D-array with shape (N, M) and N >= M.'
-    if n == m:
-        return np.eye(n), x
-
-    assert len(coords) == m, 'Incompatible length for coords.'
-    coords_c = np.setdiff1d(
-        np.arange(n), coords, assume_unique=True)
-    x_ = x.copy()
-    p, l, u = scipy.linalg.lu(
-        x_[coords].T,
-        overwrite_a=True, permute_l=False, p_indices=True)
-    x_[coords] = u.T
-    p_inv = np.argsort(p)
-    x_[coords_c] = scipy.linalg.solve(
-        l, x[coords_c][:, p_inv].T, assume_a='lower triangular').T
-    x_ = x_[:, ::-1]
-
-    q, r = scipy.linalg.qr(
-        x_, mode='economic', overwrite_a=True)
-    q = q[:, ::-1]
-    s = r[::-1][:, ::-1]@(l[p].T)
-    inv_s = np.eye(m)[p_inv]
-    inv_s = scipy.linalg.solve(
-        l, inv_s, assume_a='lower triangular',
-        overwrite_b=True, overwrite_a=True)
-    inv_s = scipy.linalg.solve(
-        (r[::-1][:, ::-1]).T, inv_s, assume_a='upper triangular',
-        overwrite_b=True, overwrite_a=True).T
-    idx = np.argwhere(np.diag(q) < 0)
-    q[:, idx] = -q[:, idx]
-    s[idx, :] = -s[idx, :]
-    inv_s[:, idx] = -inv_s[:, idx]
-
-    return q, s, inv_s
-
-def jac_grass(dx, coords, grass):
-    # From dx = q ds + dq s we get q.T dx = ds + q.T dq s and
-    # (pi q)^{-1}(pi dx) = ds + (pi q)^{-1}(pi dq) s,
-    # where pi is the projection to the rows in coords.
-    q, s, inv_s = grass
-    a = scipy.linalg.solve(
-        q[coords], dx[coords], assume_a='lower triangular')
-    a = (q.T@dx - a)@inv_s
-    a = np.triu(a, k=1)
-    a = a - a.T
-    ds = q.T@dx - a@s
-    dq = (dx - q@ds)@inv_s
-
-    return dq, ds
-
-def jac_grass_minimal(dx, coords, grass):
-    q, _, inv_s = grass
-    v = scipy.linalg.solve(
-        q[coords], dx[coords], assume_a='lower triangular')
-    v = (q.T@dx - v)@inv_s
-    a = np.triu(v, k=1)
-    a = a - a.T
-    dq_r = q[coords]@(a - v)
-
-    return dq_r
-
-# Jacobian of Cholesky decomposition
-# ----------------------------------
-def jac_cho(u, dx):
-    assert dx.ndim == 2, 'dx should be a 2D-array.'
-    assert dx.shape[0] == dx.shape[1], 'dx should be a square array.'
-    assert u.shape == dx.shape, 'Incompatible shapes for u and dx.'
-    assert np.allclose(dx, dx.T), 'dx should be symmetric.'
-    du = np.zeros_like(u)
-    y = np.zeros(u.shape[1], dtype=u.dtype)
-
-    # dx_{ij} = \sum_{i<k} (u_{ki}du_{kj} + u_{kj}du_{ki}), for j >=i.
-    # Then, dx_{ij} = u_{ij} + u_{ii}du_{ij} + u_{ij}du_{ii}.
-    for i in range(dx.shape[0]-1):
-        du[i, i] = (dx[i, i] - y[i])/(2*u[i, i])
-        du[i, i+1:] = (dx[i, i+1:] - y[i+1:] - u[i, i+1:]*du[i, i])/u[i, i]
-        y[i+1:] = [
-            np.sum(u[:i+1, i+1]*du[:i+1, j] + du[:i+1, i+1]*u[:i+1, j], axis=0)
-            for j in range(i+1, dx.shape[1])]
-    du[-1, -1] = (dx[-1, -1] - y[-1])/(2*u[-1, -1])
-
-    return du
-
-# Jacobian of the QR decomposition
-# --------------------------------
-def jac_qr(x, dx, qr):
-    '''
-    Computes the derivative of the qr decomposition at x.
-
-    Parameters
-    ----------
-    x : np.ndarray
-    dx : np.ndarray
-    qr : tuple, optional
-        The QR decomposition of x as (q, r), where q.shape == x.shape.
-
-    Returns
-    -------
-    dq : np.ndarray
-        The derivative of the rotation q.
-    dr : np.ndarray
-        The derivative of the upper triangular matrix r.
-    '''
-    assert x.ndim == 2, 'x should be a 2D-array.'
-    assert x.shape[0] >= x.shape[1], 'x should be a 2D-array with shape (N, M) and N >= M.'
-    assert dx.shape == x.shape, 'x and dx should have the same shape.'
-    # dx = dq@r + q@dr.
-    q, r = qr
-    assert q.shape == x.shape, 'Incompatible shapes for q and x.'
-    # x.T@dx + x@dx.T = r.T@dr + dr.T@r. To prove this,
-    # notice that q.T@q = I, so dq.T@q + q.T@dq = 0.
-    a = x.T@dx
-    a += a.T
-    dr = np.zeros_like(r)
-    u = np.zeros(a.shape[1], dtype=x.dtype)
-
-    # u_{ij} = \sum_{i<k} (r_{ki}dr_{kj} + r_{kj}dr_{ki}), for j >=i.
-    # Then, a_{ij} = u_{ij} + r_{ii}dr_{ij} + r_{ij}dr_{ii}.
-    for i in range(a.shape[0]-1):
-        dr[i, i] = (a[i, i] - u[i])/(2*r[i, i])
-        dr[i, i+1:] = (a[i, i+1:] - u[i+1:] - r[i, i+1:]*dr[i, i])/r[i, i]
-        u[i+1:] = [
-            np.sum(r[:i+1, i+1]*dr[:i+1, j] + dr[:i+1, i+1]*r[:i+1, j], axis=0)
-            for j in range(i+1, a.shape[1])]
-    dr[-1, -1] = (a[-1, -1] - u[-1])/(2*r[-1, -1])
-
-    dq = scipy.linalg.solve(
-        r.T, dx.T - dr.T@q.T, assume_a='lower triangular',
-        overwrite_b=True).T
-    return dq, dr
-
-def pivot_to_permutation(piv):
-    perm = np.arange(len(piv))
-    for i in range(len(piv)):
-        perm[i], perm[piv[i]] = perm[piv[i]], perm[i]
-    return perm
-
-def jac_lu(dx, lu_piv):
-    '''
-    Computes the derivative of the lu decomposition at x.
-
-    If x = plu, where p is a permutation, then
-    dx = p(dl@u + l@du).
-
-    Parameters
-    ----------
-    dx : np.ndarray
-    (lu, piv) : tuple
-        Factorization of the coefficient matrix a, as given by lu_factor.
-
-    Returns
-    -------
-    dlu : np.ndarray
-        The derivative of the LU decomposition.
-        The zero diagonal terms of l are not stored.
-    '''
-    lu, piv = lu_piv
-    assert dx.shape == lu.shape, 'Incompatible shapes for dx and lu.'
-    dx = dx[pivot_to_permutation(piv)].copy()
-    dlu = np.zeros_like(lu)
-
-    dlu[0] = dx[0]
-    for i in range(1, lu.shape[0]):
-        # We start with j > i.
-        dlu[i, :i] = scipy.linalg.solve(
-            np.triu(lu[:i, :i]).T,
-            dx[i, :i] - lu[i, :i]@np.triu(dlu[:i, :i]),
-            assume_a='lower triangular')
-        # w = \sum_{1\le k<i} dl_{ik}u_{kj} + l_{ik}du_{kj}, for i <= j.
-        w = dlu[i, :i]@lu[:i, i:] + lu[i, :i]@dlu[:i, i:]
-        # This gives us du_{ij}, for j \ge i.
-        dlu[i, i:] = dx[i, i:] - w
-
-    return dlu
 
 # =================================
 # Amplitudes
@@ -490,6 +293,13 @@ def reshape_modes_output(X, Z):
 
     return x
 
+def basis_iterator(n_out:int, dof:int):
+    e = np.zeros(2*n_out*dof - n_out*(n_out+1)//2)
+    e[0] = 1
+    for _ in range(len(e)):
+        yield reshape_modes_input(e, dof, n_out)
+        e = np.roll(e, 1)
+
 def mode_to_amps(modes, n_out, n_in):
     return modes[:n_out, np.newaxis] * modes[np.newaxis, :n_in]
 
@@ -576,7 +386,7 @@ class PartialModesMap:
         return a_
 
     def _expensive_fun(self, x, z):
-        q, s, s_inv = grass(x.T, self.coords)
+        q, s, s_inv = derivatives.grass(x.T, self.coords)
         self._grass = (q, s, s_inv)
 
         z_ = q@z
@@ -621,6 +431,7 @@ class PartialModesMap:
 
     def _jac_z_(self, dz, dq):
         _, z = self.point
+        n_out, dof = len(self.coords), len(self.freqs)
         q = self._grass[0]
 
         # d(q@z_@[q e]^{-1})
@@ -633,8 +444,9 @@ class PartialModesMap:
 
     def jac(self, x, z):
         self.point = (x, z)
+        dof = len(self.freqs)
         def dpsi(dx, dz):
-            dq, _ = jac_grass(dx.T, self.coords, self._grass)
+            dq, _ = derivatives.jac_grass(dx.T, self.coords, self._grass)
             a = 1j * self._z_
             a[range(dof), range(dof)] += 1
             a = dx@a
@@ -665,7 +477,7 @@ class PartialModesMap:
         e = np.zeros_like(x)
         for i, j in itertools.product(range(x.shape[0]), range(x.shape[1])):
             e[i, j] = 1
-            dq_r = jac_grass_minimal(dx.T, self.coords, self._grass)
+            dq_r = derivatives.jac_grass_minimal(dx.T, self.coords, self._grass)
             jac_c_res[i, j] = -np.sum(np.diag(dq_r)/np.diag(q[self.coords]))
             e[i, j] = 0
 
@@ -872,7 +684,7 @@ class Modes:
         diff = 2*np.einsum('ijk,kl->ijl', diff, self._metric)
 
         jac = [np.einsum('ijl,ijl', diff, self._jac_amps(modes, d_modes(dx, dz)))
-               for dx, dz in self._basis_iterator()]
+               for dx, dz in basis_iterator(n_out, dof)]
         return np.array(jac)
 
 
@@ -1063,78 +875,3 @@ class Spring:
 
     def __len__(self):
         return 2 * self.M.shape[0]
-
-
-if __name__ == '__main__':
-    import matplotlib.pyplot as plt
-
-    dof, n_out, n_in = 4, 3, 2
-    rng = np.random.default_rng()
-    freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-    x0 = 0.1*rng.normal(size=(n_out, dof))
-    z0 = 1e-3*rng.normal(size=(n_out, dof))
-    amps0 = mode_to_amps(x0, n_out, n_in)
-    coords = np.arange(n_out)
-
-    ns, fs = 210, 100
-    modes = Modes(freqs, amps0, coords, fs, ns)
-
-    xi = 0.1*rng.normal(size=(n_out, dof))
-    zi = 1e-3*rng.normal(size=(n_out, dof))
-    pi = reshape_modes_output(xi, zi)
-    dx = 0.1*rng.normal(size=(n_out, dof))
-    dz = 1e-3*rng.normal(size=(n_out, dof))
-    dp = reshape_modes_output(dx, dz)
-    ll = 1e-3 * np.arange(-40, 41)
-    f_line = [
-        modes._fun(pi+l*dp) for l in ll]
-    f_line = np.array(f_line)
-    fpi = modes._fun(pi)
-    df = modes._jac(pi) @ dp
-
-    fig, ax = plt.subplots(ncols=1, sharex=True, figsize=(5, 5))
-    fig.suptitle('Test derivatives of objective for real mode shapes fitting')
-
-    ax.set_title('1st order')
-    ax.plot(ll, f_line - (fpi + df*ll))
-    ax.axhline(0, color='k', linestyle='--', linewidth=1)
-
-    # ax[1].set_title('2nd order')
-    # ax[1].plot(L, f_line - (fx + (dfx@v)*L + 0.5*(ddfxp@v)*(L**2)))
-    # # ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
-    plt.show()
-
-
-    # # ================================
-    # # Test loss function and df
-    # # for real mode shapes
-    # # ================================
-    # dof, n_out, n_in = 4, 3, 2
-    # rng = np.random.default_rng()
-    # freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-    # X = 0.1*rng.normal(size=(n_out, dof))
-    # amps = _mode_to_amps(X, n_out, n_in)
-    # ns, fs = 210, 100
-
-    # modes = _ModesProp(
-    #     freqs, fs, ns, n_out=n_out, n_in=n_in)
-    # x = rng.normal(scale=.1, size=n_out*dof)
-    # v = rng.normal(scale=.1, size=n_out*dof)
-    # fx, dfx = modes._fun(x, amps, dof)
-    # ddfxp = modes._hessp(x, v, amps, dof)
-
-    # L = 1e-3 * np.arange(-40, 41)
-    # f_line = [modes._fun(x + l*v, amps, dof)[0] for l in L]
-    # f_line = np.array(f_line)
-
-    # fig, ax = plt.subplots(ncols=2, sharex=True, figsize=(10, 5))
-    # fig.suptitle('Test derivatives of objective for real mode shapes fitting')
-
-    # ax[0].set_title('1st order')
-    # ax[0].plot(L, f_line - (fx + (dfx@v)*L))
-    # ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
-
-    # ax[1].set_title('2nd order')
-    # ax[1].plot(L, f_line - (fx + (dfx@v)*L + 0.5*(ddfxp@v)*(L**2)))
-    # ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
-    # plt.show()
