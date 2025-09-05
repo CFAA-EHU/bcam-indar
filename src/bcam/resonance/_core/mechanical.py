@@ -102,6 +102,9 @@ def grass(x, coords):
     return q, s, inv_s
 
 def jac_grass(dx, coords, grass):
+    # From dx = q ds + dq s we get q.T dx = ds + q.T dq s and
+    # (pi q)^{-1}(pi dx) = ds + (pi q)^{-1}(pi dq) s,
+    # where pi is the projection to the rows in coords.
     q, s, inv_s = grass
     a = scipy.linalg.solve(
         q[coords], dx[coords], assume_a='lower triangular')
@@ -112,6 +115,39 @@ def jac_grass(dx, coords, grass):
     dq = (dx - q@ds)@inv_s
 
     return dq, ds
+
+def jac_grass_minimal(dx, coords, grass):
+    q, _, inv_s = grass
+    v = scipy.linalg.solve(
+        q[coords], dx[coords], assume_a='lower triangular')
+    v = (q.T@dx - v)@inv_s
+    a = np.triu(v, k=1)
+    a = a - a.T
+    dq_r = q[coords]@(a - v)
+
+    return dq_r
+
+# Jacobian of Cholesky decomposition
+# ----------------------------------
+def jac_cho(u, dx):
+    assert dx.ndim == 2, 'dx should be a 2D-array.'
+    assert dx.shape[0] == dx.shape[1], 'dx should be a square array.'
+    assert u.shape == dx.shape, 'Incompatible shapes for u and dx.'
+    assert np.allclose(dx, dx.T), 'dx should be symmetric.'
+    du = np.zeros_like(u)
+    y = np.zeros(u.shape[1], dtype=u.dtype)
+
+    # dx_{ij} = \sum_{i<k} (u_{ki}du_{kj} + u_{kj}du_{ki}), for j >=i.
+    # Then, dx_{ij} = u_{ij} + u_{ii}du_{ij} + u_{ij}du_{ii}.
+    for i in range(dx.shape[0]-1):
+        du[i, i] = (dx[i, i] - y[i])/(2*u[i, i])
+        du[i, i+1:] = (dx[i, i+1:] - y[i+1:] - u[i, i+1:]*du[i, i])/u[i, i]
+        y[i+1:] = [
+            np.sum(u[:i+1, i+1]*du[:i+1, j] + du[:i+1, i+1]*u[:i+1, j], axis=0)
+            for j in range(i+1, dx.shape[1])]
+    du[-1, -1] = (dx[-1, -1] - y[-1])/(2*u[-1, -1])
+
+    return du
 
 # Jacobian of the QR decomposition
 # --------------------------------
@@ -143,7 +179,7 @@ def jac_qr(x, dx, qr):
     # notice that q.T@q = I, so dq.T@q + q.T@dq = 0.
     a = x.T@dx
     a += a.T
-    dr = np.zeros(r.shape, dtype=r.dtype)
+    dr = np.zeros_like(r)
     u = np.zeros(a.shape[1], dtype=x.dtype)
 
     # u_{ij} = \sum_{i<k} (r_{ki}dr_{kj} + r_{kj}dr_{ki}), for j >=i.
@@ -152,7 +188,7 @@ def jac_qr(x, dx, qr):
         dr[i, i] = (a[i, i] - u[i])/(2*r[i, i])
         dr[i, i+1:] = (a[i, i+1:] - u[i+1:] - r[i, i+1:]*dr[i, i])/r[i, i]
         u[i+1:] = [
-            np.sum(r[:i, i+1]*dr[:i, j] + dr[:i, i+1]*r[:i, j], axis=0)
+            np.sum(r[:i+1, i+1]*dr[:i+1, j] + dr[:i+1, i+1]*r[:i+1, j], axis=0)
             for j in range(i+1, a.shape[1])]
     dr[-1, -1] = (a[-1, -1] - u[-1])/(2*r[-1, -1])
 
@@ -621,17 +657,35 @@ class PartialModesMap:
         return -np.sum(inv_qc[i]@a[:, i] for i in range(a.shape[1]))
 
     def jac_constraints(self, x, z):
+        import itertools
         self.point = (x, z)
-        inv_qc = scipy.linalg.lu_solve(
-            self._lu, np.eye(self._lu[0].shape[0]), overwrite_b=True)
         q = self._grass[0]
-        def dconstr(dx, dz):
-            df = np.zeros(3)
-            dq, dr = jac_qr(x.T, dx.T, (q, self._r))
-            df[0] = -np.sum(dr/self._r)
-            df[1] = -self._jac_det_q(dq, inv_qc)
-            # df[2] = ?
-            return df
+
+        jac_c_res = np.zeros_like(x)
+        e = np.zeros_like(x)
+        for i, j in itertools.product(range(x.shape[0]), range(x.shape[1])):
+            e[i, j] = 1
+            dq_r = jac_grass_minimal(dx.T, self.coords, self._grass)
+            jac_c_res[i, j] = -np.sum(np.diag(dq_r)/np.diag(q[self.coords]))
+            e[i, j] = 0
+
+        # e = np.zeros(2*n_out*dof - n_out*(n_out+1)//2)
+        # e[0] = 1
+        # for _ in range(len(e)):
+        #     e_ = reshape_modes_input(e, dof, n_out)
+        #     e = np.roll(e, 1)
+        # jac_c_pos = np.zeros_like(x)
+
+        # inv_qc = scipy.linalg.lu_solve(
+        #     self._lu, np.eye(self._lu[0].shape[0]), overwrite_b=True)
+        # q = self._grass[0]
+        # def dconstr(dx, dz):
+        #     df = np.zeros(3)
+        #     dq, dr = jac_qr(x.T, dx.T, (q, self._r))
+        #     df[0] = -np.sum(dr/self._r)
+        #     df[1] = -self._jac_det_q(dq, inv_qc)
+        #     # df[2] = ?
+        #     return df
         return dconstr
 
 

@@ -34,6 +34,23 @@ class TestGrass:
         assert np.allclose(q.T@dq, -dq.T@q)
         assert np.allclose(np.triu(dq[coords], k=1), 0)
 
+    def test_jac_minimal(self, initial):
+        x, dx, coords = initial
+        q, s, s_inv = mechanical.grass(x, coords)
+        dq = mechanical.jac_grass(dx, coords, (q, s, s_inv))[0]
+        dq_r = mechanical.jac_grass_minimal(dx, coords, (q, s, s_inv))
+        assert np.allclose(dq_r, dq[coords])
+
+def test_jac_cho():
+    rng = np.random.default_rng()
+    n = 4
+    u = rng.normal(size=(n, n))
+    dx = rng.normal(size=(n, n))
+    dx = (dx + dx.T)/2
+    u = np.triu(u)
+    du = mechanical.jac_cho(u, dx)
+    assert np.allclose(dx, du.T@u+ u.T@du)
+
 def test_jac_qr():
     rng = np.random.default_rng()
     x = rng.normal(size=(4, 3))
