@@ -527,20 +527,21 @@ class PartialModesMap:
         coords_c = np.setdiff1d(
             np.arange(dof), self.coords, assume_unique=True)
 
+        q = self._grass[0]
         a_ = np.zeros((dof, dof), dtype=a.dtype)
         a_[:, coords_c] = a[:, n_out:]
         try:
             a_[:, self.coords] = scipy.linalg.solve(
-                self._q[self.coords].T,
-                (a[:, :n_out] - a_[:, coords_c]@self._q[coords_c, :]).T,
+                q[self.coords].T,
+                (a[:, :n_out] - a_[:, coords_c]@q[coords_c, :]).T,
                 assume_a='upper triangular').T
         except (scipy.linalg.LinAlgError, scipy.linalg.LinAlgWarning):
             a_ = np.nan
         return a_
 
     def _expensive_fun(self, x, z):
-        q, _ = grass(x.T, self.coords)
-        self._q = q
+        q, s, s_inv = grass(x.T, self.coords)
+        self._grass = (q, s, s_inv)
 
         z_ = q@z
         z_ = self._inv_qe(z_)
@@ -584,7 +585,7 @@ class PartialModesMap:
 
     def _jac_z_(self, dz, dq):
         _, z = self.point
-        q = self._q
+        q = self._grass[0]
 
         # d(q@z_@[q e]^{-1})
         # b1 = dq@z_@[q e]^{-1} + q@dz_@[q e]^{-1}.
@@ -597,8 +598,7 @@ class PartialModesMap:
     def jac(self, x, z):
         self.point = (x, z)
         def dpsi(dx, dz):
-            # TODO: The jacobian of constrains may be computed at this step.
-            dq, _ = jac_qr(x.T, dx.T, (self._q, self._r))
+            dq, _ = jac_grass(dx.T, self.coords, self._grass)
             a = 1j * self._z_
             a[range(dof), range(dof)] += 1
             a = dx@a
@@ -608,7 +608,8 @@ class PartialModesMap:
 
     def constraints(self, x, z):
         self.point = (x, z)
-        c_res = -np.sum(np.log(np.diag(self._q[self.coords])))
+        q = self._grass[0]
+        c_res = -np.sum(np.log(np.diag(q[self.coords])))
         if isinstance(self._chk, float) and np.isnan(self._chk):
             c_pos = np.inf
         else:
@@ -623,9 +624,10 @@ class PartialModesMap:
         self.point = (x, z)
         inv_qc = scipy.linalg.lu_solve(
             self._lu, np.eye(self._lu[0].shape[0]), overwrite_b=True)
+        q = self._grass[0]
         def dconstr(dx, dz):
             df = np.zeros(3)
-            dq, dr = jac_qr(x.T, dx.T, (self._q, self._r))
+            dq, dr = jac_qr(x.T, dx.T, (q, self._r))
             df[0] = -np.sum(dr/self._r)
             df[1] = -self._jac_det_q(dq, inv_qc)
             # df[2] = ?
