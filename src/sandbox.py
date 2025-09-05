@@ -7,6 +7,12 @@ import matplotlib.pyplot as plt
 
 from bcam.resonance import mechanical
 
+# %%
+rng = np.random.default_rng()
+n, m = 5, 3
+x = rng.normal(size=(n, m))
+q, s = mechanical.grass(x, coords=np.arange(m))
+
 
 # %%
 

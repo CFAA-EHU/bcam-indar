@@ -6,13 +6,33 @@ import scipy
 import bcam.resonance._core.mechanical as mechanical
 
 
-def test_grass():
-    rng = np.random.default_rng()
-    n, m = 5, 3
-    x = rng.normal(size=(n, m))
+class TestGrass:
 
-    q, s = mechanical.grass(x)
-    assert np.allclose(x, q@s)
+    @pytest.fixture(scope='class')
+    def initial(self):
+        rng = np.random.default_rng()
+        n, m = 5, 3
+        x = rng.normal(size=(n, m))
+        dx = rng.normal(size=x.shape)
+        # Generate m integers in [0, n-1] without repetition.
+        coords = rng.choice(n, size=m, replace=False)
+        coords = np.sort(coords)
+
+        return x, dx, coords
+
+    def test_grass(self, initial):
+        x, _, coords = initial
+        q, s, inv_s = mechanical.grass(x, coords)
+        assert np.allclose(x, q@s)
+        assert np.allclose(np.eye(len(coords)), s@inv_s)
+
+    def test_jac(self, initial):
+        x, dx, coords = initial
+        q, s, s_inv = mechanical.grass(x, coords)
+        dq, ds = mechanical.jac_grass(dx, coords, (q, s, s_inv))
+        assert np.allclose(dx, dq@s + q@ds)
+        assert np.allclose(q.T@dq, -dq.T@q)
+        assert np.allclose(np.triu(dq[coords], k=1), 0)
 
 def test_jac_qr():
     rng = np.random.default_rng()
@@ -65,7 +85,7 @@ class TestModeMap:
         z = rng.normal(scale=1e-3, size=(n_out, dof))
         z[:n_out, :n_out] = (z[:n_out, :n_out] - z[:n_out, :n_out].T)/2
         freqs = -rng.uniform(0.1, 10, size=dof) + 1j * rng.uniform(size=dof)
-        coords = np.arange(n_out, dof)
+        coords = np.arange(n_out)
         modes = mechanical.PartialModesMap(freqs, coords)
         psi = modes(x, z)
         psi *= np.sqrt(np.imag(freqs))[np.newaxis, :]

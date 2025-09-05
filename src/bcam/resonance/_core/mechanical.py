@@ -41,32 +41,77 @@ def _validate_dims(M, C, K, check_symmetry=True):
 
 # Grassmannian decomposition
 # --------------------------
-def grass(x):
+# TODO: the complexity of grass should be in between LU and QR.
+# Improve the algorithm.
+def grass(x, coords):
     '''
     Computes Grassmannian decomposition of x.
 
-    The matrix x is decomposed as x = q@s, where q is orthogonal
-    with 
+    The matrix x is decomposed as x = q s, where the columns of q are orthogonal,
+    and q[coords] is lower triangular.
+
+    Parameters
+    ----------
+    x : np.ndarray, (N, M)
+        2D-array with N >= M.
+    coords : 1D-array
+        Indices of rows of x to be used.
+
+    Returns
+    -------
+    q : np.ndarray, (N, M)
+    s : np.ndarray, (M, M)
+    inv_s : np.ndarray, (M, M)
+        Inverse of s.
     '''
     assert x.ndim == 2, 'x should be a 2D-array.'
-    assert x.shape[0] >= x.shape[1], 'x should be a 2D-array with shape (N, M) and N >= M.'
+    n, m = x.shape
+    assert n >= m, 'x should be a 2D-array with shape (N, M) and N >= M.'
+    if n == m:
+        return np.eye(n), x
 
-    _, m = x.shape
+    assert len(coords) == m, 'Incompatible length for coords.'
+    coords_c = np.setdiff1d(
+        np.arange(n), coords, assume_unique=True)
     x_ = x.copy()
     p, l, u = scipy.linalg.lu(
-        x_[:m, :m].T,
+        x_[coords].T,
         overwrite_a=True, permute_l=False, p_indices=True)
-    x_[:m] = u.T
+    x_[coords] = u.T
     p_inv = np.argsort(p)
-    x_[m:] = scipy.linalg.solve(
-        l, x[m:, p_inv].T, assume_a='lower triangular').T
+    x_[coords_c] = scipy.linalg.solve(
+        l, x[coords_c][:, p_inv].T, assume_a='lower triangular').T
     x_ = x_[:, ::-1]
 
-    q, r = scipy.linalg.qr(x_, mode='economic')
+    q, r = scipy.linalg.qr(
+        x_, mode='economic', overwrite_a=True)
     q = q[:, ::-1]
-    s = r[::-1][:, ::-1]@l[p].T
+    s = r[::-1][:, ::-1]@(l[p].T)
+    inv_s = np.eye(m)[p_inv]
+    inv_s = scipy.linalg.solve(
+        l, inv_s, assume_a='lower triangular',
+        overwrite_b=True, overwrite_a=True)
+    inv_s = scipy.linalg.solve(
+        (r[::-1][:, ::-1]).T, inv_s, assume_a='upper triangular',
+        overwrite_b=True, overwrite_a=True).T
+    idx = np.argwhere(np.diag(q) < 0)
+    q[:, idx] = -q[:, idx]
+    s[idx, :] = -s[idx, :]
+    inv_s[:, idx] = -inv_s[:, idx]
 
-    return q, s
+    return q, s, inv_s
+
+def jac_grass(dx, coords, grass):
+    q, s, inv_s = grass
+    a = scipy.linalg.solve(
+        q[coords], dx[coords], assume_a='lower triangular')
+    a = (q.T@dx - a)@inv_s
+    a = np.triu(a, k=1)
+    a = a - a.T
+    ds = q.T@dx - a@s
+    dq = (dx - q@ds)@inv_s
+
+    return dq, ds
 
 # Jacobian of the QR decomposition
 # --------------------------------
@@ -448,21 +493,9 @@ class PartialModesMap:
         assert freqs.ndim == 1, 'Expected a 1D-array for frequencies.'
         self.freqs = freqs
 
-        if coords is None:
-            self.coords = (np.array([]), np.arange(len(freqs)))
-            self._inv_qe = self._inv_qe_full
-            self._z_new = self._z_new_full
-            self._jac_z_ = self._jac_z_full
-        else:
-            assert coords.ndim == 1, 'Expected a 1D-array for coords.'
-            assert len(coords) < len(freqs), 'Invalid length for coords.'
-            coords = coords.astype(int)
-            coords_c = np.setdiff1d(
-                np.arange(len(freqs)), coords, assume_unique=True)
-            self.coords = (coords, coords_c)
-            self._inv_qe = self._inv_qe_def
-            self._z_new = self._z_new_def
-            self._jac_z_ = self._jac_z_def
+        assert coords.ndim == 1, 'Expected a 1D-array for coords.'
+        assert len(coords) < len(freqs), 'Invalid length for coords.'
+        self.coords = coords.astype(int)
 
         self._point = None
         self._psi = None
@@ -477,7 +510,7 @@ class PartialModesMap:
         assert x.ndim == 2, 'Expected a 2D-array for x.'
         n_out, dof = x.shape
         assert dof == len(self.freqs), 'x.shape[1] should equal dof.'
-        assert n_out == len(self.coords[1]), 'x.shape[0]) should equal the number of observations.'
+        assert n_out == len(self.coords), 'x.shape[0] should equal the number of observations.'
         assert x.shape == z.shape, 'Incompatible shapes for x and z.'
         assert np.allclose(z[:n_out, :n_out], -z[:n_out, :n_out].T), 'The matrix z must be skew-symmetric in the observed block.'
         if (self._point is None) or \
@@ -485,53 +518,41 @@ class PartialModesMap:
             self._expensive_fun(x, z)
             self._point = value
 
-    def _inv_qe_full(self, a):
-        return a @ self._q.T
+    def _inv_qe(self, a):
+        '''
+        Compute a@[q e]^{-1}, where [q e] = [q_0 ... q_{n_out-1} e_{i_1} ...].
+        '''
+        dof = len(self.freqs)
+        n_out = len(self.coords)
+        coords_c = np.setdiff1d(
+            np.arange(dof), self.coords, assume_unique=True)
 
-    def _inv_qe_def(self, a):
-        dof, n_out = self._q.shape
-        coords, coords_c = self.coords
         a_ = np.zeros((dof, dof), dtype=a.dtype)
-        a_[:, coords] = a[:, n_out:]
-        a_[:, coords_c] = scipy.linalg.lu_solve(
-            self._lu,
-            (a[:, :n_out] - a_[:, coords]@self._q[coords, :]).T).T
+        a_[:, coords_c] = a[:, n_out:]
+        try:
+            a_[:, self.coords] = scipy.linalg.solve(
+                self._q[self.coords].T,
+                (a[:, :n_out] - a_[:, coords_c]@self._q[coords_c, :]).T,
+                assume_a='upper triangular').T
+        except (scipy.linalg.LinAlgError, scipy.linalg.LinAlgWarning):
+            a_ = np.nan
         return a_
 
-    def _z_new_full(self, z):
-        self._lu = None
-        return self._inv_qe(self._q@z)
-
-    def _z_new_def(self, z):
-        lu = scipy.linalg.lu_factor(self._q[self.coords[1]].T)
-        self._lu = lu
-        if np.min(np.abs(np.diag(lu[0]))) < 1e-12:
-            logging.warning('Ill-defined coordinate patch.')
-            return np.nan
-        return self._inv_qe(self._q@z)
-
     def _expensive_fun(self, x, z):
-        n_out, dof = x.shape
+        q, _ = grass(x.T, self.coords)
+        self._q = q
 
-        #TODO: Remove QR when n_out == dof.
-        q, r = scipy.linalg.qr(
-            x.T, overwrite_a=False, mode='economic', pivoting=False)
-        # Detect negative elements in the diagonal of R.
-        idx = np.argwhere(np.diag(r) < 0)
-        r[idx, :] *= -1
-        q[:, idx] *= -1
-        self._q, self._r = q, r
-        if np.min(np.diag(self._r)) < 1e-12:
-            logging.warning('Real part does not have full rank.')
-
-        z_ = self._z_new(z)
+        z_ = q@z
+        z_ = self._inv_qe(z_)
         self._z_ = z_
-        if np.isnan(z_.any()):
+        if isinstance(z_, float) and np.isnan(z_):
+            logging.warning('q[coords] is singular.')
             self._psi = np.nan
             return
 
         # Check mass positivity.
-        d = self.freqs.real, self.freqs.imag
+        dof = len(self.freqs)
+        d = np.real(self.freqs), np.imag(self.freqs)
         H = d[0][:, np.newaxis] * z_.T
         H += H.T
         H[np.arange(dof), np.arange(dof)] += d[1]
@@ -540,7 +561,7 @@ class PartialModesMap:
             self._chk = scipy.linalg.cholesky(
                 H, lower=False, overwrite_a=True)
         except scipy.linalg.LinAlgError:
-            self._chk = [[np.nan]]
+            self._chk = np.nan
             logging.warning('Mass matrix is not positive-definite.')
             self._psi = np.nan
             return
@@ -561,12 +582,7 @@ class PartialModesMap:
         self.point = (x, z)
         return self._psi
 
-    def _jac_z_full(self, dz, dq):
-        _, z = self.point
-        q = self._q
-        return dq@z@q.T + q@dz@q.T + q@z@dq.T
-
-    def _jac_z_def(self, dz, dq):
+    def _jac_z_(self, dz, dq):
         _, z = self.point
         q = self._q
 
@@ -592,10 +608,12 @@ class PartialModesMap:
 
     def constraints(self, x, z):
         self.point = (x, z)
-        self._c_x = -np.sum(np.log(np.diag(self._r)))
-        self._c_coords = -np.sum(np.log(np.abs(np.diag(self._lu[0]))))
-        self._c_pos = -np.sum(np.log(np.diag(self._chk))) if not np.isnan(self._chk[0, 0]) else np.inf
-        return np.array([self._c_x, self._c_coords, self._c_pos])
+        c_res = -np.sum(np.log(np.diag(self._q[self.coords])))
+        if isinstance(self._chk, float) and np.isnan(self._chk):
+            c_pos = np.inf
+        else:
+            c_pos = -np.sum(np.log(np.diag(self._chk)))
+        return np.array([c_res, c_pos])
 
     def _jac_det_q(self, dq, inv_qc):
         a = dq[self.coords[1]].T
@@ -1000,7 +1018,7 @@ if __name__ == '__main__':
     x0 = 0.1*rng.normal(size=(n_out, dof))
     z0 = 1e-3*rng.normal(size=(n_out, dof))
     amps0 = mode_to_amps(x0, n_out, n_in)
-    coords = np.arange(n_out, dof)
+    coords = np.arange(n_out)
 
     ns, fs = 210, 100
     modes = Modes(freqs, amps0, coords, fs, ns)
