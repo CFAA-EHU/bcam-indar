@@ -344,6 +344,7 @@ class PartialModesMap:
         self.coords = coords.astype(int)
 
         self._point = None
+        self._vector = None
         self._psi = None
 
     @property
@@ -363,6 +364,23 @@ class PartialModesMap:
             (not np.allclose(x, self._point[0]) & np.allclose(z, self._point[1])):
             self._expensive_fun(x, z)
             self._point = value
+    
+    @property
+    def vector(self):
+        return self._vector
+    
+    @vector.setter
+    def vector(self, value):
+        dx, dz = value
+        assert dx.ndim == 2, 'Expected a 2D-array for dx.'
+        n_out, dof = dx.shape
+        assert dof == len(self.freqs), 'dx.shape[1] should equal dof.'
+        assert n_out == len(self.coords), 'dx.shape[0] should equal the number of observations.'
+        assert dx.shape == dz.shape, 'Incompatible shapes for dx and dz.'
+        if (self._vector is None) or \
+            (not np.allclose(dx, self._vector[0]) & np.allclose(dz, self._vector[1])):
+            self._compute_jac_expensive(dx, dz)
+            self._vector = value
 
     def _inv_qe(self, a):
         '''
@@ -442,17 +460,66 @@ class PartialModesMap:
 
         return b1 + self._z_@b2
 
+    def _compute_jac_expensive(self, dx, dz):
+        # TODO: if dx, dz is just rescaled, it is not necessary to recompute dq either.
+        if (dx == 0).all():
+            self._dq = np.zeros_like(self._grass[0])
+            self._ds = np.zeros_like(self._grass[1])
+        else:
+            self._dq, self._ds = derivatives.jac_grass(dx.T, self.coords, self._grass)
+
+        self._dz_ = self._jac_z_(dz, self._dq)
+
     def jac(self, x, z):
         self.point = (x, z)
         dof = len(self.freqs)
         def dpsi(dx, dz):
-            dq, _ = derivatives.jac_grass(dx.T, self.coords, self._grass)
+            self.vector = (dx, dz)
+            dz_ = self._dz_
+
             a = 1j * self._z_
             a[range(dof), range(dof)] += 1
             a = dx@a
-            dz_ = self._jac_z_(dz, dq)
             return a + 1j * x@dz_
         return dpsi
+
+    def hessp(self, x, z, px, pz):
+        self.point = (x, z)
+        n_out, dof = len(self.coords), len(self.freqs)
+        q = self._grass[0]
+        pdq, pds = derivatives.jac_grass(px.T, self.coords, self._grass)
+        pdz_ = self._jac_z_(pz, pdq)
+        dinv_qe = self._inv_qe(-np.pad(pdq, ((0, 0), (0, dof-n_out))))
+
+        t2_ = pdq@z + q@pz
+        t2_ = self._inv_qe(t2_)
+        def d2psi_p(dx, dz):
+            self.vector = (dx, dz)
+            dq, ds = self._dq, self._ds
+            pd2q, _ = derivatives.hessp_grass(
+                pdq, pds, dq, ds, self.coords, self._grass)
+            dz_ = self._jac_z_(dz, dq)
+
+            # (pd2q z + pdq dz + dq pz)[q e]^{-1}
+            t1 = pd2q@z + pdq@dz + dq@pz
+            t1 = self._inv_qe(t1)
+            # (pdq z + q pz)d([q e]^{-1})
+            t2 = t2_ @ self._inv_qe(-np.pad(dq, ((0, 0), (0, dof-n_out))))
+            # (dq z + q dz)d([q e]^{-1})(p)
+            t3 = dq@z + q@dz
+            t3 = self._inv_qe(t3) @ dinv_qe
+            # A d2A^{-1}(p), for A = [q e].
+            d2fac = self._inv_qe(-np.pad(dq, ((0, 0), (0, dof-n_out))))
+            d2inv = d2fac@(-dinv_qe)
+            d2inv += dinv_qe@d2fac
+            d2inv += self._inv_qe(np.pad(pd2q, ((0, 0), (0, dof-n_out))))
+            # q z d2([q e]^{-1})(p)
+            t4 = self._inv_qe(q@z)@d2inv
+
+            hessp_z_ = t1 + t2 + t3 + t4
+            return 1j*(px@dz_ + dx@pdz_ + x@hessp_z_)
+
+        return d2psi_p
 
     def constraints(self, x, z):
         self.point = (x, z)
@@ -464,39 +531,34 @@ class PartialModesMap:
             c_pos = -np.sum(np.log(np.diag(self._chk)))
         return np.array([c_res, c_pos])
 
-    # def _jac_det_q(self, dq, inv_qc):
-    #     a = dq[self.coords[1]].T
-    #     return -np.sum(inv_qc[i]@a[:, i] for i in range(a.shape[1]))
-
     def jac_constraints(self, x, z):
         self.point = (x, z)
-        n_out, dof = len(self.coords), len(self.freqs)
         q = self._grass[0]
         D = np.real(self.freqs), np.imag(self.freqs)
 
-        jac_const = np.zeros((2, 2*n_out*dof - n_out*(n_out+1)//2))
-        for i, de in enumerate(basis_iterator(n_out, dof)):
-            dx, dz = de
-            if (dz == 0).all():
-                dq, _ = derivatives.jac_grass(dx.T, self.coords, self._grass)
-                jac_const[0, i] = -np.sum(np.diag(dq[self.coords])/np.diag(q[self.coords]))
+        jac_const = np.zeros(2)
+        def d_constr(dx, dz):
+            self.vector = (dx, dz)
+            dq = self._dq
+            if (dx == 0).all():
+                jac_const[0] = 0
             else:
-                dq = np.zeros_like(q)
-                jac_const[0, i] = 0
+                jac_const[0] -= np.sum(np.diag(dq[self.coords])/np.diag(q[self.coords]))
 
             if isinstance(self._chk, float):
-                jac_const[1, i] = 0
+                jac_const[1] = 0
             else:
-                dz_ = self._jac_z_(dz, dq)
+                dz_ = self._dz_
                 dH = D[0][:, np.newaxis] * dz_.T
                 dH += dH.T
                 dH_ = (self._z_ * D[1][np.newaxis, :]) @ dz_.T
                 dH_ += dH_.T
                 dH -= dH_
                 dH = derivatives.jac_cho(self._chk, dH)
-                jac_const[1, i] = -np.sum(np.diag(dH)/np.diag(self._chk))
+                jac_const[1] = -np.sum(np.diag(dH)/np.diag(self._chk))
+            return jac_const
 
-        return jac_const
+        return d_constr
 
 
 class ModesProp:
@@ -659,14 +721,6 @@ class Modes:
             [np.real(r), np.imag(r)], axis=-1)
         return r
 
-    def _basis_iterator(self):
-        n_out, _, dof = self.amps.shape
-        e = np.zeros(2*n_out*dof - n_out*(n_out+1)//2)
-        e[0] = 1
-        for _ in range(len(e)):
-            yield reshape_modes_input(e, dof, n_out)
-            e = np.roll(e, 1)
-
     def _jac(self, x):
         n_out, n_in, dof = self.amps.shape
         x_, z_ = reshape_modes_input(x, dof, n_out)
@@ -684,6 +738,46 @@ class Modes:
                for dx, dz in basis_iterator(n_out, dof)]
         return np.array(jac)
 
+    def _hessp_amp(self, modes, p, d_modes, d2_modes):
+        n_in = self.amps.shape[1]
+
+        d2_amps = d2_modes[:, np.newaxis]*modes[np.newaxis, :n_in]
+        d2_amps += p[:, np.newaxis]*d_modes[np.newaxis, :n_in]
+        d2_amps += d_modes[:, np.newaxis]*p[np.newaxis, :n_in]
+        d2_amps += modes[:, np.newaxis]*d2_modes[np.newaxis, :n_in]
+
+        d2_amps = np.concatenate(
+            [np.real(d2_amps), np.imag(d2_amps)], axis=-1)
+        return d2_amps
+
+    def _hessp(self, x, p):
+        n_out, n_in, dof = self.amps.shape
+        x_, z_ = reshape_modes_input(x, dof, n_out)
+        px, pz = reshape_modes_input(p, dof, n_out)
+
+        modes = self._modes_map(x_, z_)
+        amps = mode_to_amps(modes, n_out, n_in)
+        diff = np.concatenate(
+            [np.real(amps - self.amps), np.imag(amps - self.amps)], axis=-1)
+        
+        jac_modes = self._modes_map.jac(x_, z_)
+        pd_amps = self._jac_amps(modes, jac_modes(px, pz))
+        hessp_modes = self._modes_map.hessp(x_, z_, px, pz)
+
+        def hess_f(dx, dz):
+            d_modes = jac_modes(dx, dz)
+            d_amps = self._jac_amps(modes, d_modes)
+            d2_amps = self._hessp_amp(
+                modes, px + 1j*pz, d_modes, hessp_modes(dx, dz))
+
+            d2_dist = 2*np.einsum(
+                'ijk,kl,ijl->', d2_amps, self._metric, diff)
+            d2_dist += 2*np.einsum(
+                'ijk,kl,ijl->', pd_amps, self._metric, d_amps)
+            return d2_dist
+
+        hessp = [hess_f(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+        return np.array(hessp)
 
 
 def modal_to_system(mode_shapes, Z):

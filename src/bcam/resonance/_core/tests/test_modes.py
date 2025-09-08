@@ -15,21 +15,23 @@ class TestGrass:
         rng = np.random.default_rng()
         n, m = 5, 3
         x = rng.normal(size=(n, m))
-        dx = rng.normal(size=x.shape)
         # Generate m integers in [0, n-1] without repetition.
         coords = rng.choice(n, size=m, replace=False)
         coords = np.sort(coords)
 
-        return x, dx, coords
+        return [x, coords]
 
     def test_grass(self, initial):
-        x, _, coords = initial
+        x, coords = initial
         q, s, inv_s = derivatives.grass(x, coords)
         assert np.allclose(x, q@s)
         assert np.allclose(np.eye(len(coords)), s@inv_s)
 
     def test_jac(self, initial):
-        x, dx, coords = initial
+        x, coords = initial
+        rng = np.random.default_rng()
+        dx = rng.normal(size=x.shape)
+
         q, s, s_inv = derivatives.grass(x, coords)
         dq, ds = derivatives.jac_grass(dx, coords, (q, s, s_inv))
         assert np.allclose(dx, dq@s + q@ds)
@@ -37,11 +39,29 @@ class TestGrass:
         assert np.allclose(np.triu(dq[coords], k=1), 0)
 
     def test_jac_minimal(self, initial):
-        x, dx, coords = initial
+        x, coords = initial
+        rng = np.random.default_rng()
+        dx = rng.normal(size=x.shape)
+
         q, s, s_inv = derivatives.grass(x, coords)
         dq = derivatives.jac_grass(dx, coords, (q, s, s_inv))[0]
         dq_r = derivatives.jac_grass_minimal(dx, coords, (q, s, s_inv))
         assert np.allclose(dq_r, dq[coords])
+
+    def test_hessp(self, initial):
+        x, coords = initial
+        rng = np.random.default_rng()
+        dx = rng.normal(size=x.shape)
+        p = rng.normal(size=x.shape)
+    
+        q, s, s_inv = derivatives.grass(x, coords)
+        dq, ds = derivatives.jac_grass(dx, coords, (q, s, s_inv))
+        pdq, pds = derivatives.jac_grass(p, coords, (q, s, s_inv))
+        pd2q, pd2s = derivatives.hessp_grass(pdq, pds, dq, ds, coords, (q, s, s_inv))
+
+        assert np.allclose(pdq@ds + dq@pds + pd2q@s + q@pd2s, 0)
+        assert np.allclose(dq.T@pdq + pdq.T@dq + q.T@pd2q + pd2q.T@q, 0)
+        assert np.allclose(np.triu(pd2q[coords], k=1), 0)
 
 def test_jac_cho():
     rng = np.random.default_rng()

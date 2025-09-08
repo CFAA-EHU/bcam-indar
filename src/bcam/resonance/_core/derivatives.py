@@ -98,6 +98,23 @@ def jac_grass_minimal(dx, coords, grass):
 
     return dq_r
 
+def hessp_grass(pdq, pds, dq, ds, coords, grass):
+    q, s, inv_s = grass
+    a = -pdq@ds - dq@pds
+    b = -dq.T@pdq - pdq.T@dq
+    qTpd2q = scipy.linalg.solve(
+        q[coords], a[coords], assume_a='lower triangular')
+    qTpd2q = (q.T@a - qTpd2q)@inv_s
+    qTpd2q = np.triu(qTpd2q, k=1)
+    qTpd2q = qTpd2q + (np.tril(b, k=-1) - qTpd2q.T)
+    qTpd2q[range(q.shape[1]), range(q.shape[1])] = np.diag(b)/2
+
+    pd2s = q.T@a - qTpd2q@s
+    pd2q = (a - q@pd2s)@inv_s
+
+    return pd2q, pd2s
+
+
 # Jacobian of Cholesky decomposition
 # ----------------------------------
 def jac_cho(u, dx):
