@@ -70,13 +70,13 @@ def metric_amps(freqs, fs, ns, a_type='normal'):
         L = 2*dof-1
         m = np.zeros((L, L))
         m[:dof, :dof] = np.real(m1 - m2)
-        m[dof:, :dof] = _trig_fft(np.imag(m1 + m2).T)[..., 1:].T
+        m[dof:, :dof] = trig_fft(np.imag(m1 + m2).T)[..., 1:].T
         m[:dof, dof:] = m[dof:, :dof].T
-        m[dof:, dof:] = _trig_fft(_trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
+        m[dof:, dof:] = trig_fft(trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
     m *= 0.5
     return m
 
-def _trig_fft(x):
+def trig_fft(x):
     '''
     Trigonometric expansion of a real signal.
     '''
@@ -94,7 +94,7 @@ def _trig_fft(x):
     x_hat = np.concatenate(x_hat, axis=-1)
     return x_hat
 
-def _trig_ifft(x):
+def trig_ifft(x):
     '''
     Inverse trigonometric expansion of a real signal.
     '''
@@ -197,7 +197,7 @@ class Amplitudes():
         elif self.a_type == 'mechanical':
             r = np.concatenate(
                 [np.zeros((*x.shape[:2], 1)), x[..., dof:]], axis=-1)
-            r = _trig_ifft(r).astype(np.complex128)
+            r = trig_ifft(r).astype(np.complex128)
             return x[..., :dof] + 1j*r
 
     def _matrix(self, penalty: float):
@@ -230,7 +230,7 @@ class Amplitudes():
                 axis=-1)
         elif self.a_type == 'mechanical':
             r = np.concatenate(
-                [np.imag(r), _trig_fft(np.real(r))[..., 1:]],
+                [np.imag(r), trig_fft(np.real(r))[..., 1:]],
                 axis=-1)
         # Project to space of 'symmetric' matrices.
         r = reshape_projection(r)
@@ -464,42 +464,39 @@ class PartialModesMap:
             c_pos = -np.sum(np.log(np.diag(self._chk)))
         return np.array([c_res, c_pos])
 
-    def _jac_det_q(self, dq, inv_qc):
-        a = dq[self.coords[1]].T
-        return -np.sum(inv_qc[i]@a[:, i] for i in range(a.shape[1]))
+    # def _jac_det_q(self, dq, inv_qc):
+    #     a = dq[self.coords[1]].T
+    #     return -np.sum(inv_qc[i]@a[:, i] for i in range(a.shape[1]))
 
     def jac_constraints(self, x, z):
-        import itertools
         self.point = (x, z)
+        n_out, dof = len(self.coords), len(self.freqs)
         q = self._grass[0]
+        D = np.real(self.freqs), np.imag(self.freqs)
 
-        jac_c_res = np.zeros_like(x)
-        e = np.zeros_like(x)
-        for i, j in itertools.product(range(x.shape[0]), range(x.shape[1])):
-            e[i, j] = 1
-            dq_r = derivatives.jac_grass_minimal(dx.T, self.coords, self._grass)
-            jac_c_res[i, j] = -np.sum(np.diag(dq_r)/np.diag(q[self.coords]))
-            e[i, j] = 0
+        jac_const = np.zeros((2, 2*n_out*dof - n_out*(n_out+1)//2))
+        for i, de in enumerate(basis_iterator(n_out, dof)):
+            dx, dz = de
+            if (dz == 0).all():
+                dq, _ = derivatives.jac_grass(dx.T, self.coords, self._grass)
+                jac_const[0, i] = -np.sum(np.diag(dq[self.coords])/np.diag(q[self.coords]))
+            else:
+                dq = np.zeros_like(q)
+                jac_const[0, i] = 0
 
-        # e = np.zeros(2*n_out*dof - n_out*(n_out+1)//2)
-        # e[0] = 1
-        # for _ in range(len(e)):
-        #     e_ = reshape_modes_input(e, dof, n_out)
-        #     e = np.roll(e, 1)
-        # jac_c_pos = np.zeros_like(x)
+            if isinstance(self._chk, float):
+                jac_const[1, i] = 0
+            else:
+                dz_ = self._jac_z_(dz, dq)
+                dH = D[0][:, np.newaxis] * dz_.T
+                dH += dH.T
+                dH_ = (self._z_ * D[1][np.newaxis, :]) @ dz_.T
+                dH_ += dH_.T
+                dH -= dH_
+                dH = derivatives.jac_cho(self._chk, dH)
+                jac_const[1, i] = -np.sum(np.diag(dH)/np.diag(self._chk))
 
-        # inv_qc = scipy.linalg.lu_solve(
-        #     self._lu, np.eye(self._lu[0].shape[0]), overwrite_b=True)
-        # q = self._grass[0]
-        # def dconstr(dx, dz):
-        #     df = np.zeros(3)
-        #     dq, dr = jac_qr(x.T, dx.T, (q, self._r))
-        #     df[0] = -np.sum(dr/self._r)
-        #     df[1] = -self._jac_det_q(dq, inv_qc)
-        #     # df[2] = ?
-        #     return df
-        return dconstr
-
+        return jac_const
 
 
 class ModesProp:

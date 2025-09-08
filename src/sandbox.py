@@ -7,6 +7,9 @@ import matplotlib.pyplot as plt
 
 from bcam.resonance import mechanical, derivatives
 
+x = np.zeros((3, 6))
+print((x == 0).all())
+
 # %%
 dof, n_out, n_in = 4, 3, 2
 rng = np.random.default_rng()
