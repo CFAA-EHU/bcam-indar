@@ -99,6 +99,53 @@ def test_jac_lu():
     dx = dx[derivatives.pivot_to_permutation(piv)]
     assert np.allclose(dx, dl@u + l@du)
 
+# Tests for modes
+# ---------------
+
+class TestModes:
+
+    @pytest.fixture(scope='class')
+    def initial(self):
+        dof, n_out = 4, 3
+        rng = np.random.default_rng()
+        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        coords = np.arange(n_out)
+        modes = mechanical.PartialModesMap(freqs, coords)
+        modes.atol = 1e-15
+        modes.rtol = 1e-12
+
+        return modes, n_out, dof
+
+    def test_jac_modes(self, initial):
+        modes, n_out, dof = initial
+
+        rng = np.random.default_rng()
+
+        modes_i = np.nan
+        while isinstance(modes_i, float):
+            xi = rng.normal(size=(n_out, dof))
+            zi = 5e-2*rng.normal(size=(n_out, dof))
+            zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
+            modes_i = modes(xi, zi)
+
+        dx = rng.normal(size=(n_out, dof))
+        dz = rng.normal(size=(n_out, dof))
+        dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
+
+        eval = rng.normal(size=(n_out, dof))
+
+        jac_ana = np.sum(eval * modes.jac(xi, zi)(dx, dz))
+        test = False
+        for exp in range(3, 8):
+            delta = 10**-exp
+            modes_f = modes(xi + delta*dx, zi + delta*dz)
+            jac_num = np.sum(eval * (modes_f - modes_i)/delta)
+            test = np.allclose(jac_num, jac_ana, rtol=1e-5, atol=0.)
+            if test:
+                break
+        assert test
+
+
 # Mechanical tests
 # ----------------
 

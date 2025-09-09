@@ -44,41 +44,80 @@ from bcam.resonance._core import mechanical
 
 # plt.show()
 
-# ==========================
-# Test loss function and df
-# for complex mode shapes
-# ==========================
-dof, n_out, n_in = 4, 3, 2
+dof, n_out = 4, 3
 rng = np.random.default_rng()
 freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-x0 = 0.1*rng.normal(size=(n_out, dof))
-z0 = 1e-3*rng.normal(size=(n_out, dof))
-z0[:n_out, :n_out] = z0[:n_out, :n_out] - z0[:n_out, :n_out].T
-amps0 = mechanical.mode_to_amps(x0, n_out, n_in)
 coords = np.arange(n_out)
+modes = mechanical.PartialModesMap(freqs, coords)
+modes.atol = 1e-20
+modes.rtol = 1e-14
 
-ns, fs = 210, 100
-modes = mechanical.Modes(freqs, amps0, coords, fs, ns)
+modes_i = np.nan
+while isinstance(modes_i, float):
+    xi = rng.normal(size=(n_out, dof))
+    zi = 5e-2*rng.normal(size=(n_out, dof))
+    zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
+    modes_i = modes(xi, zi)
 
-xi = 0.1*rng.normal(size=(n_out, dof))
+dx = rng.normal(size=(n_out, dof))
+dz = rng.normal(size=(n_out, dof))
+dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
+
+vx = rng.normal(size=(n_out, dof))
+vz = rng.normal(size=(n_out, dof))
+vz[:n_out, :n_out] = vz[:n_out, :n_out] - vz[:n_out, :n_out].T
+
+eval = rng.normal(size=(n_out, dof))
+
+hessp_num = []
+jac_modes_i = modes.jac(xi, zi)(vx, vz)
+for delta in [1e-3, 1e-4, 1e-5]:
+    jac_modes_f = modes.jac(xi + delta*dx, zi + delta*dz)(vx, vz)
+    hessp_num.append(np.sum(eval * (jac_modes_f - jac_modes_i)/delta))
+hessp_num = np.array(hessp_num)
+hessp_ana = np.sum(eval * modes.hessp(xi, zi, vx, vz)(dx, dz))
+
+# print('error:', np.abs(hessp_num - hessp_ana)/np.abs(hessp_ana))
+
+print('hessp num:', hessp_num)
+print('hessp ana:', hessp_ana)
+
+# # ==========================
+# # Test loss function and df
+# # for complex mode shapes
+# # ==========================
+# dof, n_out, n_in = 4, 3, 2
+# rng = np.random.default_rng(123456)
+# freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+# x0 = 0.1*rng.normal(size=(n_out, dof))
+# z0 = 1e-3*rng.normal(size=(n_out, dof))
+# z0[:n_out, :n_out] = z0[:n_out, :n_out] - z0[:n_out, :n_out].T
+# amps0 = mechanical.mode_to_amps(x0, n_out, n_in)
+# coords = np.arange(n_out)
+
+# ns, fs = 210, 100
+# modes = mechanical.Modes(freqs, amps0, coords, fs, ns)
+
+# xi = 0.1*rng.normal(size=(n_out, dof))
+# # zi = np.zeros_like(xi)
 # zi = 1e-3*rng.normal(size=(n_out, dof))
 # zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
-pi = mechanical.reshape_modes_output(xi, zi)
-dx = 0.1*rng.normal(size=(n_out, dof))
-# dz = 1e-3*rng.normal(size=(n_out, dof))
-# dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
-dz = np.zeros_like(dx)
-dp = mechanical.reshape_modes_output(dx, dz)
-ll = np.linspace(-1e-3, 1e-3, 1000)
-f_line = [modes._fun(pi+l*dp) for l in ll]
-f_line = np.array(f_line)
-fpi = modes._fun(pi)
-df = modes._jac(pi) @ dp
-print('1) Ddf: ', (modes._jac(pi+1e-3*dp) - modes._jac(pi))@dp/1e-3)
-print('2) Ddf: ', (modes._jac(pi+1e-4*dp) - modes._jac(pi))@dp/1e-4)
-print('3) Ddf: ', (modes._jac(pi+1e-5*dp) - modes._jac(pi))@dp/1e-5)
-d2f = modes._hessp(pi, dp) @ dp
-print('d2f:', d2f)
+# pi = mechanical.reshape_modes_output(xi, zi)
+# dx = 0.1*rng.normal(size=(n_out, dof))
+# # dz = 1e-3*rng.normal(size=(n_out, dof))
+# # dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
+# dz = np.zeros_like(dx)
+# dp = mechanical.reshape_modes_output(dx, dz)
+# ll = np.linspace(-1e-3, 1e-3, 1000)
+# f_line = [modes._fun(pi+l*dp) for l in ll]
+# f_line = np.array(f_line)
+# fpi = modes._fun(pi)
+# df = modes._jac(pi) @ dp
+# print('1) Ddf: ', (modes._jac(pi+1e-3*dp)@dp - df)/1e-3)
+# print('2) Ddf: ', (modes._jac(pi+1e-4*dp)@dp - df)/1e-4)
+# print('3) Ddf: ', (modes._jac(pi+1e-5*dp)@dp - df)/1e-5)
+# d2f = modes._hessp(pi, dp) @ dp
+# print('d2f:', d2f)
 
 # fig, ax = plt.subplots(ncols=2, sharex=True, figsize=(10, 5))
 # fig.suptitle('Test derivatives of objective for real mode shapes fitting')

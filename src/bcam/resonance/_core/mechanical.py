@@ -335,6 +335,9 @@ class PartialModesMap:
         Subset of canonical basis to complement the kernel of X.
     '''
 
+    rtol = 1e-5
+    atol = 1e-8
+
     def __init__(self, freqs, coords):
         assert freqs.ndim == 1, 'Expected a 1D-array for frequencies.'
         self.freqs = freqs
@@ -346,6 +349,7 @@ class PartialModesMap:
         self._point = None
         self._vector = None
         self._psi = None
+        self._dq = None
 
     @property
     def point(self):
@@ -361,14 +365,16 @@ class PartialModesMap:
         assert x.shape == z.shape, 'Incompatible shapes for x and z.'
         assert np.allclose(z[:n_out, :n_out], -z[:n_out, :n_out].T), 'The matrix z must be skew-symmetric in the observed block.'
         if (self._point is None) or \
-            (not np.allclose(x, self._point[0]) & np.allclose(z, self._point[1])):
+            not (np.allclose(x, self._point[0], rtol=self.rtol, atol=self.atol) & \
+             np.allclose(z, self._point[1], rtol=self.rtol, atol=self.atol)):
             self._expensive_fun(x, z)
             self._point = value
-    
+            self._dq = None
+
     @property
     def vector(self):
         return self._vector
-    
+
     @vector.setter
     def vector(self, value):
         dx, dz = value
@@ -378,7 +384,9 @@ class PartialModesMap:
         assert n_out == len(self.coords), 'dx.shape[0] should equal the number of observations.'
         assert dx.shape == dz.shape, 'Incompatible shapes for dx and dz.'
         if (self._vector is None) or \
-            (not np.allclose(dx, self._vector[0]) & np.allclose(dz, self._vector[1])):
+            (self._dq is None) or \
+            not (np.allclose(dx, self._vector[0], rtol=self.rtol, atol=self.atol) & \
+            np.allclose(dz, self._vector[1], rtol=self.rtol, atol=self.atol)):
             self._compute_jac_expensive(dx, dz)
             self._vector = value
 
@@ -452,8 +460,8 @@ class PartialModesMap:
         n_out, dof = len(self.coords), len(self.freqs)
         q = self._grass[0]
 
-        # d(q@z_@[q e]^{-1})
-        # b1 = dq@z_@[q e]^{-1} + q@dz_@[q e]^{-1}.
+        # d(q@z@[q e]^{-1})
+        # b1 = dq@z@[q e]^{-1} + q@dz@[q e]^{-1}.
         b1 = self._inv_qe(dq@z + q@dz)
         # b2 = [q e]d([q e]^{-1}) = -[dq 0][q e]^{-1}
         b2 = self._inv_qe(-np.pad(dq, ((0, 0), (0, dof-n_out))))
@@ -475,12 +483,11 @@ class PartialModesMap:
         dof = len(self.freqs)
         def dpsi(dx, dz):
             self.vector = (dx, dz)
-            dz_ = self._dz_
 
             a = 1j * self._z_
             a[range(dof), range(dof)] += 1
             a = dx@a
-            return a + 1j * x@dz_
+            return a + 1j * x@self._dz_
         return dpsi
 
     def hessp(self, x, z, px, pz):
@@ -759,7 +766,7 @@ class Modes:
         amps = mode_to_amps(modes, n_out, n_in)
         diff = np.concatenate(
             [np.real(amps - self.amps), np.imag(amps - self.amps)], axis=-1)
-        
+
         jac_modes = self._modes_map.jac(x_, z_)
         pd_amps = self._jac_amps(modes, jac_modes(px, pz))
         hessp_modes = self._modes_map.hessp(x_, z_, px, pz)
