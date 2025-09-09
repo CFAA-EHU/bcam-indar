@@ -71,15 +71,15 @@ eval = rng.normal(size=(n_out, dof))
 
 hessp_num = []
 jac_modes_i = modes.jac(xi, zi)(vx, vz)
-for delta in [1e-3, 1e-4, 1e-5]:
+for delta in [1e-3, 1e-4, 1e-5, 1e-6]:
     jac_modes_f = modes.jac(xi + delta*dx, zi + delta*dz)(vx, vz)
     hessp_num.append(np.sum(eval * (jac_modes_f - jac_modes_i)/delta))
 hessp_num = np.array(hessp_num)
 hessp_ana = np.sum(eval * modes.hessp(xi, zi, vx, vz)(dx, dz))
 
-# print('error:', np.abs(hessp_num - hessp_ana)/np.abs(hessp_ana))
+print('error:', np.abs(hessp_num - hessp_ana)/np.abs(hessp_ana))
 
-print('hessp num:', hessp_num)
+# print('hessp num:', hessp_num)
 print('hessp ana:', hessp_ana)
 
 # # ==========================
