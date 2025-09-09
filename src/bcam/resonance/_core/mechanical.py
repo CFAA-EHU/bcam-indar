@@ -752,12 +752,12 @@ class Modes:
                for dx, dz in basis_iterator(n_out, dof)]
         return np.array(jac)
 
-    def _hessp_amp(self, modes, p, d_modes, d2_modes):
+    def _hessp_amp(self, modes, pd_modes, d_modes, d2_modes):
         n_in = self.amps.shape[1]
 
         d2_amps = d2_modes[:, np.newaxis]*modes[np.newaxis, :n_in]
-        d2_amps += p[:, np.newaxis]*d_modes[np.newaxis, :n_in]
-        d2_amps += d_modes[:, np.newaxis]*p[np.newaxis, :n_in]
+        d2_amps += pd_modes[:, np.newaxis]*d_modes[np.newaxis, :n_in]
+        d2_amps += d_modes[:, np.newaxis]*pd_modes[np.newaxis, :n_in]
         d2_amps += modes[:, np.newaxis]*d2_modes[np.newaxis, :n_in]
 
         d2_amps = np.concatenate(
@@ -775,14 +775,13 @@ class Modes:
             [np.real(amps - self.amps), np.imag(amps - self.amps)], axis=-1)
 
         jac_modes = self._modes_map.jac(x_, z_)
-        pd_amps = self._jac_amps(modes, jac_modes(px, pz))
         hessp_modes = self._modes_map.hessp(x_, z_, px, pz)
+        pd_amps = self._jac_amps(modes, jac_modes(px, pz))
 
         def hess_f(dx, dz):
-            d_modes = jac_modes(dx, dz)
-            d_amps = self._jac_amps(modes, d_modes)
             d2_amps = self._hessp_amp(
-                modes, px + 1j*pz, d_modes, hessp_modes(dx, dz))
+                modes, jac_modes(px, pz), jac_modes(dx, dz), hessp_modes(dx, dz))
+            d_amps = self._jac_amps(modes, jac_modes(dx, dz))
 
             d2_dist = 2*np.einsum(
                 'ijk,kl,ijl->', d2_amps, self._metric, diff)

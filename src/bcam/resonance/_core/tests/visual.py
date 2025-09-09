@@ -8,6 +8,51 @@ import matplotlib.pyplot as plt
 from bcam.resonance._core import mechanical
 
 
+# # ==========================
+# # Test loss function and df
+# # for complex mode shapes
+# # ==========================
+# dof, n_out, n_in = 4, 3, 2
+# rng = np.random.default_rng()
+# freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+# x0 = rng.normal(size=(n_out, dof))
+# amps0 = mechanical.mode_to_amps(x0, n_out, n_in)
+# coords = np.arange(n_out)
+
+# ns, fs = 210, 100
+# mechanical.PartialModesMap.atol = 1e-20
+# mechanical.PartialModesMap.rtol = 1e-15
+# modes = mechanical.Modes(freqs, amps0, coords, fs, ns)
+
+# xi = rng.normal(size=(n_out, dof))
+# zi = 5e-2*rng.normal(size=(n_out, dof))
+# zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
+# pi = mechanical.reshape_modes_output(xi, zi)
+
+# dx = rng.normal(size=(n_out, dof))
+# dz = rng.normal(size=(n_out, dof))
+# dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
+# dp = mechanical.reshape_modes_output(dx, dz)
+
+# ll = np.linspace(-1e-2, 1e-2, 500)
+# f_line = [modes._fun(pi+l*dp) for l in ll]
+# f_line = np.array(f_line)
+# fpi = modes._fun(pi)
+# df = modes._jac(pi) @ dp
+# d2f = modes._hessp(pi, dp) @ dp
+
+# fig, ax = plt.subplots(ncols=2, sharex=True, figsize=(10, 5))
+# fig.suptitle('Test derivatives of objective for real mode shapes fitting')
+
+# ax[0].set_title('1st order')
+# ax[0].plot(ll, f_line - (fpi + df*ll))
+# ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
+
+# ax[1].set_title('2nd order')
+# ax[1].plot(ll, f_line - (fpi + df*ll + 0.5*d2f*(ll**2)))
+# ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
+# plt.show()
+
 # # ================================
 # # Test constrains and its jacobian
 # # ================================
@@ -42,56 +87,6 @@ from bcam.resonance._core import mechanical
 # ax.plot(ll, constr_line - (const_i + jac_const*ll))
 # ax.axhline(0, color='k', linestyle='--', linewidth=1)
 
-# plt.show()
-
-
-# # ==========================
-# # Test loss function and df
-# # for complex mode shapes
-# # ==========================
-# dof, n_out, n_in = 4, 3, 2
-# rng = np.random.default_rng(123456)
-# freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-# x0 = 0.1*rng.normal(size=(n_out, dof))
-# z0 = 1e-3*rng.normal(size=(n_out, dof))
-# z0[:n_out, :n_out] = z0[:n_out, :n_out] - z0[:n_out, :n_out].T
-# amps0 = mechanical.mode_to_amps(x0, n_out, n_in)
-# coords = np.arange(n_out)
-
-# ns, fs = 210, 100
-# modes = mechanical.Modes(freqs, amps0, coords, fs, ns)
-
-# xi = 0.1*rng.normal(size=(n_out, dof))
-# # zi = np.zeros_like(xi)
-# zi = 1e-3*rng.normal(size=(n_out, dof))
-# zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
-# pi = mechanical.reshape_modes_output(xi, zi)
-# dx = 0.1*rng.normal(size=(n_out, dof))
-# # dz = 1e-3*rng.normal(size=(n_out, dof))
-# # dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
-# dz = np.zeros_like(dx)
-# dp = mechanical.reshape_modes_output(dx, dz)
-# ll = np.linspace(-1e-3, 1e-3, 1000)
-# f_line = [modes._fun(pi+l*dp) for l in ll]
-# f_line = np.array(f_line)
-# fpi = modes._fun(pi)
-# df = modes._jac(pi) @ dp
-# print('1) Ddf: ', (modes._jac(pi+1e-3*dp)@dp - df)/1e-3)
-# print('2) Ddf: ', (modes._jac(pi+1e-4*dp)@dp - df)/1e-4)
-# print('3) Ddf: ', (modes._jac(pi+1e-5*dp)@dp - df)/1e-5)
-# d2f = modes._hessp(pi, dp) @ dp
-# print('d2f:', d2f)
-
-# fig, ax = plt.subplots(ncols=2, sharex=True, figsize=(10, 5))
-# fig.suptitle('Test derivatives of objective for real mode shapes fitting')
-
-# ax[0].set_title('1st order')
-# ax[0].plot(ll, f_line - (fpi + df*ll))
-# ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
-
-# ax[1].set_title('2nd order')
-# ax[1].plot(ll, f_line - (fpi + df*ll + 0.5*d2f*(ll**2)))
-# ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
 # plt.show()
 
 
