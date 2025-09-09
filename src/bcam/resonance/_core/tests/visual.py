@@ -44,43 +44,6 @@ from bcam.resonance._core import mechanical
 
 # plt.show()
 
-dof, n_out = 4, 3
-rng = np.random.default_rng()
-freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-coords = np.arange(n_out)
-modes = mechanical.PartialModesMap(freqs, coords)
-modes.atol = 1e-20
-modes.rtol = 1e-14
-
-modes_i = np.nan
-while isinstance(modes_i, float):
-    xi = rng.normal(size=(n_out, dof))
-    zi = 5e-2*rng.normal(size=(n_out, dof))
-    zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
-    modes_i = modes(xi, zi)
-
-dx = rng.normal(size=(n_out, dof))
-dz = rng.normal(size=(n_out, dof))
-dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
-
-vx = rng.normal(size=(n_out, dof))
-vz = rng.normal(size=(n_out, dof))
-vz[:n_out, :n_out] = vz[:n_out, :n_out] - vz[:n_out, :n_out].T
-
-eval = rng.normal(size=(n_out, dof))
-
-hessp_num = []
-jac_modes_i = modes.jac(xi, zi)(vx, vz)
-for delta in [1e-3, 1e-4, 1e-5, 1e-6]:
-    jac_modes_f = modes.jac(xi + delta*dx, zi + delta*dz)(vx, vz)
-    hessp_num.append(np.sum(eval * (jac_modes_f - jac_modes_i)/delta))
-hessp_num = np.array(hessp_num)
-hessp_ana = np.sum(eval * modes.hessp(xi, zi, vx, vz)(dx, dz))
-
-print('error:', np.abs(hessp_num - hessp_ana)/np.abs(hessp_ana))
-
-# print('hessp num:', hessp_num)
-print('hessp ana:', hessp_ana)
 
 # # ==========================
 # # Test loss function and df
