@@ -398,8 +398,8 @@ class PartialModesMap:
         n_out = len(self.coords)
         coords_c = np.setdiff1d(
             np.arange(dof), self.coords, assume_unique=True)
-
         q = self._grass[0]
+
         a_ = np.zeros((dof, dof), dtype=a.dtype)
         a_[:, coords_c] = a[:, n_out:]
         try:
@@ -490,42 +490,49 @@ class PartialModesMap:
             return a + 1j * x@self._dz_
         return dpsi
 
+    def _hessp_z_(self, pz, pdq, pds):
+        n_out, dof = len(self.coords), len(self.freqs)
+        _, z = self.point
+        _, dz = self.vector
+        q = self._grass[0]
+        dq = self._dq
+        pd2q, _ = derivatives.hessp_grass(
+                pdq, pds, self._dq, self._ds, self.coords, self._grass)
+        
+        t1 = self._inv_qe(pd2q@z + pdq@dz + dq@pz)
+
+        # a = [q e]d([q e]^{-1}) = -[dq 0][q e]^{-1}
+        a = self._inv_qe(-np.pad(dq, ((0, 0), (0, dof-n_out))))
+        t2 = self._inv_qe(pdq@z + q@pz)@a
+
+        # pa = [q e]d([q e]^{-1})(p) = -[dq(p) 0][q e]^{-1}
+        pa = self._inv_qe(-np.pad(pdq, ((0, 0), (0, dof-n_out))))
+        t3 = self._inv_qe(dq@z + q@dz)@pa
+
+        # b1 = a@pa
+        b1 = a@pa 
+        # b2 = d([q e] d[q e]^{-1}(p)) = -d([pdq 0][q e]^{-1})
+        # b2 = -[pd2q 0][q e]^{-1} - [pdq 0]d([q e]^{-1})
+        b2 = -self._inv_qe(np.pad(pd2q, ((0, 0), (0, dof-n_out))))
+        b2_ = -self._inv_qe(np.pad(pdq, ((0, 0), (0, dof-n_out))))@a
+        b2 = b2 + b2_
+        # b1 + b2 = [q e]d(d[q e]^{-1}(p))
+        t4 = self._inv_qe(q@z)@(b1 + b2)
+
+        return t1 + t2 + t3 + t4
+
     def hessp(self, x, z, px, pz):
         self.point = (x, z)
-        n_out, dof = len(self.coords), len(self.freqs)
-        q = self._grass[0]
-        pdq, pds = derivatives.jac_grass(px.T, self.coords, self._grass)
-        pdz_ = self._jac_z_(pz, pdq)
-        dinv_qe = self._inv_qe(-np.pad(pdq, ((0, 0), (0, dof-n_out))))
+        self._compute_jac_expensive(px, pz)
+        pdq, pds, pdz_ = self._dq, self._ds, self._dz_
 
-        t2_ = pdq@z + q@pz
-        t2_ = self._inv_qe(t2_)
         def d2psi_p(dx, dz):
             self.vector = (dx, dz)
-            dq, ds = self._dq, self._ds
-            pd2q, _ = derivatives.hessp_grass(
-                pdq, pds, dq, ds, self.coords, self._grass)
-            dz_ = self._jac_z_(dz, dq)
+            dz_ = self._dz_
+            cross = px@dz_ + dx@pdz_
 
-            # (pd2q z + pdq dz + dq pz)[q e]^{-1}
-            t1 = pd2q@z + pdq@dz + dq@pz
-            t1 = self._inv_qe(t1)
-            # (pdq z + q pz)d([q e]^{-1})
-            t2 = t2_ @ self._inv_qe(-np.pad(dq, ((0, 0), (0, dof-n_out))))
-            # (dq z + q dz)d([q e]^{-1})(p)
-            t3 = dq@z + q@dz
-            t3 = self._inv_qe(t3) @ dinv_qe
-            # A d2A^{-1}(p), for A = [q e].
-            d2fac = self._inv_qe(-np.pad(dq, ((0, 0), (0, dof-n_out))))
-            d2inv = d2fac@(-dinv_qe)
-            d2inv += dinv_qe@d2fac
-            d2inv += self._inv_qe(np.pad(pd2q, ((0, 0), (0, dof-n_out))))
-            # q z d2([q e]^{-1})(p)
-            t4 = self._inv_qe(q@z)@d2inv
-
-            hessp_z_ = t1 + t2 + t3 + t4
-            return 1j*(px@dz_ + dx@pdz_ + x@hessp_z_)
-
+            pd2z_ = self._hessp_z_(pz, pdq, pds)
+            return 1j*(cross + x@pd2z_)
         return d2psi_p
 
     def constraints(self, x, z):
