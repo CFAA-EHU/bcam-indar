@@ -137,6 +137,11 @@ def jac_cho(u, dx):
 
     return du
 
+def hess_cho(u, dux, duy):
+    a = -(dux.T@duy + duy.T@dux)
+    d2uxy = jac_cho(u, a)
+    return d2uxy
+
 # Jacobian of the QR decomposition
 # --------------------------------
 def jac_qr(x, dx, qr):

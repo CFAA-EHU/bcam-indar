@@ -498,7 +498,7 @@ class PartialModesMap:
         dq = self._dq
         pd2q, _ = derivatives.hessp_grass(
                 pdq, pds, self._dq, self._ds, self.coords, self._grass)
-        
+
         t1 = self._inv_qe(pd2q@z + pdq@dz + dq@pz)
 
         # a = [q e]d([q e]^{-1}) = -[dq 0][q e]^{-1}
@@ -545,34 +545,78 @@ class PartialModesMap:
             c_pos = -np.sum(np.log(np.diag(self._chk)))
         return np.array([c_res, c_pos])
 
+    def _dmass(self, dz_):
+        D = np.real(self.freqs), np.imag(self.freqs)
+
+        dm = D[0][:, np.newaxis] * dz_.T
+        dm += dm.T
+        dm_ = (self._z_ * D[1][np.newaxis, :]) @ dz_.T
+        dm_ += dm_.T
+        dm -= dm_
+        return dm
+
     def jac_constraints(self, x, z):
         self.point = (x, z)
         q = self._grass[0]
-        D = np.real(self.freqs), np.imag(self.freqs)
 
-        jac_const = np.zeros(2)
         def d_constr(dx, dz):
             self.vector = (dx, dz)
             dq = self._dq
-            if (dx == 0).all():
-                jac_const[0] = 0
-            else:
-                jac_const[0] -= np.sum(np.diag(dq[self.coords])/np.diag(q[self.coords]))
+            jac = np.zeros(2)
+            
+            jac[0] = -np.sum(np.diag(dq[self.coords])/np.diag(q[self.coords]))
 
             if isinstance(self._chk, float):
-                jac_const[1] = 0
+                jac[1] = 0
             else:
-                dz_ = self._dz_
-                dH = D[0][:, np.newaxis] * dz_.T
-                dH += dH.T
-                dH_ = (self._z_ * D[1][np.newaxis, :]) @ dz_.T
-                dH_ += dH_.T
-                dH -= dH_
-                dH = derivatives.jac_cho(self._chk, dH)
-                jac_const[1] = -np.sum(np.diag(dH)/np.diag(self._chk))
-            return jac_const
+                dchk = self._dmass(self._dz_)
+                dchk = derivatives.jac_cho(self._chk, dchk)
+                jac[1] = -np.sum(np.diag(dchk)/np.diag(self._chk))
+            return jac
 
         return d_constr
+
+    def _hessp_m(self, pz, pdz_, pdq, pds):
+        d2z_ = self._hessp_z_(pz, pdq, pds)
+        d2m = self._dmass(d2z_)
+        d2m -= 2*(pdz_ * np.imag(self.freqs)[np.newaxis, :]) @ self._dz_.T
+        return d2m
+
+    def hessp_constraints(self, x, z, px, pz):
+        self.point = (x, z)
+        self._compute_jac_expensive(px, pz)
+        pdq, pds = self._dq, self._ds
+        pdz_ = self._dz_
+        pdchk = self._dmass(pdz_)
+        pdchk = derivatives.jac_cho(self._chk, pdchk)
+
+        def local(a, da, pda, pd2a):
+                idx = (self.coords, self.coords)
+                r = pd2a[idx] - pda[idx]*da[idx]/a[idx]
+                return r/a[idx]
+
+        def hessp(dx, dz):
+            self.vector = (dx, dz)
+            q = self._grass[0]
+            pd2q, _ = derivatives.hessp_grass(
+                pdq, pds, self._dq, self._ds, self.coords, self._grass)
+            hessp = np.zeros(2)
+            
+            hessp[0] = -np.sum(local(q, self._dq, pdq, pd2q))
+
+            if isinstance(self._chk, float):
+                hessp[1] = 0
+            else:
+                dchk = self._dmass(self._dz_)
+                dchk = derivatives.jac_cho(self._chk, dchk)
+                d2m = self._hessp_m(pz, pdz_, pdq, pds)
+
+                hessp_chk = derivatives.hess_cho(self._chk, pdchk, dchk)
+                hessp_chk += derivatives.jac_cho(self._chk, d2m)
+                hessp[1] = -np.sum(local(self._chk, pdchk, dchk, hessp_chk))
+            return hessp
+        
+        return hessp
 
 
 class ModesProp:

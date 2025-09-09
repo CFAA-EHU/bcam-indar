@@ -51,43 +51,54 @@ from bcam.resonance._core import mechanical
 # ax[1].set_title('2nd order')
 # ax[1].plot(ll, f_line - (fpi + df*ll + 0.5*d2f*(ll**2)))
 # ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
-# plt.show()
-
-# # ================================
-# # Test constrains and its jacobian
-# # ================================
-# dof, n_out = 4, 3
-# rng = np.random.default_rng()
-# freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-# coords = np.arange(n_out)
-
-# modes = mechanical.PartialModesMap(freqs, coords)
-
-# xi = 0.1*rng.normal(size=(n_out, dof))
-# zi = 1e-3*rng.normal(size=(n_out, dof))
-# zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
-# dx = 0.1*rng.normal(size=(n_out, dof))
-# dz = 1e-3*rng.normal(size=(n_out, dof))
-# dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
-
-# constr = modes.constraints(xi, zi)
-# vec = rng.normal(size=2)
-# ll = 1e-3 * np.arange(-40, 41)
-# constr_line = [
-#     modes.constraints(xi + l*dx, zi + l*dz) @ vec for l in ll]
-# constr_line = np.array(constr_line)
-# const_i = vec @ modes.constraints(xi, zi)
-# jac_const = modes.jac_constraints(xi, zi)
-# jac_const = vec @ jac_const(dx, dz)
-
-# fig, ax = plt.subplots(ncols=1, sharex=True, figsize=(5, 5))
-# fig.suptitle('Test derivatives of constraints for complex mode shapes fitting')
-
-# ax.set_title('1st order')
-# ax.plot(ll, constr_line - (const_i + jac_const*ll))
-# ax.axhline(0, color='k', linestyle='--', linewidth=1)
 
 # plt.show()
+
+
+# ================================
+# Test constrains and its jacobian
+# for complex mode shapes
+# ================================
+dof, n_out = 4, 3
+rng = np.random.default_rng()
+freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+coords = np.arange(n_out)
+
+mechanical.PartialModesMap.atol = 1e-20
+mechanical.PartialModesMap.rtol = 1e-15
+modes = mechanical.PartialModesMap(freqs, coords)
+
+xi = rng.normal(size=(n_out, dof))
+zi = 1e-2*rng.normal(size=(n_out, dof))
+zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
+dx = rng.normal(size=(n_out, dof))
+dz = rng.normal(size=(n_out, dof))
+dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
+
+constr = modes.constraints(xi, zi)
+vec = rng.normal(size=2)
+ll = np.linspace(-1e-2, 1e-2, 500)
+constr_line = [
+    modes.constraints(xi + l*dx, zi + l*dz) @ vec for l in ll]
+constr_line = np.array(constr_line)
+const_i = vec @ modes.constraints(xi, zi)
+jac_const = modes.jac_constraints(xi, zi)
+jac_const = vec @ jac_const(dx, dz)
+hessp_const = modes.hessp_constraints(xi, zi, dx, dz)
+hessp_const = vec @ hessp_const(dx, dz)
+
+fig, ax = plt.subplots(ncols=2, sharex=True, figsize=(10, 5))
+fig.suptitle('Test derivatives of constraints for complex mode shapes fitting')
+
+ax[0].set_title('1st order')
+ax[0].plot(ll, constr_line - (const_i + jac_const*ll))
+ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
+
+ax[1].set_title('2nd order')
+ax[1].plot(ll, constr_line - (const_i + jac_const*ll + 0.5*hessp_const*(ll**2)))
+ax[1].axhline(0, color='k', linestyle='--', linewidth=1)
+
+plt.show()
 
 
 # # ================================
