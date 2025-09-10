@@ -402,26 +402,24 @@ class PartialModesMap:
 
         a_ = np.zeros((dof, dof), dtype=a.dtype)
         a_[:, coords_c] = a[:, n_out:]
-        try:
-            a_[:, self.coords] = scipy.linalg.solve(
-                q[self.coords].T,
-                (a[:, :n_out] - a_[:, coords_c]@q[coords_c, :]).T,
-                assume_a='upper triangular').T
-        except (scipy.linalg.LinAlgError, scipy.linalg.LinAlgWarning):
-            a_ = np.nan
+        a_[:, self.coords] = scipy.linalg.solve(
+            q[self.coords].T,
+            (a[:, :n_out] - a_[:, coords_c]@q[coords_c, :]).T,
+            assume_a='upper triangular').T
         return a_
 
     def _expensive_fun(self, x, z):
-        q, s, s_inv = derivatives.grass(x.T, self.coords)
+        try:
+            q, s, s_inv = derivatives.grass(x.T, self.coords)
+        except (scipy.linalg.LinAlgError, scipy.linalg.LinAlgWarning):
+            logging.warning('q[coords] is singular.')
+            self._psi = np.nan
+            return
         self._grass = (q, s, s_inv)
 
         z_ = q@z
         z_ = self._inv_qe(z_)
         self._z_ = z_
-        if isinstance(z_, float) and np.isnan(z_):
-            logging.warning('q[coords] is singular.')
-            self._psi = np.nan
-            return
 
         # Check mass positivity.
         dof = len(self.freqs)
@@ -763,6 +761,8 @@ class Modes:
         x_, z_ = reshape_modes_input(x, dof, n_out)
 
         modes = self._modes_map(x_, z_)
+        if isinstance(modes, float):
+            return np.nan
         amps = mode_to_amps(modes, n_out, n_in)
         diff = amps - self.amps
         diff = np.concatenate(

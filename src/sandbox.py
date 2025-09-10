@@ -7,71 +7,87 @@ import matplotlib.pyplot as plt
 
 from bcam.resonance import mechanical, derivatives
 
-x = np.zeros((3, 6))
-print((x == 0).all())
-
 # %%
+# Rudimentary plot of objective function in 2D slice of input space.
 dof, n_out, n_in = 4, 3, 2
 rng = np.random.default_rng()
 freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-x0 = 0.1*rng.normal(size=(n_out, dof))
-z0 = 1e-3*rng.normal(size=(n_out, dof))
-amps0 = mechanical.mode_to_amps(x0, n_out, n_in)
+x0 = rng.normal(size=(n_out, dof))
+z0 = 2e-2*rng.normal(size=(n_out, dof))
+z0[:n_out, :n_out] = z0[:n_out, :n_out] - z0[:n_out, :n_out].T
+p0 = mechanical.reshape_modes_output(x0, z0)
 coords = np.arange(n_out)
+modes0 = mechanical.PartialModesMap(freqs, coords)
+modes0 = modes0(x0, z0)
+amps0 = mechanical.mode_to_amps(modes0, n_out, n_in)
 
 ns, fs = 210, 100
 modes = mechanical.Modes(freqs, amps0, coords, fs, ns)
 
-xi = 0.1*rng.normal(size=(n_out, dof))
-zi = 1e-3*rng.normal(size=(n_out, dof))
+xi = rng.normal(size=(n_out, dof))
+zi = 2e-2*rng.normal(size=(n_out, dof))
+zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
 pi = mechanical.reshape_modes_output(xi, zi)
-dx = 0.1*rng.normal(size=(n_out, dof))
-dz = 1e-3*rng.normal(size=(n_out, dof))
-dp = mechanical.reshape_modes_output(dx, dz)
-ll = 1e-3 * np.arange(-40, 41)
-f_line = [
-    modes._fun(pi+l*dp) for l in ll]
-f_line = np.array(f_line)
-fpi = modes._fun(pi)
+
+xf = rng.normal(size=(n_out, dof))
+zf = 2e-2*rng.normal(size=(n_out, dof))
+zf[:n_out, :n_out] = zf[:n_out, :n_out] - zf[:n_out, :n_out].T
+pf = mechanical.reshape_modes_output(xf, zf)
+
+fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+X = np.linspace(-1, 1, 100)
+Y = np.linspace(-1, 1, 100)
+X, Y = np.meshgrid(X, Y)
+xa = rng.normal(size=(n_out, dof))
+pa = mechanical.reshape_modes_output(xa, np.zeros_like(xa))
+Z = [[modes._fun(pa + l1*pi + l2*pf) for l1, l2 in zip(X[i, :], Y[i, :])]
+     for i in range(X.shape[0])]
+Z = np.array(Z)
+ax.plot_surface(X, Y, Z)
+# Label the axes
+ax.set_xlabel('x')
+ax.set_ylabel('y')
+ax.set_zlabel('Objective')
+
+plt.show()
 
 # %%
 
-    # dof, n_out, n_in = 4, 3, 2
-    # rng = np.random.default_rng()
-    # freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-    # X = 0.1*rng.normal(size=(n_out, dof))
-    # amps0 = _mode_to_amps(X, n_out, n_in)
-    # amps = amps0 + 1e-4*(rng.normal(size=amps0.shape) + 1j*rng.normal(size=amps0.shape))
-    # ns, fs = 210, 100
+# dof, n_out, n_in = 4, 3, 2
+# rng = np.random.default_rng()
+# freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+# X = 0.1*rng.normal(size=(n_out, dof))
+# amps0 = _mode_to_amps(X, n_out, n_in)
+# amps = amps0 + 1e-4*(rng.normal(size=amps0.shape) + 1j*rng.normal(size=amps0.shape))
+# ns, fs = 210, 100
 
-    # modes = _ModesProp(
-    #     freqs, fs, ns, n_out=n_out, n_in=n_in)
-    # res = modes.fit(amps)
-    # print('Original amps:\n', amps0)
-    # print('Noisy amps:\n', amps)
-    # print('===================')
-    # print('Original:\n', X)
-    # print('Fitted:\n', res.x.reshape(n_out, dof))
+# modes = _ModesProp(
+#     freqs, fs, ns, n_out=n_out, n_in=n_in)
+# res = modes.fit(amps)
+# print('Original amps:\n', amps0)
+# print('Noisy amps:\n', amps)
+# print('===================')
+# print('Original:\n', X)
+# print('Fitted:\n', res.x.reshape(n_out, dof))
 
-    # print(res.success, res.message)
+# print(res.success, res.message)
 
+# # %%
+# DoF = 4
+# mech, modal = mechanical.randomSystem(
+#     DoF,
+#     mass_range=(1, 2),
+#     damping_range=(0.02, 0.05),
+#     freqs_range=(2 * np.pi * 1, 2 * np.pi * 20),
+#     damping_type='nop',
+#     seed=None)
 
-# %%
-DoF = 4
-mech, modal = mechanical.randomSystem(
-    DoF,
-    mass_range=(1, 2),
-    damping_range=(0.02, 0.05),
-    freqs_range=(2 * np.pi * 1, 2 * np.pi * 20),
-    damping_type='nop',
-    seed=None)
+# psi = modal['mode_shapes']
+# freqs = modal['frequencies']
 
-psi = modal['mode_shapes']
-freqs = modal['frequencies']
-
-# %%
-ns, fs = 210, 100
-n_out, n_in = 3, 2
+# # %%
+# ns, fs = 210, 100
+# n_out, n_in = 3, 2
 
 # amps = psi.reshape(DoF, 1, DoF) * psi.reshape(1, DoF, DoF)
 # amps = amps * (1/np.imag(freqs)).reshape(1, 1, DoF)
@@ -83,31 +99,3 @@ n_out, n_in = 3, 2
 # kernel = kernel.reshape(n_out, n_in, 1, DoF)
 # kernel = kernel * np.exp(freqs[np.newaxis, :] * t[:, np.newaxis]).reshape(1, 1, ns, DoF)
 # kernel = np.imag(np.sum(kernel, axis=-1))
-
-# %%
-m = _metric_amps(freqs, fs, ns)
-def fun(x):
-    X, Z = _reshape_mode_shapes_input(x, DoF, n_out)
-    psi, _ = _partial_mode_shapes_map(X, Z, freqs, coords=coords)
-    if psi is np.nan:
-        return 1e10
-    amps = _mode_to_amps(psi, n_out, n_in)
-
-    dif = amps - amps0
-    dif = np.concatenate(
-        [np.real(dif), np.imag(dif)], axis=-1)
-    return np.einsum('kl,ijk,ijl', m, dif, dif)
-
-# x = rng.normal(size=(2*n_out*DoF - n_out*(n_out+1)//2))
-x0 = _amps_to_modes(amps0)
-x0 = _reshape_mode_shapes_output(x0, np.zeros_like(x0))
-print(fun(x0))
-
-# %%
-from scipy.optimize import basinhopping
-
-r = basinhopping(fun, x0)
-
-# %%
-psi_min = _reshape_mode_shapes_input(r.x, DoF, n_out)
-psi_min = _partial_mode_shapes_map(psi_min[0], psi_min[1], freqs, coords=coords)[0]
