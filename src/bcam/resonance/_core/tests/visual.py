@@ -42,11 +42,10 @@ from bcam.resonance._core import mechanical
 # d2f = modes._hessp(pi, dp) @ dp
 
 # fig, ax = plt.subplots(ncols=2, sharex=True, figsize=(10, 5))
-# fig.suptitle('Test derivatives of objective for real mode shapes fitting')
+# fig.suptitle('Test derivatives of objective for complex mode shapes fitting')
 
 # ax[0].set_title('1st order')
 # ax[0].plot(ll, f_line - (fpi + df*ll))
-# ax[0].plot(ll, 0.5*d2f*(ll**2), color='r')
 # ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
 
 # ax[1].set_title('2nd order')
@@ -70,19 +69,15 @@ mechanical.PartialModesMap.rtol = 1e-15
 modes = mechanical.PartialModesMap(freqs, coords)
 
 xi = rng.normal(size=(n_out, dof))
-# zi = 1e-2*rng.normal(size=(n_out, dof))
-# zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
-zi = np.zeros_like(xi)
-# dx = rng.normal(size=(n_out, dof))
+zi = 1e-2*rng.normal(size=(n_out, dof))
+zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
 dx = np.zeros_like(xi)
 dz = rng.normal(size=(n_out, dof))
 dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
-# dz = np.zeros_like(dx)
 
 constr = modes.constraints(xi, zi)
-# vec = rng.normal(size=2)
-vec = np.array([0, 1])
-ll = np.linspace(-5e-3, 5e-3, 500)
+vec = rng.normal(size=2)
+ll = np.linspace(-2e-3, 2e-3, 500)
 constr_line = [
     modes.constraints(xi + l*dx, zi + l*dz) @ vec for l in ll]
 constr_line = np.array(constr_line)
@@ -97,7 +92,6 @@ fig.suptitle('Test derivatives of constraints for complex mode shapes fitting')
 
 ax[0].set_title('1st order')
 ax[0].plot(ll, constr_line - (const_i + jac_const*ll))
-# ax[0].plot(ll, 0.5*hessp_const*(ll**2), color='r')
 ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
 
 ax[1].set_title('2nd order')

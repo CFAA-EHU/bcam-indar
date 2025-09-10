@@ -590,7 +590,7 @@ class PartialModesMap:
         pdchk = derivatives.jac_cho(self._chk, pdchk)
 
         def local(a, da, pda, pd2a):
-            idx = (self.coords, self.coords)
+            idx = (np.arange(len(a)), np.arange(len(a)))
             r = pd2a[idx] - pda[idx]*da[idx]/a[idx]
             return r/a[idx]
 
@@ -601,7 +601,8 @@ class PartialModesMap:
                 pdq, pds, self._dq, self._ds, self.coords, self._grass)
             hessp = np.zeros(2)
 
-            hessp[0] = -np.sum(local(q, self._dq, pdq, pd2q))
+            hessp[0] = -np.sum(local(
+                q[self.coords], self._dq[self.coords], pdq[self.coords], pd2q[self.coords]))
 
             if isinstance(self._chk, float):
                 hessp[1] = 0
