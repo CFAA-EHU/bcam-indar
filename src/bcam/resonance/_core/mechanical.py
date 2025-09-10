@@ -731,13 +731,29 @@ class ModesProp:
             })
         return res
 
+
+class _Hess_constraint(scipy.sparse.linalg.
+LinearOperator):
+    
+    def __init__(self, dim, hess):
+        super().__init__(dtype=np.float64, shape=(dim, dim))
+        self.hess = hess
+
+    def _matvec(self, p):
+        if p.shape == (self.dim, 1):
+            p = p.flatten()
+        return self.hess(p)
+
+    def _adjoint(self):
+        return self
+
 class Modes:
 
     def __init__(
         self,
         freqs,
-        amps,
         coords,
+        amps,
         fs:int,
         ns:int,
     ):
@@ -750,6 +766,8 @@ class Modes:
         
         self.fs = fs
         self.ns = ns
+        PartialModesMap.atol = 1e-10
+        PartialModesMap.rtol = 1e-8
         self._modes_map = PartialModesMap(freqs, coords)
 
         self._get_metric()
@@ -834,6 +852,56 @@ class Modes:
 
         hessp = [hess_f(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
         return np.array(hessp)
+
+    def _get_constraints(self):
+        n_out, _, dof = self.amps.shape
+
+        def constr_fun(x):
+            x_, z_ = reshape_modes_input(x, dof, n_out)
+            return self._modes_map.constraints(x_, z_)
+
+        def constr_jac(x):
+            x_, z_ = reshape_modes_input(x, dof, n_out)
+            jac = self._modes_map.jac_constraints(x_, z_)
+            jac = [jac(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+            return np.array(jac).T
+
+        dim = 2*n_out*dof - n_out*(n_out+1)//2
+        def constr_hess(x, v):
+            x_, z_ = reshape_modes_input(x, dof, n_out)
+            def hess(p):
+                px, pz = reshape_modes_input(p, dof, n_out)
+                hess_ = self._modes_map.hessp_constraints(x_, z_, px, pz)@v
+                hess_ = [hess_(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+                return np.array(hess_)
+
+            return _Hess_constraint(dim, hess)
+
+        r = scipy.optimize.NonlinearConstraint(
+            constr_fun,
+            lb=np.array([-np.inf, -np.inf]),
+            up=np.array([10, 0]),
+            jac=constr_jac,
+            hess=constr_hess,
+            keep_feasible=True
+        )
+        return r
+
+    def fit(self, amps, x0):
+        dof = len(self.freqs)
+        if dof != amps.shape[2]:
+            msg = f'The number of frequencies (dof) must match the last dimension of the amplitudes.'
+            raise ValueError(msg)
+
+        res = scipy.optimize.minimize(
+            self._fun,
+            x0=x0,
+            method='trust-constr',
+            jac=self._jac,
+            hessp=self._hessp,
+            constraints=self._get_constraints()
+        )
+        return res
 
 
 def modal_to_system(mode_shapes, Z):

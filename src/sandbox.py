@@ -7,8 +7,22 @@ import matplotlib.pyplot as plt
 
 from bcam.resonance import mechanical, derivatives
 
-x = np.zeros((3, 6))
-print((x == 0).all())
+# %%
+dof, n_out, n_in = 4, 3, 2
+rng = np.random.default_rng()
+freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+x0 = rng.normal(size=(n_out, dof))
+z0 = 2e-2*rng.normal(size=(n_out, dof))
+z0[:n_out, :n_out] = (z0[:n_out, :n_out] - z0[:n_out, :n_out].T)/2
+amps0 = mechanical.mode_to_amps(x0, n_out, n_in)
+coords = np.arange(n_out)
+
+ns, fs = 210, 100
+modes = mechanical.Modes(freqs, coords, amps0, fs, ns)
+
+jac = modes._modes_map.jac_constraints(x0, z0)
+jac = [jac(dx, dz) for dx, dz in mechanical.basis_iterator(n_out, dof)]
+np.array(jac).shape
 
 # %%
 dof, n_out, n_in = 4, 3, 2
