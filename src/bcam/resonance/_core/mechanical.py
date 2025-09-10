@@ -740,7 +740,8 @@ LinearOperator):
         self.hess = hess
 
     def _matvec(self, p):
-        if p.shape == (self.dim, 1):
+        dim = self.shape[0]
+        if p.shape == (dim, 1):
             p = p.flatten()
         return self.hess(p)
 
@@ -871,8 +872,8 @@ class Modes:
             x_, z_ = reshape_modes_input(x, dof, n_out)
             def hess(p):
                 px, pz = reshape_modes_input(p, dof, n_out)
-                hess_ = self._modes_map.hessp_constraints(x_, z_, px, pz)@v
-                hess_ = [hess_(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+                hess_ = self._modes_map.hessp_constraints(x_, z_, px, pz)
+                hess_ = [hess_(dx, dz)@v for dx, dz in basis_iterator(n_out, dof)]
                 return np.array(hess_)
 
             return _Hess_constraint(dim, hess)
@@ -880,19 +881,14 @@ class Modes:
         r = scipy.optimize.NonlinearConstraint(
             constr_fun,
             lb=np.array([-np.inf, -np.inf]),
-            up=np.array([10, 0]),
+            ub=np.array([10, 0]),
             jac=constr_jac,
             hess=constr_hess,
             keep_feasible=True
         )
         return r
 
-    def fit(self, amps, x0):
-        dof = len(self.freqs)
-        if dof != amps.shape[2]:
-            msg = f'The number of frequencies (dof) must match the last dimension of the amplitudes.'
-            raise ValueError(msg)
-
+    def fit(self, x0):
         res = scipy.optimize.minimize(
             self._fun,
             x0=x0,

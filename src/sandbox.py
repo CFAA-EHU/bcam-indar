@@ -5,48 +5,32 @@ import numpy as np
 import scipy
 import matplotlib.pyplot as plt
 
-from bcam.resonance import mechanical, derivatives
+from bcam.resonance import mechanical
 
 # %%
 dof, n_out, n_in = 4, 3, 2
 rng = np.random.default_rng()
 freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-x0 = rng.normal(size=(n_out, dof))
-z0 = 2e-2*rng.normal(size=(n_out, dof))
-z0[:n_out, :n_out] = (z0[:n_out, :n_out] - z0[:n_out, :n_out].T)/2
-amps0 = mechanical.mode_to_amps(x0, n_out, n_in)
 coords = np.arange(n_out)
+modes_m = np.nan
+while isinstance(modes_m, float):
+    xm = rng.normal(size=(n_out, dof))
+    zm = 5e-2*rng.normal(size=(n_out, dof))
+    zm[:n_out, :n_out] = zm[:n_out, :n_out] - zm[:n_out, :n_out].T
+    modes_m = mechanical.PartialModesMap(freqs, coords)(xm, zm)
+amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
 
 ns, fs = 210, 100
-modes = mechanical.Modes(freqs, coords, amps0, fs, ns)
+modes = mechanical.ModesProp(
+        freqs, fs, ns, n_out=n_out, n_in=n_in)
+res = modes.fit(amps_m)
+print('Original:\n', modes_m)
+print('Fitted:\n', res.x.reshape(n_out, dof))
 
-jac = modes._modes_map.jac_constraints(x0, z0)
-jac = [jac(dx, dz) for dx, dz in mechanical.basis_iterator(n_out, dof)]
-np.array(jac).shape
-
-# %%
-dof, n_out, n_in = 4, 3, 2
-rng = np.random.default_rng()
-freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-x0 = 0.1*rng.normal(size=(n_out, dof))
-z0 = 1e-3*rng.normal(size=(n_out, dof))
-amps0 = mechanical.mode_to_amps(x0, n_out, n_in)
-coords = np.arange(n_out)
-
-ns, fs = 210, 100
-modes = mechanical.Modes(freqs, amps0, coords, fs, ns)
-
-xi = 0.1*rng.normal(size=(n_out, dof))
-zi = 1e-3*rng.normal(size=(n_out, dof))
-pi = mechanical.reshape_modes_output(xi, zi)
-dx = 0.1*rng.normal(size=(n_out, dof))
-dz = 1e-3*rng.normal(size=(n_out, dof))
-dp = mechanical.reshape_modes_output(dx, dz)
-ll = 1e-3 * np.arange(-40, 41)
-f_line = [
-    modes._fun(pi+l*dp) for l in ll]
-f_line = np.array(f_line)
-fpi = modes._fun(pi)
+modes = mechanical.Modes(freqs, coords, amps_m, fs, ns)
+x0 = np.pad(res.x, (0, n_out*dof - n_out*(n_out+1)//2))
+res_c = modes.fit(x0)
+xf, zf = mechanical.reshape_modes_input(res_c.x, dof, n_out)
 
 # %%
 
@@ -70,22 +54,22 @@ fpi = modes._fun(pi)
     # print(res.success, res.message)
 
 
-# %%
-DoF = 4
-mech, modal = mechanical.randomSystem(
-    DoF,
-    mass_range=(1, 2),
-    damping_range=(0.02, 0.05),
-    freqs_range=(2 * np.pi * 1, 2 * np.pi * 20),
-    damping_type='nop',
-    seed=None)
+# # %%
+# DoF = 4
+# mech, modal = mechanical.randomSystem(
+#     DoF,
+#     mass_range=(1, 2),
+#     damping_range=(0.02, 0.05),
+#     freqs_range=(2 * np.pi * 1, 2 * np.pi * 20),
+#     damping_type='nop',
+#     seed=None)
 
-psi = modal['mode_shapes']
-freqs = modal['frequencies']
+# psi = modal['mode_shapes']
+# freqs = modal['frequencies']
 
-# %%
-ns, fs = 210, 100
-n_out, n_in = 3, 2
+# # %%
+# ns, fs = 210, 100
+# n_out, n_in = 3, 2
 
 # amps = psi.reshape(DoF, 1, DoF) * psi.reshape(1, DoF, DoF)
 # amps = amps * (1/np.imag(freqs)).reshape(1, 1, DoF)
@@ -97,31 +81,3 @@ n_out, n_in = 3, 2
 # kernel = kernel.reshape(n_out, n_in, 1, DoF)
 # kernel = kernel * np.exp(freqs[np.newaxis, :] * t[:, np.newaxis]).reshape(1, 1, ns, DoF)
 # kernel = np.imag(np.sum(kernel, axis=-1))
-
-# %%
-m = _metric_amps(freqs, fs, ns)
-def fun(x):
-    X, Z = _reshape_mode_shapes_input(x, DoF, n_out)
-    psi, _ = _partial_mode_shapes_map(X, Z, freqs, coords=coords)
-    if psi is np.nan:
-        return 1e10
-    amps = _mode_to_amps(psi, n_out, n_in)
-
-    dif = amps - amps0
-    dif = np.concatenate(
-        [np.real(dif), np.imag(dif)], axis=-1)
-    return np.einsum('kl,ijk,ijl', m, dif, dif)
-
-# x = rng.normal(size=(2*n_out*DoF - n_out*(n_out+1)//2))
-x0 = _amps_to_modes(amps0)
-x0 = _reshape_mode_shapes_output(x0, np.zeros_like(x0))
-print(fun(x0))
-
-# %%
-from scipy.optimize import basinhopping
-
-r = basinhopping(fun, x0)
-
-# %%
-psi_min = _reshape_mode_shapes_input(r.x, DoF, n_out)
-psi_min = _partial_mode_shapes_map(psi_min[0], psi_min[1], freqs, coords=coords)[0]
