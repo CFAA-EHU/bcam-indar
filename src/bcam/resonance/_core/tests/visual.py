@@ -76,8 +76,9 @@ dz = rng.normal(size=(n_out, dof))
 dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
 
 constr = modes.constraints(xi, zi)
-vec = rng.normal(size=2)
-ll = np.linspace(-1e-2, 1e-2, 500)
+# vec = rng.normal(size=2)
+vec = np.array([0, 1])
+ll = np.linspace(-5e-3, 5e-3, 500)
 constr_line = [
     modes.constraints(xi + l*dx, zi + l*dz) @ vec for l in ll]
 constr_line = np.array(constr_line)

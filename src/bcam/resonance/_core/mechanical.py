@@ -425,14 +425,14 @@ class PartialModesMap:
 
         # Check mass positivity.
         dof = len(self.freqs)
-        d = np.real(self.freqs), np.imag(self.freqs)
-        H = d[0][:, np.newaxis] * z_.T
-        H += H.T
-        H[np.arange(dof), np.arange(dof)] += d[1]
-        H -= (z_ * d[1][np.newaxis, :]) @ z_.T
+        D = np.real(self.freqs), np.imag(self.freqs)
+        m = D[0][:, np.newaxis] * z_.T
+        m += m.T
+        m[np.arange(dof), np.arange(dof)] += D[1]
+        m -= (z_ * D[1][np.newaxis, :]) @ z_.T
         try:
             self._chk = scipy.linalg.cholesky(
-                H, lower=False, overwrite_a=True)
+                m, lower=False, overwrite_a=True)
         except scipy.linalg.LinAlgError:
             self._chk = np.nan
             logging.warning('Mass matrix is not positive-definite.')
@@ -552,8 +552,7 @@ class PartialModesMap:
         dm += dm.T
         dm_ = (self._z_ * D[1][np.newaxis, :]) @ dz_.T
         dm_ += dm_.T
-        dm -= dm_
-        return dm
+        return dm - dm_
 
     def jac_constraints(self, x, z):
         self.point = (x, z)
@@ -579,29 +578,29 @@ class PartialModesMap:
     def _hessp_m(self, pz, pdz_, pdq, pds):
         d2z_ = self._hessp_z_(pz, pdq, pds)
         d2m = self._dmass(d2z_)
-        d2m -= 2*(pdz_ * np.imag(self.freqs)[np.newaxis, :]) @ self._dz_.T
-        return d2m
+        d2m_ = (pdz_ * np.imag(self.freqs)[np.newaxis, :]) @ self._dz_.T
+        d2m_ += d2m_.T
+        return d2m - d2m_
 
     def hessp_constraints(self, x, z, px, pz):
         self.point = (x, z)
         self._compute_jac_expensive(px, pz)
-        pdq, pds = self._dq, self._ds
-        pdz_ = self._dz_
+        pdq, pds, pdz_ = self._dq, self._ds, self._dz_
         pdchk = self._dmass(pdz_)
         pdchk = derivatives.jac_cho(self._chk, pdchk)
 
         def local(a, da, pda, pd2a):
-                idx = (self.coords, self.coords)
-                r = pd2a[idx] - pda[idx]*da[idx]/a[idx]
-                return r/a[idx]
+            idx = (self.coords, self.coords)
+            r = pd2a[idx] - pda[idx]*da[idx]/a[idx]
+            return r/a[idx]
 
-        def hessp(dx, dz):
+        def hessp_fun(dx, dz):
             self.vector = (dx, dz)
             q = self._grass[0]
             pd2q, _ = derivatives.hessp_grass(
                 pdq, pds, self._dq, self._ds, self.coords, self._grass)
             hessp = np.zeros(2)
-            
+
             hessp[0] = -np.sum(local(q, self._dq, pdq, pd2q))
 
             if isinstance(self._chk, float):
@@ -611,12 +610,11 @@ class PartialModesMap:
                 dchk = derivatives.jac_cho(self._chk, dchk)
                 d2m = self._hessp_m(pz, pdz_, pdq, pds)
 
-                hessp_chk = derivatives.hess_cho(self._chk, pdchk, dchk)
-                hessp_chk += derivatives.jac_cho(self._chk, d2m)
-                hessp[1] = -np.sum(local(self._chk, pdchk, dchk, hessp_chk))
+                d2chk = derivatives.jac_cho(self._chk, d2m - pdchk.T@dchk - dchk.T@pdchk)
+                hessp[1] = -np.sum(local(self._chk, dchk, pdchk, d2chk))
             return hessp
-        
-        return hessp
+
+        return hessp_fun
 
 
 class ModesProp:
