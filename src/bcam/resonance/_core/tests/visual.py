@@ -46,6 +46,7 @@ from bcam.resonance._core import mechanical
 
 # ax[0].set_title('1st order')
 # ax[0].plot(ll, f_line - (fpi + df*ll))
+# ax[0].plot(ll, 0.5*d2f*(ll**2), color='r')
 # ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
 
 # ax[1].set_title('2nd order')
@@ -60,7 +61,7 @@ from bcam.resonance._core import mechanical
 # for complex mode shapes
 # ================================
 dof, n_out = 4, 3
-rng = np.random.default_rng()
+rng = np.random.default_rng(12)
 freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
 coords = np.arange(n_out)
 
@@ -69,11 +70,14 @@ mechanical.PartialModesMap.rtol = 1e-15
 modes = mechanical.PartialModesMap(freqs, coords)
 
 xi = rng.normal(size=(n_out, dof))
-zi = 1e-2*rng.normal(size=(n_out, dof))
-zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
-dx = rng.normal(size=(n_out, dof))
+# zi = 1e-2*rng.normal(size=(n_out, dof))
+# zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
+zi = np.zeros_like(xi)
+# dx = rng.normal(size=(n_out, dof))
+dx = np.zeros_like(xi)
 dz = rng.normal(size=(n_out, dof))
 dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
+# dz = np.zeros_like(dx)
 
 constr = modes.constraints(xi, zi)
 # vec = rng.normal(size=2)
@@ -93,6 +97,7 @@ fig.suptitle('Test derivatives of constraints for complex mode shapes fitting')
 
 ax[0].set_title('1st order')
 ax[0].plot(ll, constr_line - (const_i + jac_const*ll))
+# ax[0].plot(ll, 0.5*hessp_const*(ll**2), color='r')
 ax[0].axhline(0, color='k', linestyle='--', linewidth=1)
 
 ax[1].set_title('2nd order')

@@ -490,14 +490,12 @@ class PartialModesMap:
             return a + 1j * x@self._dz_
         return dpsi
 
-    def _hessp_z_(self, pz, pdq, pds):
+    def _hessp_z_(self, pz, pdq, pd2q):
         n_out, dof = len(self.coords), len(self.freqs)
         _, z = self.point
         _, dz = self.vector
         q = self._grass[0]
         dq = self._dq
-        pd2q, _ = derivatives.hessp_grass(
-                pdq, pds, self._dq, self._ds, self.coords, self._grass)
 
         t1 = self._inv_qe(pd2q@z + pdq@dz + dq@pz)
 
@@ -531,7 +529,9 @@ class PartialModesMap:
             dz_ = self._dz_
             cross = px@dz_ + dx@pdz_
 
-            pd2z_ = self._hessp_z_(pz, pdq, pds)
+            pd2q, _ = derivatives.hessp_grass(
+                pdq, pds, self._dq, self._ds, self.coords, self._grass)
+            pd2z_ = self._hessp_z_(pz, pdq, pd2q)
             return 1j*(cross + x@pd2z_)
         return d2psi_p
 
@@ -575,8 +575,8 @@ class PartialModesMap:
 
         return d_constr
 
-    def _hessp_m(self, pz, pdz_, pdq, pds):
-        d2z_ = self._hessp_z_(pz, pdq, pds)
+    def _hessp_m(self, pz, pdz_, pdq, pd2q):
+        d2z_ = self._hessp_z_(pz, pdq, pd2q)
         d2m = self._dmass(d2z_)
         d2m_ = (pdz_ * np.imag(self.freqs)[np.newaxis, :]) @ self._dz_.T
         d2m_ += d2m_.T
@@ -608,9 +608,9 @@ class PartialModesMap:
             else:
                 dchk = self._dmass(self._dz_)
                 dchk = derivatives.jac_cho(self._chk, dchk)
-                d2m = self._hessp_m(pz, pdz_, pdq, pds)
+                d2chk = self._hessp_m(pz, pdz_, pdq, pd2q)
 
-                d2chk = derivatives.jac_cho(self._chk, d2m - pdchk.T@dchk - dchk.T@pdchk)
+                d2chk = derivatives.jac_cho(self._chk, d2chk - pdchk.T@dchk - dchk.T@pdchk)
                 hessp[1] = -np.sum(local(self._chk, dchk, pdchk, d2chk))
             return hessp
 
