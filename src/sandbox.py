@@ -5,72 +5,71 @@ import numpy as np
 import scipy
 import matplotlib.pyplot as plt
 
-from bcam.resonance import mechanical, derivatives
+from bcam.resonance import mechanical
 
 # %%
-# Rudimentary plot of objective function in 2D slice of input space.
 dof, n_out, n_in = 4, 3, 2
 rng = np.random.default_rng()
 freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-x0 = rng.normal(size=(n_out, dof))
-z0 = 2e-2*rng.normal(size=(n_out, dof))
-z0[:n_out, :n_out] = z0[:n_out, :n_out] - z0[:n_out, :n_out].T
-p0 = mechanical.reshape_modes_output(x0, z0)
 coords = np.arange(n_out)
-modes0 = mechanical.PartialModesMap(freqs, coords)
-modes0 = modes0(x0, z0)
-amps0 = mechanical.mode_to_amps(modes0, n_out, n_in)
+modes_m = np.nan
+while isinstance(modes_m, float):
+    xm = rng.normal(size=(n_out, dof))
+    zm = 5e-2*rng.normal(size=(n_out, dof))
+    zm[:n_out, :n_out] = zm[:n_out, :n_out] - zm[:n_out, :n_out].T
+    modes_m = mechanical.PartialModesMap(freqs, coords)(xm, zm)
+amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
 
 ns, fs = 210, 100
-modes = mechanical.Modes(freqs, amps0, coords, fs, ns)
+modes = mechanical.ModesProp(
+        freqs, fs, ns, n_out=n_out, n_in=n_in)
+res = modes.fit(amps_m)
+print('Original:\n', modes_m)
+print('Fitted:\n', res.x.reshape(n_out, dof))
 
-xi = rng.normal(size=(n_out, dof))
-zi = 2e-2*rng.normal(size=(n_out, dof))
-zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
-pi = mechanical.reshape_modes_output(xi, zi)
+modes = mechanical.Modes(freqs, coords, amps_m, fs, ns)
+x0 = np.pad(res.x, (0, n_out*dof - n_out*(n_out+1)//2))
+res_c = modes.fit(x0)
+xf, zf = mechanical.reshape_modes_input(res_c.x, dof, n_out)
 
-xf = rng.normal(size=(n_out, dof))
-zf = 2e-2*rng.normal(size=(n_out, dof))
-zf[:n_out, :n_out] = zf[:n_out, :n_out] - zf[:n_out, :n_out].T
-pf = mechanical.reshape_modes_output(xf, zf)
+# # %%
+# # Rudimentary plot of objective function in 2D slice of input space.
+# xi = rng.normal(size=(n_out, dof))
+# zi = 2e-2*rng.normal(size=(n_out, dof))
+# zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
+# pi = mechanical.reshape_modes_output(xi, zi)
 
-fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
-X = np.linspace(-1, 1, 100)
-Y = np.linspace(-1, 1, 100)
-X, Y = np.meshgrid(X, Y)
-xa = rng.normal(size=(n_out, dof))
-pa = mechanical.reshape_modes_output(xa, np.zeros_like(xa))
-Z = [[modes._fun(pa + l1*pi + l2*pf) for l1, l2 in zip(X[i, :], Y[i, :])]
-     for i in range(X.shape[0])]
-Z = np.array(Z)
-ax.plot_surface(X, Y, Z)
-# Label the axes
-ax.set_xlabel('x')
-ax.set_ylabel('y')
-ax.set_zlabel('Objective')
+# xf = rng.normal(size=(n_out, dof))
+# zf = 2e-2*rng.normal(size=(n_out, dof))
+# zf[:n_out, :n_out] = zf[:n_out, :n_out] - zf[:n_out, :n_out].T
+# pf = mechanical.reshape_modes_output(xf, zf)
 
-plt.show()
+# fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+# X = np.linspace(-1, 1, 100)
+# Y = np.linspace(-1, 1, 100)
+# X, Y = np.meshgrid(X, Y)
+# xa = rng.normal(size=(n_out, dof))
+# pa = mechanical.reshape_modes_output(xa, np.zeros_like(xa))
+# Z = [[modes._fun(pa + l1*pi + l2*pf) for l1, l2 in zip(X[i, :], Y[i, :])]
+#      for i in range(X.shape[0])]
+# Z = np.array(Z)
+# ax.plot_surface(X, Y, Z)
+# # Label the axes
+# ax.set_xlabel('x')
+# ax.set_ylabel('y')
+# ax.set_zlabel('Objective')
 
-# %%
+# plt.show()
 
-# dof, n_out, n_in = 4, 3, 2
-# rng = np.random.default_rng()
-# freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-# X = 0.1*rng.normal(size=(n_out, dof))
-# amps0 = _mode_to_amps(X, n_out, n_in)
-# amps = amps0 + 1e-4*(rng.normal(size=amps0.shape) + 1j*rng.normal(size=amps0.shape))
-# ns, fs = 210, 100
-
-# modes = _ModesProp(
-#     freqs, fs, ns, n_out=n_out, n_in=n_in)
-# res = modes.fit(amps)
-# print('Original amps:\n', amps0)
-# print('Noisy amps:\n', amps)
-# print('===================')
-# print('Original:\n', X)
-# print('Fitted:\n', res.x.reshape(n_out, dof))
-
-# print(res.success, res.message)
+# # %%
+# DoF = 4
+# mech, modal = mechanical.randomSystem(
+#     DoF,
+#     mass_range=(1, 2),
+#     damping_range=(0.02, 0.05),
+#     freqs_range=(2 * np.pi * 1, 2 * np.pi * 20),
+#     damping_type='nop',
+#     seed=None)
 
 # # %%
 # DoF = 4
