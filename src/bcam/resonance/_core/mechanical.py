@@ -621,16 +621,21 @@ class ModesProp:
     def __init__(
         self,
         freqs,
+        amps,
         fs:int,
-        ns:int,
-        n_out:int=None,
-        n_in:int=None
+        ns:int
     ):
+        assert freqs.ndim == 1, 'Expected a 1D-array for frequencies.'
+        assert amps.ndim == 3, 'Expected a 3D-array for amplitudes.'
+        n_out, n_in, dof = amps.shape
+        assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
+        assert dof == len(freqs), 'The last dimension of amplitudes must match the number of frequencies.'
+        assert dof >= n_out, 'dof must be greater than or equal to n_out.'
+
         self.freqs = freqs
+        self.amps = amps
         self.fs = fs
         self.ns = ns
-        self.n_out = len(freqs) if n_out is None else n_out
-        self.n_in = n_out if n_in is None else n_in
 
         self._get_metric()
 
@@ -638,11 +643,12 @@ class ModesProp:
         self._metric = metric_amps(
             self.freqs, self.fs, self.ns, a_type='normal')
 
-    def _fun(self, x, amps, dof:int):
-        x = x.reshape(self.n_out, dof)
-        amps_ = mode_to_amps(x, self.n_out, self.n_in)
+    def _fun(self, x):
+        n_out, n_in, dof = self.amps.shape
+        x = x.reshape(n_out, dof)
+        amps = mode_to_amps(x, n_out, n_in)
 
-        dif = amps_ - amps
+        dif = amps - self.amps
         dif = np.concatenate(
             [np.real(dif), np.imag(dif)], axis=-1)
         trans = np.einsum('ijk,kl->ijl', dif, self._metric)
@@ -650,12 +656,13 @@ class ModesProp:
         # Compute f(x).
         f = np.einsum('ijk,ijk', trans, dif)
         return f
-    
-    def _jac(self, x, amps, dof:int):
-        x = x.reshape(self.n_out, dof)
-        amps_ = mode_to_amps(x, self.n_out, self.n_in)
 
-        dif = amps_ - amps
+    def _jac(self, x):
+        n_out, n_in, dof = self.amps.shape
+        x = x.reshape(n_out, dof)
+        amps = mode_to_amps(x, n_out, n_in)
+
+        dif = amps - self.amps
         dif = np.concatenate(
             [np.real(dif), np.imag(dif)], axis=-1)
         trans = np.einsum('ijk,kl->ijl', dif, self._metric)
@@ -663,65 +670,62 @@ class ModesProp:
         # Compute df(x).
         trans = trans[..., :dof]
         t1 = np.array(
-            [np.sum(trans[q, :self.n_in] * x[:self.n_in], axis=0)
-             for q in range(self.n_out)])
+            [np.sum(trans[q, :n_in] * x[:n_in], axis=0)
+             for q in range(n_out)])
         t2 = np.array(
-            [np.sum(trans[self.n_in:self.n_out, q] * x[self.n_in:self.n_out], axis=0)
-             for q in range(self.n_in)])
+            [np.sum(trans[n_in:n_out, q] * x[n_in:n_out], axis=0)
+             for q in range(n_in)])
         df = 2*np.concatenate(
-            [2*t1[:self.n_in] + t2, t1[self.n_in:]], axis=0)
+            [2*t1[:n_in] + t2, t1[n_in:]], axis=0)
         return df.flatten()
 
-    def _hessp(self, x, p, amps, dof:int):
-        x = x.reshape(self.n_out, dof)
-        p = p.reshape(self.n_out, dof)
+    def _hessp(self, x, p):
+        n_out, n_in, dof = self.amps.shape
+        x = x.reshape(n_out, dof)
+        p = p.reshape(n_out, dof)
 
-        amps_ = mode_to_amps(x, self.n_out, self.n_in)
-        A = amps_ - amps
+        amps = mode_to_amps(x, n_out, n_in)
+        A = amps - self.amps
         A = np.concatenate(
             [np.real(A), np.imag(A)], axis=-1)
 
-        B = p[:, np.newaxis]*x[np.newaxis, :self.n_in]
-        B += x[:, np.newaxis]*p[np.newaxis, :self.n_in]
+        B = p[:, np.newaxis]*x[np.newaxis, :n_in]
+        B += x[:, np.newaxis]*p[np.newaxis, :n_in]
 
         Ap = np.einsum('ijk,kl->ijl', A, self._metric[:, :dof])
         t1 = np.array(
-            [np.sum(Ap[q, :self.n_in] * p[:self.n_in], axis=0)
-             for q in range(self.n_out)])
+            [np.sum(Ap[q, :n_in] * p[:n_in], axis=0)
+             for q in range(n_out)])
         t2 = np.array(
-            [np.sum(Ap[self.n_in:self.n_out, q] * p[self.n_in:self.n_out], axis=0)
-             for q in range(self.n_in)])
+            [np.sum(Ap[n_in:n_out, q] * p[n_in:n_out], axis=0)
+             for q in range(n_in)])
         Ap = 2*np.concatenate(
-            [2*t1[:self.n_in] + t2, t1[self.n_in:]], axis=0)
+            [2*t1[:n_in] + t2, t1[n_in:]], axis=0)
 
         Bx = np.einsum('ijk,kl->ijl', B, self._metric[:dof, :dof])
         t1 = np.array(
-            [np.sum(Bx[q, :self.n_in] * x[:self.n_in], axis=0)
-             for q in range(self.n_out)])
+            [np.sum(Bx[q, :n_in] * x[:n_in], axis=0)
+             for q in range(n_out)])
         t2 = np.array(
-            [np.sum(Bx[self.n_in:self.n_out, q] * x[self.n_in:self.n_out], axis=0)
-             for q in range(self.n_in)])
+            [np.sum(Bx[n_in:n_out, q] * x[n_in:n_out], axis=0)
+             for q in range(n_in)])
         Bx = 2*np.concatenate(
-            [2*t1[:self.n_in] + t2, t1[self.n_in:]], axis=0)
+            [2*t1[:n_in] + t2, t1[n_in:]], axis=0)
 
         return (Ap + Bx).flatten()
 
-    def fit(self, amps):
-        dof = len(self.freqs)
-        if dof != amps.shape[2]:
-            msg = f'The number of frequencies (dof) must match the last dimension of the amplitudes.'
-            raise ValueError(msg)
+    def fit(self):
+        n_out, _, dof = self.amps.shape
 
-        x0 = np.real(amps_to_modes(amps))
+        x0 = np.real(amps_to_modes(self.amps))
         x0 = x0.flatten()
         bounds = scipy.optimize.Bounds(
-            lb=-1*np.ones(self.n_out * dof),
-            ub=1*np.ones(self.n_out * dof))
+            lb=-2*np.ones(n_out * dof),
+            ub=2*np.ones(n_out * dof))
         res = scipy.optimize.dual_annealing(
             self._fun,
             x0=x0,
             bounds=bounds,
-            args=(amps, dof),
             minimizer_kwargs={
                 'method': 'Newton-CG',
                 'jac': self._jac,

@@ -316,9 +316,8 @@ class TestModesFitting:
         amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
 
         ns, fs = 210, 100
-        modes = mechanical.ModesProp(
-                freqs, fs, ns, n_out=n_out, n_in=n_in)
-        res = modes.fit(amps_m)
+        modes = mechanical.ModesProp(freqs, amps_m, fs, ns)
+        res = modes.fit()
         modes_fit = res.x.reshape(n_out, dof)
         # The result is unique up to a sign flip in each mode.
         modes_fit *= np.sign(modes_m[0, :]/modes_fit[0, :])[np.newaxis, :]
@@ -326,6 +325,7 @@ class TestModesFitting:
         assert res.success
         assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)
 
+    @pytest.mark.dependency(depends=["test_prop"])
     def test_complex(self):
         dof, n_out, n_in = 4, 3, 2
         rng = np.random.default_rng()
@@ -342,8 +342,8 @@ class TestModesFitting:
         ns, fs = 210, 100
         # Fit as proportional as initial guess.
         modes = mechanical.ModesProp(
-                freqs, fs, ns, n_out=n_out, n_in=n_in)
-        res = modes.fit(amps_m)
+                freqs, amps_m, fs, ns)
+        res = modes.fit()
 
         # Check that real modes are not good enough.
         modes_real = res.x.reshape(n_out, dof)
