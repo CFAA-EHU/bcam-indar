@@ -735,6 +735,78 @@ class ModesProp:
         return res
 
 
+class ConstraintModifier:
+
+    def __init__(self, shift, scale):
+        self.shift = shift
+        self.scale = scale
+        self._base = scipy.interpolate.BSpline.basis_element([0, 0.5, 1])
+
+    def __call__(self, x):
+        def f(x):
+            y = np.array(x)
+            y[y < 0] = 0
+            r1 = 2*self._base.antiderivative(nu=2)(y[y < 1]) + 0.5
+            r2 = y[y >=1]
+            return np.concatenate((r1, r2))
+
+        return self.scale*f((x - self.shift)/self.scale) + self.shift
+
+    def derivative(self, nu=0):
+        if nu == 0:
+            return self
+        elif nu == 1:
+            def f(x):
+                y = np.array(x)
+                y[y < 0] = 0
+                y[y > 1] = 1
+                return 2*self._base.antiderivative(nu=1)(y)
+            def f_(x):
+                return f((x - self.shift)/self.scale)
+            return f_
+        elif nu == 2:
+            def f(x):
+                y = np.array(x)
+                y[y < 0] = 0
+                y[y > 1] = 1
+                return 2*self._base(y)
+            def f_(x):
+                return f((x - self.shift)/self.scale)/self.scale
+            return f_
+
+class ScalarComposition:
+
+    def __init__(self, scalar, f, df, d2f):
+        self.scalar = scalar
+        self.f = f
+        self.df = df
+        self.d2f = d2f
+
+    def __call__(self, x):
+        return self.scalar(self.f(x))
+
+    def jac(self, x):
+        a = self.scalar.derivative(nu=1)(self.f(x))
+        if a == 0:
+            return np.zeros_like(x)
+        else:
+            return a * self.df(x)
+
+    def hessp(self, x, p):
+        a = self.scalar.derivative(nu=1)(self.f(x))
+        if a == 0:
+            r = 0
+        else:
+            r = a * self.d2f(x, p)
+
+        a = self.scalar.derivative(nu=2)(self.f(x))
+        if a == 0:
+            return r
+        else:
+            df = self.df(x)
+            r += a * (df @ p) * df
+            return r
+
 class _Hess_constraint(scipy.sparse.linalg.
 LinearOperator):
     
