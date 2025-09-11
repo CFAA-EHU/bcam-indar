@@ -99,8 +99,10 @@ def test_jac_lu():
     dx = dx[derivatives.pivot_to_permutation(piv)]
     assert np.allclose(dx, dl@u + l@du)
 
+
 # Tests for modes
 # ---------------
+
 def test_reshape_modes():
     dof, n_out = 4, 3
     rng = np.random.default_rng(1268)
@@ -223,8 +225,10 @@ class TestModes:
                 break
         assert test
 
-# Mechanical tests
-# ----------------
+
+# Fitting tests
+# -------------
+
 class TestAmplitudes:
 
     @staticmethod
@@ -301,3 +305,59 @@ class TestAmplitudes:
         amps_fit = model.fit(data)
         error = np.linalg.norm(amps_fit - amps, axis=-1) / np.linalg.norm(amps, axis=-1)
         assert np.max(error) < 1e-2
+
+class TestModesFitting:
+
+    def test_prop(self):
+        dof, n_out, n_in = 4, 3, 2
+        rng = np.random.default_rng()
+        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        modes_m = rng.normal(size=(n_out, dof))
+        amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
+
+        ns, fs = 210, 100
+        modes = mechanical.ModesProp(
+                freqs, fs, ns, n_out=n_out, n_in=n_in)
+        res = modes.fit(amps_m)
+        modes_fit = res.x.reshape(n_out, dof)
+        # The result is unique up to a sign flip in each mode.
+        modes_fit *= np.sign(modes_m[0, :]/modes_fit[0, :])[np.newaxis, :]
+
+        assert res.success
+        assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)
+
+    def test_complex(self):
+        dof, n_out, n_in = 4, 3, 2
+        rng = np.random.default_rng()
+        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        coords = np.arange(n_out)
+        modes_m = np.nan
+        while isinstance(modes_m, float):
+            xm = rng.normal(size=(n_out, dof))
+            zm = 5e-2*rng.normal(size=(n_out, dof))
+            zm[:n_out, :n_out] = zm[:n_out, :n_out] - zm[:n_out, :n_out].T
+            modes_m = mechanical.PartialModesMap(freqs, coords)(xm, zm)
+        amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
+
+        ns, fs = 210, 100
+        # Fit as proportional as initial guess.
+        modes = mechanical.ModesProp(
+                freqs, fs, ns, n_out=n_out, n_in=n_in)
+        res = modes.fit(amps_m)
+
+        # Check that real modes are not good enough.
+        modes_real = res.x.reshape(n_out, dof)
+        # The result is unique up to a sign flip in each mode.
+        modes_real *= np.sign(np.real(modes_m[0, :]/modes_real[0, :]))[np.newaxis, :]
+        assert not np.allclose(modes_real, modes_m, rtol=1e-4, atol=0.)
+
+        modes = mechanical.Modes(freqs, coords, amps_m, fs, ns)
+        x0 = np.pad(res.x, (0, n_out*dof - n_out*(n_out+1)//2))
+        res = modes.fit(x0, options={'verbose': 2})
+        xf, zf = mechanical.reshape_modes_input(res.x, dof, n_out)
+        modes_fit = mechanical.PartialModesMap(freqs, coords)(xf, zf)
+        # The result is unique up to a sign flip in each mode.
+        modes_fit *= np.sign(np.real(modes_m[0, :]/modes_fit[0, :]))[np.newaxis, :]
+
+        assert res.success
+        assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)

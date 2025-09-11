@@ -536,11 +536,11 @@ class PartialModesMap:
     def constraints(self, x, z):
         self.point = (x, z)
         q = self._grass[0]
-        c_res = -np.sum(np.log(np.diag(q[self.coords])))
+        c_res = -np.mean(np.log(np.diag(q[self.coords])))
         if isinstance(self._chk, float) and np.isnan(self._chk):
-            c_pos = np.inf
+            c_pos = 1e50
         else:
-            c_pos = -np.sum(np.log(np.diag(self._chk)))
+            c_pos = -np.mean(np.log(np.diag(self._chk)))
         return np.array([c_res, c_pos])
 
     def _dmass(self, dz_):
@@ -560,15 +560,15 @@ class PartialModesMap:
             self.vector = (dx, dz)
             dq = self._dq
             jac = np.zeros(2)
-            
-            jac[0] = -np.sum(np.diag(dq[self.coords])/np.diag(q[self.coords]))
+
+            jac[0] = -np.mean(np.diag(dq[self.coords])/np.diag(q[self.coords]))
 
             if isinstance(self._chk, float):
                 jac[1] = 0
             else:
                 dchk = self._dmass(self._dz_)
                 dchk = derivatives.jac_cho(self._chk, dchk)
-                jac[1] = -np.sum(np.diag(dchk)/np.diag(self._chk))
+                jac[1] = -np.mean(np.diag(dchk)/np.diag(self._chk))
             return jac
 
         return d_constr
@@ -599,7 +599,7 @@ class PartialModesMap:
                 pdq, pds, self._dq, self._ds, self.coords, self._grass)
             hessp = np.zeros(2)
 
-            hessp[0] = -np.sum(local(
+            hessp[0] = -np.mean(local(
                 q[self.coords], self._dq[self.coords], pdq[self.coords], pd2q[self.coords]))
 
             if isinstance(self._chk, float):
@@ -610,7 +610,7 @@ class PartialModesMap:
                 d2chk = self._hessp_m(pz, pdz_, pdq, pd2q)
 
                 d2chk = derivatives.jac_cho(self._chk, d2chk - pdchk.T@dchk - dchk.T@pdchk)
-                hessp[1] = -np.sum(local(self._chk, dchk, pdchk, d2chk))
+                hessp[1] = -np.mean(local(self._chk, dchk, pdchk, d2chk))
             return hessp
 
         return hessp_fun
@@ -725,7 +725,8 @@ class ModesProp:
             minimizer_kwargs={
                 'method': 'Newton-CG',
                 'jac': self._jac,
-                'hessp': self._hessp
+                'hessp': self._hessp,
+                'options': {'xtol': 1e-4}
             })
         return res
 
@@ -781,7 +782,7 @@ class Modes:
 
         modes = self._modes_map(x_, z_)
         if isinstance(modes, float):
-            return np.nan
+            return np.inf
         amps = mode_to_amps(modes, n_out, n_in)
         diff = amps - self.amps
         diff = np.concatenate(
@@ -881,21 +882,28 @@ class Modes:
         r = scipy.optimize.NonlinearConstraint(
             constr_fun,
             lb=np.array([-np.inf, -np.inf]),
-            ub=np.array([10, 0]),
+            ub=np.array([5, 5]),
             jac=constr_jac,
             hess=constr_hess,
             keep_feasible=True
         )
         return r
 
-    def fit(self, x0):
+    def fit(self, x0, options=None):
+        options = {} if options is None else options
+        if 'gtol' not in options.keys():
+            options['gtol'] = 1e-1
+        if 'xtol' not in options.keys():
+            options['xtol'] = 1e-6
+
         res = scipy.optimize.minimize(
             self._fun,
             x0=x0,
             method='trust-constr',
             jac=self._jac,
             hessp=self._hessp,
-            constraints=self._get_constraints()
+            constraints=self._get_constraints(),
+            options=options
         )
         return res
 
