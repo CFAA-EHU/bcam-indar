@@ -953,7 +953,7 @@ class Modes:
             return np.array(hessp).T
 
         dim = 2*n_out*dof - n_out*(n_out+1)//2
-        scalar_f = ConstraintModifier(shift=np.array([2, -10]), scale=0.1)
+        scalar_f = ConstraintModifier(shift=np.array([2, 0]), scale=0.1)
         constraints = ScalarComposition(
             scalar_f, constr_fun, constr_jac, constr_hessp, (2, dim))
 

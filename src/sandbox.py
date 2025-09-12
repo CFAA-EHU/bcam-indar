@@ -34,6 +34,9 @@ modes_fit = mechanical.PartialModesMap(freqs, coords)(xf, zf)
 # The result is unique up to a sign flip in each mode.
 modes_fit *= np.sign(np.real(modes_m[0, :]/modes_fit[0, :]))[np.newaxis, :]
 
+print(res.success)
+print(np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.))
+
 # # %%
 # # Rudimentary plot of objective function in 2D slice of input space.
 # xi = rng.normal(size=(n_out, dof))
