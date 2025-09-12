@@ -776,35 +776,36 @@ class ConstraintModifier:
 
 class ScalarComposition:
 
-    def __init__(self, scalar, f, df, d2f):
+    def __init__(self, scalar, f, df, d2f, dim):
         self.scalar = scalar
         self.f = f
         self.df = df
         self.d2f = d2f
+        self.dim = dim
 
     def __call__(self, x):
         return self.scalar(self.f(x))
 
     def jac(self, x):
         a = self.scalar.derivative(nu=1)(self.f(x))
-        if a == 0:
-            return np.zeros_like(x)
+        if np.all(a == 0):
+            return np.zeros(self.dim)
         else:
-            return a * self.df(x)
+            return a[:, np.newaxis] * self.df(x)
 
     def hessp(self, x, p):
         a = self.scalar.derivative(nu=1)(self.f(x))
-        if a == 0:
-            r = 0
+        if np.all(a == 0):
+            r = np.zeros(self.dim)
         else:
-            r = a * self.d2f(x, p)
+            r = a[:, np.newaxis] * self.d2f(x, p)
 
         a = self.scalar.derivative(nu=2)(self.f(x))
-        if a == 0:
+        if np.all(a == 0):
             return r
         else:
             df = self.df(x)
-            r += a * (df @ p) * df
+            r += (a * (df @ p))[:, np.newaxis] * df
             return r
 
 class _Hess_constraint(scipy.sparse.linalg.
@@ -944,22 +945,28 @@ class Modes:
             jac = [jac(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
             return np.array(jac).T
 
-        dim = 2*n_out*dof - n_out*(n_out+1)//2
-        def constr_hess(x, v):
+        def constr_hessp(x, p):
             x_, z_ = reshape_modes_input(x, dof, n_out)
-            def hess(p):
-                px, pz = reshape_modes_input(p, dof, n_out)
-                hess_ = self._modes_map.hessp_constraints(x_, z_, px, pz)
-                hess_ = [hess_(dx, dz)@v for dx, dz in basis_iterator(n_out, dof)]
-                return np.array(hess_)
+            px, pz = reshape_modes_input(p, dof, n_out)
+            hessp = self._modes_map.hessp_constraints(x_, z_, px, pz)
+            hessp = [hessp(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+            return np.array(hessp).T
 
+        dim = 2*n_out*dof - n_out*(n_out+1)//2
+        scalar_f = ConstraintModifier(shift=np.array([2, -10]), scale=0.1)
+        constraints = ScalarComposition(
+            scalar_f, constr_fun, constr_jac, constr_hessp, (2, dim))
+
+        def constr_hess(x, v):
+            def hess(p):
+                return v @ constraints.hessp(x, p)
             return _Hess_constraint(dim, hess)
 
         r = scipy.optimize.NonlinearConstraint(
-            constr_fun,
+            constraints,
             lb=np.array([-np.inf, -np.inf]),
             ub=np.array([5, 5]),
-            jac=constr_jac,
+            jac=constraints.jac,
             hess=constr_hess,
             keep_feasible=True
         )

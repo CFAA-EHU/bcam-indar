@@ -9,18 +9,6 @@ import matplotlib.pyplot as plt
 from bcam.resonance._core import mechanical
 
 
-# ==========================
-# Test ConstraintModifier
-# ==========================
-shift, scale = 1.2, 0.2
-x = np.linspace(0, 3, 500)
-modifier = mechanical.ConstraintModifier(shift, scale)
-
-fig, ax = plt.subplots()
-ax.plot(x, modifier.derivative(2)(x), label='phi')
-
-plt.show()
-
 # # ==========================
 # # Test loss function and df
 # # for real mode shapes

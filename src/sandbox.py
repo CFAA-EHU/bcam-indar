@@ -9,7 +9,7 @@ from bcam.resonance import mechanical
 
 # %%
 dof, n_out, n_in = 4, 3, 2
-rng = np.random.default_rng()
+rng = np.random.default_rng(123456)
 freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
 coords = np.arange(n_out)
 modes_m = np.nan
