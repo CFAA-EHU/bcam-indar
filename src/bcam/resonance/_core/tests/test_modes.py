@@ -317,12 +317,11 @@ class TestModesFitting:
 
         ns, fs = 210, 100
         modes = mechanical.ModesProp(freqs, amps_m, fs, ns)
-        res = modes.fit()
-        modes_fit = res.x.reshape(n_out, dof)
+        modes_fit = modes.fit()
         # The result is unique up to a sign flip in each mode.
         modes_fit *= np.sign(modes_m[0, :]/modes_fit[0, :])[np.newaxis, :]
 
-        assert res.success
+        assert modes.success_
         assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)
 
     @pytest.mark.dependency(depends=["test_prop"])
@@ -343,21 +342,18 @@ class TestModesFitting:
         # Fit as proportional as initial guess.
         modes = mechanical.ModesProp(
                 freqs, amps_m, fs, ns)
-        res = modes.fit()
+        modes_real = modes.fit()
 
         # Check that real modes are not good enough.
-        modes_real = res.x.reshape(n_out, dof)
         # The result is unique up to a sign flip in each mode.
         modes_real *= np.sign(np.real(modes_m[0, :]/modes_real[0, :]))[np.newaxis, :]
         assert not np.allclose(modes_real, modes_m, rtol=1e-4, atol=0.)
 
         modes = mechanical.Modes(freqs, coords, amps_m, fs, ns)
-        x0 = np.pad(res.x, (0, n_out*dof - n_out*(n_out+1)//2))
-        res = modes.fit(x0, options={'verbose': 2})
-        xf, zf = mechanical.reshape_modes_input(res.x, dof, n_out)
-        modes_fit = mechanical.PartialModesMap(freqs, coords)(xf, zf)
+        x0 = (modes_real, np.zeros_like(modes_real))
+        modes_fit = modes.fit(x0, options={'verbose': 2})
         # The result is unique up to a sign flip in each mode.
         modes_fit *= np.sign(np.real(modes_m[0, :]/modes_fit[0, :]))[np.newaxis, :]
 
-        assert res.success
+        assert modes.success_
         assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)

@@ -637,6 +637,10 @@ class ModesProp:
         self.fs = fs
         self.ns = ns
 
+        self.modes_fit_ = None
+        self.success_ = None
+        self.message_ = None
+
         self._get_metric()
 
     def _get_metric(self):
@@ -732,7 +736,10 @@ class ModesProp:
                 'hessp': self._hessp,
                 'options': {'xtol': 1e-4}
             })
-        return res
+        self.modes_fit_ = res.x.reshape(n_out, dof)
+        self.success_ = res.success
+        self.message_ = res.message
+        return self.modes_fit_
 
 
 class ConstraintModifier:
@@ -849,6 +856,17 @@ class Modes:
 
         self._get_metric()
 
+        self._raw_modes_fit = None
+        self.success_ = None
+        self.message_ = None
+
+    @property
+    def modes_fit_(self):
+        if self._raw_modes_fit is None:
+            msg = 'Call fit() before accessing modes_fit_.'
+            raise ValueError(msg)
+        return self._modes_map(*self._raw_modes_fit)
+
     def _get_metric(self):
         self._metric = metric_amps(
             self.freqs, self.fs, self.ns, a_type='normal')
@@ -953,7 +971,8 @@ class Modes:
             return np.array(hessp).T
 
         dim = 2*n_out*dof - n_out*(n_out+1)//2
-        scalar_f = ConstraintModifier(shift=np.array([2, 0]), scale=0.1)
+        shift = self._ref_constr + np.array([1, 1])
+        scalar_f = ConstraintModifier(shift, 0.1)
         constraints = ScalarComposition(
             scalar_f, constr_fun, constr_jac, constr_hessp, (2, dim))
 
@@ -979,16 +998,22 @@ class Modes:
         if 'xtol' not in options.keys():
             options['xtol'] = 1e-6
 
+        self._ref_constr = self._modes_map.constraints(*x0)
+
         res = scipy.optimize.minimize(
             self._fun,
-            x0=x0,
+            x0=reshape_modes_output(*x0),
             method='trust-constr',
             jac=self._jac,
             hessp=self._hessp,
             constraints=self._get_constraints(),
             options=options
         )
-        return res
+        n_out, _, dof = self.amps.shape
+        self._raw_modes_fit = reshape_modes_input(res.x, dof, n_out)
+        self.success_ = res.success
+        self.message_ = res.message
+        return self.modes_fit_
 
 
 def modal_to_system(mode_shapes, Z):
