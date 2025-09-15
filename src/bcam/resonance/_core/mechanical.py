@@ -48,33 +48,17 @@ def _validate_dims(M, C, K, check_symmetry=True):
 # Amplitudes
 # =================================
 
-def metric_amps(freqs, fs, ns, a_type='normal'):
-    dof = len(freqs)
-    def _mult(x, y):
-        r = x[np.newaxis, :] + y[:, np.newaxis]
-        r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
-        r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs)) * np.sinh(y[:, np.newaxis]/(2*fs))
-        return r
+def _sinh_m(x):
+    eps = np.finfo(x.dtype).eps
+    y = np.where(x, x, eps)
+    return -np.exp(-y/2) / (2*np.sinh(y/2))
 
-    m1 = _mult(freqs, np.conj(freqs))
-    m2 = _mult(freqs, freqs)
-
-    if a_type == 'normal':
-        L = 2*dof
-        m = np.zeros((L, L))
-        m[:dof, :dof] = np.real(m1 - m2)
-        m[dof:, :dof] = np.imag(m1 + m2)
-        m[:dof, dof:] = m[dof:, :dof].T
-        m[dof:, dof:] = np.real(m1 + m2)
-    elif a_type == 'mechanical':
-        L = 2*dof-1
-        m = np.zeros((L, L))
-        m[:dof, :dof] = np.real(m1 - m2)
-        m[dof:, :dof] = trig_fft(np.imag(m1 + m2).T)[..., 1:].T
-        m[:dof, dof:] = m[dof:, :dof].T
-        m[dof:, dof:] = trig_fft(trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
-    m *= 0.5
-    return m
+def _sum_exp_weighted(a, fs: float, ns: int):
+    # TODO: add the case a = 0.
+    T = ns / fs
+    r = 1 - _sinh_m(a/fs)*np.exp(a/fs)*(1 - np.exp(a*T))/ns
+    r *= _sinh_m(a/fs) / fs
+    return r
 
 def trig_fft(x):
     '''
@@ -108,18 +92,34 @@ def trig_ifft(x):
     x_inv = np.fft.irfft(x_inv, N, axis=-1, norm='ortho')
     return x_inv
 
-def _sinh_m(x):
-    eps = np.finfo(x.dtype).eps
-    y = np.where(x, x, eps)
-    return -np.exp(-y/2) * y / (2*np.sinh(y/2))
+def metric_amps(freqs, fs, ns, a_type='normal'):
+    dof = len(freqs)
+    def _mult(x, y):
+        r = x[np.newaxis, :] + y[:, np.newaxis]
+        r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
+        r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs)) * np.sinh(y[:, np.newaxis]/(2*fs))
+        return r
 
-def _sum_exp_weighted(a, fs: float, ns: int):
-    # TODO: add the case a = 0.
-    T = ns / fs
-    r = 1 + (1 - np.exp(a*T))/ns
-    r = r - _sinh_m(a/fs) * np.exp(a/fs) * (1 - np.exp(a*T)) / (a*T)
-    r = r * _sinh_m(a/fs) / a
-    return r
+    m1 = _mult(freqs, np.conj(freqs))
+    m2 = _mult(freqs, freqs)
+
+    if a_type == 'normal':
+        L = 2*dof
+        m = np.zeros((L, L))
+        m[:dof, :dof] = np.real(m1 - m2)
+        m[dof:, :dof] = np.imag(m1 + m2)
+        m[:dof, dof:] = m[dof:, :dof].T
+        m[dof:, dof:] = np.real(m1 + m2)
+    elif a_type == 'mechanical':
+        L = 2*dof-1
+        m = np.zeros((L, L))
+        m[:dof, :dof] = np.real(m1 - m2)
+        m[dof:, :dof] = trig_fft(np.imag(m1 + m2).T)[..., 1:].T
+        m[:dof, dof:] = m[dof:, :dof].T
+        m[dof:, dof:] = trig_fft(trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
+    m *= 0.5
+    return m
+
 
 def reshape_injection(x, n_out:int, n_in:int):
     '''
@@ -994,9 +994,9 @@ class Modes:
     def fit(self, x0, options=None):
         options = {} if options is None else options
         if 'gtol' not in options.keys():
-            options['gtol'] = 1e-1
+            options['gtol'] = 1e-2
         if 'xtol' not in options.keys():
-            options['xtol'] = 1e-6
+            options['xtol'] = 1e-5
 
         self._ref_constr = self._modes_map.constraints(*x0)
 

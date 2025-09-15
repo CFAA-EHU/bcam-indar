@@ -225,9 +225,68 @@ class TestModes:
                 break
         assert test
 
+class TestModesFitting:
+
+    def test_prop(self):
+        dof, n_out, n_in = 4, 3, 2
+        rng = np.random.default_rng()
+        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        modes_m = rng.normal(size=(n_out, dof))
+        amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
+
+        ns, fs = 210, 100
+        modes = mechanical.ModesProp(freqs, amps_m, fs, ns)
+        modes_fit = modes.fit()
+        # The result is unique up to a sign flip in each mode.
+        modes_fit *= np.sign(modes_m[0, :]/modes_fit[0, :])[np.newaxis, :]
+
+        assert modes.success_
+        assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)
+
+    def test_complex(self):
+        dof, n_out, n_in = 4, 3, 2
+        rng = np.random.default_rng()
+        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        coords = np.arange(n_out)
+        modes_m = np.nan
+        while isinstance(modes_m, float):
+            xm = rng.normal(size=(n_out, dof))
+            zm = 5e-2*rng.normal(size=(n_out, dof))
+            zm[:n_out, :n_out] = zm[:n_out, :n_out] - zm[:n_out, :n_out].T
+            modes_m = mechanical.PartialModesMap(freqs, coords)(xm, zm)
+        amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
+
+        ns, fs = 210, 100
+        # Fit as proportional as initial guess.
+        modes = mechanical.ModesProp(
+                freqs, amps_m, fs, ns)
+        modes_real = modes.fit()
+
+        # Check that real modes are not good enough.
+        # The result is unique up to a sign flip in each mode.
+        modes_real *= np.sign(np.real(modes_m[0, :]/modes_real[0, :]))[np.newaxis, :]
+        assert not np.allclose(modes_real, modes_m, rtol=1e-4, atol=0.)
+
+        modes = mechanical.Modes(freqs, coords, amps_m, fs, ns)
+        x0 = (modes_real, np.zeros_like(modes_real))
+        modes_fit = modes.fit(x0, options={'verbose': 2})
+        # The result is unique up to a sign flip in each mode.
+        modes_fit *= np.sign(np.real(modes_m[0, :]/modes_fit[0, :]))[np.newaxis, :]
+
+        assert modes.success_
+        assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)
 
 # Fitting tests
 # -------------
+
+def test_trig_fft():
+    rng = np.random.default_rng()
+    n = 10
+    x = rng.normal(size=n)
+    x = x - np.mean(x)
+    x_fft = mechanical.trig_fft(x)
+    x_ifft = mechanical.trig_ifft(x_fft)
+    assert np.allclose(x, x_ifft)
 
 class TestAmplitudes:
 
@@ -273,8 +332,8 @@ class TestAmplitudes:
             n_in=n_in
         )
         amps_fit = model.fit(data, penalty=0.)
-        error = np.linalg.norm(amps_fit - amps, axis=-1) / np.linalg.norm(amps, axis=-1)
-        assert np.max(error) < 1e-2
+        data_pred = self.kernel(ns, fs, amps_fit, freqs)
+        assert np.allclose(data, data_pred, atol=0.)
 
     def test_mech_amps(self):
         dof = 4
@@ -285,14 +344,13 @@ class TestAmplitudes:
             freqs_range=(2 * np.pi * 1, 2 * np.pi * 20),
             damping_type='nop',
             seed=123456)[1]
-        psi = modal['mode_shapes']
         freqs = modal['frequencies']
+        modes = modal['mode_shapes']
+        modes = modes * (1/np.sqrt(np.imag(freqs)))[np.newaxis, :]
         ns, fs = 210, 100
         n_out, n_in = 3, 2
 
-        amps = psi.reshape(dof, 1, dof) * psi.reshape(1, dof, dof)
-        amps = amps * (1/np.imag(freqs)).reshape(1, 1, dof)
-        amps = amps[:n_out, :n_in]
+        amps = mechanical.mode_to_amps(modes, n_out, n_in)
         data = self.kernel(ns, fs, amps, freqs)
 
         model = mechanical.Amplitudes(
@@ -302,58 +360,6 @@ class TestAmplitudes:
             n_out=n_out,
             n_in=n_in,
             a_type='mechanical')
-        amps_fit = model.fit(data)
-        error = np.linalg.norm(amps_fit - amps, axis=-1) / np.linalg.norm(amps, axis=-1)
-        assert np.max(error) < 1e-2
-
-class TestModesFitting:
-
-    def test_prop(self):
-        dof, n_out, n_in = 4, 3, 2
-        rng = np.random.default_rng()
-        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-        modes_m = rng.normal(size=(n_out, dof))
-        amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
-
-        ns, fs = 210, 100
-        modes = mechanical.ModesProp(freqs, amps_m, fs, ns)
-        modes_fit = modes.fit()
-        # The result is unique up to a sign flip in each mode.
-        modes_fit *= np.sign(modes_m[0, :]/modes_fit[0, :])[np.newaxis, :]
-
-        assert modes.success_
-        assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)
-
-    @pytest.mark.dependency(depends=["test_prop"])
-    def test_complex(self):
-        dof, n_out, n_in = 4, 3, 2
-        rng = np.random.default_rng()
-        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-        coords = np.arange(n_out)
-        modes_m = np.nan
-        while isinstance(modes_m, float):
-            xm = rng.normal(size=(n_out, dof))
-            zm = 5e-2*rng.normal(size=(n_out, dof))
-            zm[:n_out, :n_out] = zm[:n_out, :n_out] - zm[:n_out, :n_out].T
-            modes_m = mechanical.PartialModesMap(freqs, coords)(xm, zm)
-        amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
-
-        ns, fs = 210, 100
-        # Fit as proportional as initial guess.
-        modes = mechanical.ModesProp(
-                freqs, amps_m, fs, ns)
-        modes_real = modes.fit()
-
-        # Check that real modes are not good enough.
-        # The result is unique up to a sign flip in each mode.
-        modes_real *= np.sign(np.real(modes_m[0, :]/modes_real[0, :]))[np.newaxis, :]
-        assert not np.allclose(modes_real, modes_m, rtol=1e-4, atol=0.)
-
-        modes = mechanical.Modes(freqs, coords, amps_m, fs, ns)
-        x0 = (modes_real, np.zeros_like(modes_real))
-        modes_fit = modes.fit(x0, options={'verbose': 2})
-        # The result is unique up to a sign flip in each mode.
-        modes_fit *= np.sign(np.real(modes_m[0, :]/modes_fit[0, :]))[np.newaxis, :]
-
-        assert modes.success_
-        assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)
+        amps_fit = model.fit(data, penalty=0.)
+        data_pred = self.kernel(ns, fs, amps_fit, freqs)
+        assert np.allclose(data, data_pred, atol=0.)
