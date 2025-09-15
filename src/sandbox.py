@@ -8,8 +8,8 @@ import matplotlib.pyplot as plt
 from bcam.resonance import mechanical
 
 # %%
-seed = 52453643
-dof = 2
+seed = None
+dof = 4
 modal = mechanical.randomSystem(
     dof,
     mass_range=(1, 2),
@@ -33,15 +33,15 @@ modes_ns = modal['mode_shapes']
 modes = modes_ns * (1/np.sqrt(np.imag(freqs)))[np.newaxis, :]
 
 # %%
-ns, fs = 9, 100
-n_out, n_in = 2, 2
+ns, fs = 210, 100
+n_out, n_in = 3, 2
 rng = np.random.default_rng(seed)
 
 fm = 1e0
 amps = fm * mechanical.mode_to_amps(modes, n_out, n_in)
 
 data = kernel(ns, fs, amps, freqs)
-data_noise = data + rng.normal(scale=0, size=data.shape)
+data_noise = data + rng.normal(scale=1e-2, size=data.shape)
 
 # %%
 # Plot kernel and noisy version
@@ -80,8 +80,8 @@ fig.suptitle('True and Fitted Data')
 t = np.arange(ns) / fs
 for i in range(n_out):
     for j in range(n_in):
-        axs[i, j].scatter(t, data[i, j, :], label='True')
-        axs[i, j].scatter(t, data_fit[i, j, :], label='Fitted', alpha=0.7)
+        axs[i, j].plot(t, data[i, j, :], label='True')
+        axs[i, j].plot(t, data_fit[i, j, :], label='Fitted', alpha=0.7)
         axs[i, j].set_title(f'Output {i+1}, Input {j+1}')
         axs[i, j].set_xlabel('Time [s]')
         axs[i, j].set_ylabel('Amplitude')
@@ -90,40 +90,28 @@ plt.tight_layout()
 plt.show()
 
 # %%
+# Fit with real modes.
 rescale = np.max(np.abs(amps_fit))
 mode_fitter = mechanical.ModesProp(freqs, amps_fit/rescale, fs, ns)
 modes_fit_R = np.sqrt(rescale) * mode_fitter.fit()
 
-amps_R = mechanical.mode_to_amps(modes_fit_R, n_out, n_in)
-error = (np.linalg.norm(
-    kernel(ns, fs, amps_R, freqs) - data_fit,
-    axis=-1) / np.linalg.norm(data_fit, axis=-1)).max()
-print(f'Max error in data fit: {error:.2e}')
-del amps_R
-
-with np.printoptions(formatter={'complexfloat': '{:.2e}'.format, 'float': '{:.2e}'.format}):
+with np.printoptions(formatter={'complexfloat': '{:.3e}'.format, 'float': '{:.3e}'.format}):
     print('Original modes:\n', modes[:n_out])
     print('Fitter real modes:\n', modes_fit_R)
 
-# # %%
-# coords = np.arange(n_out)
-# rescale = np.max(np.abs(amps_fit))
-# mode_fitter = mechanical.Modes(freqs, coords, amps_fit/rescale, fs, ns)
-# x0 = (modes_fit_R/np.sqrt(rescale), np.zeros_like(modes_fit_R))
-# modes_fit_C = np.sqrt(rescale) * mode_fitter.fit(
-#     x0, 
-#     options={'verbose': 2, 'gtol': 1e-3})
+# %%
+# Fit with complex modes.
+coords = np.arange(n_out)
+rescale = np.max(np.abs(amps_fit))
+mode_fitter = mechanical.Modes(freqs, coords, amps_fit/rescale, fs, ns)
+x0 = (modes_fit_R/np.sqrt(rescale), np.zeros_like(modes_fit_R))
+modes_fit_C = np.sqrt(rescale) * mode_fitter.fit(
+    x0, 
+    options={'verbose': 2, 'gtol': 1e-6, 'xtol': 1e-4})
 
-# amps_C = mechanical.mode_to_amps(modes_fit_C, n_out, n_in)
-# error = (np.linalg.norm(
-#     kernel(ns, fs, amps_C, freqs) - data_fit,
-#     axis=-1) / np.linalg.norm(data_fit, axis=-1)).max()
-# print(f'Max error in data fit: {error:.2e}')
-# del amps_C
-
-# with np.printoptions(formatter={'complexfloat': '{:.2e}'.format}):
-#     print(f'Original modes:\n{modes[:n_out]}')
-#     print(f'Fitter complex modes:\n{modes_fit_C}')
+with np.printoptions(formatter={'complexfloat': '{:.2e}'.format}):
+    print(f'Original modes:\n{modes[:n_out]}')
+    print(f'Fitter complex modes:\n{modes_fit_C}')
 
 # %%
 # # Rudimentary plot of objective function in 2D slice of input space.
