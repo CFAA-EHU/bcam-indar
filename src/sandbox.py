@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 
 # %%
+import logging
+
 import numpy as np
 import scipy
 import matplotlib.pyplot as plt
@@ -8,7 +10,7 @@ import matplotlib.pyplot as plt
 from bcam.resonance import mechanical
 
 # %%
-seed = None
+seed = 745653
 dof = 4
 modal = mechanical.randomSystem(
     dof,
@@ -44,21 +46,21 @@ data = kernel(ns, fs, amps, freqs)
 data_noise = data + rng.normal(scale=1e-2, size=data.shape)
 
 # %%
-# Plot kernel and noisy version
-fig, axs = plt.subplots(n_out, n_in, figsize=(10, 6))
-axs = np.atleast_2d(axs)
-fig.suptitle('True and Noisy Data')
-t = np.arange(ns) / fs
-for i in range(n_out):
-    for j in range(n_in):
-        axs[i, j].plot(t, data[i, j, :], label='True')
-        axs[i, j].plot(t, data_noise[i, j, :], label='Noisy', alpha=0.7)
-        axs[i, j].set_title(f'Output {i+1}, Input {j+1}')
-        axs[i, j].set_xlabel('Time [s]')
-        axs[i, j].set_ylabel('Amplitude')
-        axs[i, j].legend()
-plt.tight_layout()
-plt.show()
+# # Plot kernel and noisy version
+# fig, axs = plt.subplots(n_out, n_in, figsize=(10, 6))
+# axs = np.atleast_2d(axs)
+# fig.suptitle('True and Noisy Data')
+# t = np.arange(ns) / fs
+# for i in range(n_out):
+#     for j in range(n_in):
+#         axs[i, j].plot(t, data[i, j, :], label='True')
+#         axs[i, j].plot(t, data_noise[i, j, :], label='Noisy', alpha=0.7)
+#         axs[i, j].set_title(f'Output {i+1}, Input {j+1}')
+#         axs[i, j].set_xlabel('Time [s]')
+#         axs[i, j].set_ylabel('Amplitude')
+#         axs[i, j].legend()
+# plt.tight_layout()
+# plt.show()
 
 # %%
 model = mechanical.Amplitudes(
@@ -71,26 +73,25 @@ model = mechanical.Amplitudes(
 amps_fit = model.fit(data_noise, penalty=0)
 
 # %%
-# Evaluate fit quality
-data_fit = kernel(ns, fs, amps_fit, freqs)
+# # Evaluate fit quality
+# data_fit = kernel(ns, fs, amps_fit, freqs)
 
-fig, axs = plt.subplots(n_out, n_in, figsize=(10, 6))
-axs = np.atleast_2d(axs)
-fig.suptitle('True and Fitted Data')
-t = np.arange(ns) / fs
-for i in range(n_out):
-    for j in range(n_in):
-        axs[i, j].plot(t, data[i, j, :], label='True')
-        axs[i, j].plot(t, data_fit[i, j, :], label='Fitted', alpha=0.7)
-        axs[i, j].set_title(f'Output {i+1}, Input {j+1}')
-        axs[i, j].set_xlabel('Time [s]')
-        axs[i, j].set_ylabel('Amplitude')
-        axs[i, j].legend()
-plt.tight_layout()
-plt.show()
+# fig, axs = plt.subplots(n_out, n_in, figsize=(10, 6))
+# axs = np.atleast_2d(axs)
+# fig.suptitle('True and Fitted Data')
+# t = np.arange(ns) / fs
+# for i in range(n_out):
+#     for j in range(n_in):
+#         axs[i, j].plot(t, data[i, j, :], label='True')
+#         axs[i, j].plot(t, data_fit[i, j, :], label='Fitted', alpha=0.7)
+#         axs[i, j].set_title(f'Output {i+1}, Input {j+1}')
+#         axs[i, j].set_xlabel('Time [s]')
+#         axs[i, j].set_ylabel('Amplitude')
+#         axs[i, j].legend()
+# plt.tight_layout()
+# plt.show()
 
 # %%
-# Fit with real modes.
 rescale = np.max(np.abs(amps_fit))
 mode_fitter = mechanical.ModesProp(freqs, amps_fit/rescale, fs, ns)
 modes_fit_R = np.sqrt(rescale) * mode_fitter.fit()
@@ -101,12 +102,15 @@ with np.printoptions(formatter={'complexfloat': '{:.3e}'.format, 'float': '{:.3e
 
 # %%
 # Fit with complex modes.
+log_mech = logging.getLogger('bcam.resonance._core.mechanical')
+log_mech.setLevel(logging.ERROR)
+
 coords = np.arange(n_out)
 rescale = np.max(np.abs(amps_fit))
 mode_fitter = mechanical.Modes(freqs, coords, amps_fit/rescale, fs, ns)
 x0 = (modes_fit_R/np.sqrt(rescale), np.zeros_like(modes_fit_R))
 modes_fit_C = np.sqrt(rescale) * mode_fitter.fit(
-    x0, 
+    x0,
     options={'verbose': 2, 'gtol': 1e-6, 'xtol': 1e-4})
 
 with np.printoptions(formatter={'complexfloat': '{:.2e}'.format}):

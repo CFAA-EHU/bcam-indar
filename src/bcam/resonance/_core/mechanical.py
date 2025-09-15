@@ -412,7 +412,7 @@ class PartialModesMap:
         try:
             q, s, s_inv = derivatives.grass(x.T, self.coords)
         except (scipy.linalg.LinAlgError, scipy.linalg.LinAlgWarning):
-            logging.warning('q[coords] is singular.')
+            logger.warning('q[coords] is singular.')
             self._psi = np.nan
             return
         self._grass = (q, s, s_inv)
@@ -433,7 +433,7 @@ class PartialModesMap:
                 m, lower=False, overwrite_a=True)
         except scipy.linalg.LinAlgError:
             self._chk = np.nan
-            logging.warning('Mass matrix is not positive-definite.')
+            logger.warning('Mass matrix is not positive-definite.')
             self._psi = np.nan
             return
 
@@ -992,24 +992,41 @@ class Modes:
         return r
 
     def fit(self, x0, options=None):
+        n_out, _, dof = self.amps.shape
+
+        self._ref_constr = self._modes_map.constraints(*x0)
+        idx = np.argwhere(np.diag(x0[0][0]) < 0)
+        x0[0][:, idx] = -x0[0][:, idx]
+
+        lb = -2*np.ones(2*n_out*dof - n_out*(n_out+1)//2)
+        lb[:dof] = 0
+        bounds = scipy.optimize.Bounds(
+            lb=lb,
+            ub=2*np.ones(2*n_out*dof - n_out*(n_out+1)//2))
+        res = scipy.optimize.differential_evolution(
+            self._fun,
+            bounds=bounds,
+            constraints=self._get_constraints(),
+            x0=reshape_modes_output(*x0),
+            polish=False,
+            disp=True,
+        )
+
         options = {} if options is None else options
         if 'gtol' not in options.keys():
             options['gtol'] = 1e-2
         if 'xtol' not in options.keys():
             options['xtol'] = 1e-5
-
-        self._ref_constr = self._modes_map.constraints(*x0)
-
         res = scipy.optimize.minimize(
             self._fun,
-            x0=reshape_modes_output(*x0),
+            x0=res.x,
             method='trust-constr',
             jac=self._jac,
             hessp=self._hessp,
             constraints=self._get_constraints(),
             options=options
         )
-        n_out, _, dof = self.amps.shape
+
         self._raw_modes_fit = reshape_modes_input(res.x, dof, n_out)
         self.success_ = res.success
         self.message_ = res.message
