@@ -235,7 +235,7 @@ class TestModesFitting:
         amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
 
         ns, fs = 210, 100
-        modes = mechanical.ModesProp(freqs, amps_m, fs, ns)
+        modes = mechanical.RealModes(freqs, amps_m, fs, ns)
         modes_fit = modes.fit()
         # The result is unique up to a sign flip in each mode.
         modes_fit *= np.sign(modes_m[0, :]/modes_fit[0, :])[np.newaxis, :]
@@ -258,7 +258,7 @@ class TestModesFitting:
 
         ns, fs = 210, 100
         # Fit as proportional as initial guess.
-        modes = mechanical.ModesProp(
+        modes = mechanical.RealModes(
                 freqs, amps_m, fs, ns)
         modes_real = modes.fit()
 
@@ -267,9 +267,9 @@ class TestModesFitting:
         modes_real *= np.sign(np.real(modes_m[0, :]/modes_real[0, :]))[np.newaxis, :]
         assert not np.allclose(modes_real, modes_m, rtol=1e-4, atol=0.)
 
-        modes = mechanical.Modes(freqs, coords, amps_m, fs, ns)
+        modes = mechanical.ComplexModes(freqs, coords, amps_m, fs, ns)
         x0 = (modes_real, np.zeros_like(modes_real))
-        modes_fit = modes.fit(x0, options={'verbose': 2})
+        modes_fit = modes.fit(x0, options={'verbose': 2, 'gtol': 1e-1})
         # The result is unique up to a sign flip in each mode.
         modes_fit *= np.sign(np.real(modes_m[0, :]/modes_fit[0, :]))[np.newaxis, :]
 

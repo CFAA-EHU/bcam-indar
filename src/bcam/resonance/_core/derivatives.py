@@ -39,7 +39,7 @@ def grass(x, coords):
     n, m = x.shape
     assert n >= m, 'x should be a 2D-array with shape (N, M) and N >= M.'
     if n == m:
-        return np.eye(n), x
+        return np.eye(n), x, None
 
     assert len(coords) == m, 'Incompatible length for coords.'
     coords_c = np.setdiff1d(
@@ -77,6 +77,9 @@ def jac_grass(dx, coords, grass):
     # (pi q)^{-1}(pi dx) = ds + (pi q)^{-1}(pi dq) s,
     # where pi is the projection to the rows in coords.
     q, s, inv_s = grass
+    if inv_s is None:
+        return np.zeros_like(q), q.T@dx
+
     a = scipy.linalg.solve(
         q[coords], dx[coords], assume_a='lower triangular')
     a = (q.T@dx - a)@inv_s
@@ -100,6 +103,9 @@ def jac_grass_minimal(dx, coords, grass):
 
 def hessp_grass(pdq, pds, dq, ds, coords, grass):
     q, s, inv_s = grass
+    if inv_s is None:
+        return np.zeros_like(pdq), np.zeros_like(pds)
+
     a = -pdq@ds - dq@pds
     b = -dq.T@pdq - pdq.T@dq
     qTpd2q = scipy.linalg.solve(

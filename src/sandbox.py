@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 # %%
+import logging
 import numpy as np
 import scipy
 import matplotlib.pyplot as plt
@@ -8,16 +9,6 @@ import matplotlib.pyplot as plt
 from bcam.resonance import mechanical
 
 # %%
-seed = None
-dof = 4
-modal = mechanical.randomSystem(
-    dof,
-    mass_range=(1, 2),
-    damping_range=(0.02, 0.05),
-    freqs_range=(2*np.pi, 2*np.pi*20),
-    damping_type='nop',
-    seed=seed)[1]
-
 def kernel(ns, fs, a, freqs):
     dof = len(freqs)
     t = np.arange(ns) / fs
@@ -28,6 +19,17 @@ def kernel(ns, fs, a, freqs):
     K = np.imag(np.sum(K, axis=-1))
     return K
 
+# %%
+seed = 123466
+dof = 4
+modal = mechanical.randomSystem(
+    dof,
+    mass_range=(1, 2),
+    damping_range=(0.02, 0.05),
+    freqs_range=(2*np.pi, 2*np.pi*20),
+    damping_type='nop',
+    seed=seed)[1]
+
 freqs = modal['frequencies']
 modes_ns = modal['mode_shapes']
 modes = modes_ns * (1/np.sqrt(np.imag(freqs)))[np.newaxis, :]
@@ -37,11 +39,10 @@ ns, fs = 210, 100
 n_out, n_in = 3, 2
 rng = np.random.default_rng(seed)
 
-fm = 1e0
-amps = fm * mechanical.mode_to_amps(modes, n_out, n_in)
+amps = mechanical.mode_to_amps(modes, n_out, n_in)
 
 data = kernel(ns, fs, amps, freqs)
-data_noise = data + rng.normal(scale=1e-2, size=data.shape)
+data_noise = data + rng.normal(scale=0, size=data.shape)
 
 # %%
 # Plot kernel and noisy version
@@ -92,10 +93,11 @@ plt.show()
 # %%
 # Fit with real modes.
 rescale = np.max(np.abs(amps_fit))
-mode_fitter = mechanical.ModesProp(freqs, amps_fit/rescale, fs, ns)
-modes_fit_R = np.sqrt(rescale) * mode_fitter.fit()
+mode_fitter = mechanical.RealModes(freqs, amps_fit/rescale, fs, ns)
+options = {'disp': True}
+modes_fit_R = np.sqrt(rescale) * mode_fitter.fit(options=options)
 
-with np.printoptions(formatter={'complexfloat': '{:.3e}'.format, 'float': '{:.3e}'.format}):
+with np.printoptions(formatter={'complexfloat': '{:.4e}'.format, 'float': '{:.4e}'.format}):
     print('Original modes:\n', modes[:n_out])
     print('Fitter real modes:\n', modes_fit_R)
 
@@ -103,41 +105,50 @@ with np.printoptions(formatter={'complexfloat': '{:.3e}'.format, 'float': '{:.3e
 # Fit with complex modes.
 coords = np.arange(n_out)
 rescale = np.max(np.abs(amps_fit))
-mode_fitter = mechanical.Modes(freqs, coords, amps_fit/rescale, fs, ns)
+mode_fitter = mechanical.ComplexModes(freqs, coords, amps_fit/rescale, fs, ns)
 x0 = (modes_fit_R/np.sqrt(rescale), np.zeros_like(modes_fit_R))
 modes_fit_C = np.sqrt(rescale) * mode_fitter.fit(
-    x0, 
-    options={'verbose': 2, 'gtol': 1e-6, 'xtol': 1e-4})
+    x0,
+    options={'verbose': 2})
 
 with np.printoptions(formatter={'complexfloat': '{:.2e}'.format}):
     print(f'Original modes:\n{modes[:n_out]}')
     print(f'Fitter complex modes:\n{modes_fit_C}')
 
 # %%
-# # Rudimentary plot of objective function in 2D slice of input space.
-# xi = rng.normal(size=(n_out, dof))
-# zi = 2e-2*rng.normal(size=(n_out, dof))
-# zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
-# pi = mechanical.reshape_modes_output(xi, zi)
+# Rudimentary plot of objective function in 2D slice of input space.
+p0_, p1_ = mode_fitter._raw_modes_fit
+center = modes_fit_R/np.sqrt(rescale)
+# Normalize directions.
+center = mechanical.reshape_modes_output(center, np.zeros_like(center))
+p0_ = mechanical.reshape_modes_output(p0_, np.zeros_like(p0_))
+p1_ = mechanical.reshape_modes_output(np.zeros_like(p1_), p1_)
+p0_ = p0_ - center
+l0_ = np.linalg.norm(p0_)
+l1_ = np.linalg.norm(p1_)
+p0 = p0_/l0_
+p1 = p1_/l1_
 
-# xf = rng.normal(size=(n_out, dof))
-# zf = 2e-2*rng.normal(size=(n_out, dof))
-# zf[:n_out, :n_out] = zf[:n_out, :n_out] - zf[:n_out, :n_out].T
-# pf = mechanical.reshape_modes_output(xf, zf)
+mech_logger = logging.getLogger('bcam.resonance._core.mechanical')
+mech_logger.setLevel('ERROR')
 
-# fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
-# X = np.linspace(-1, 1, 100)
-# Y = np.linspace(-1, 1, 100)
-# X, Y = np.meshgrid(X, Y)
-# xa = rng.normal(size=(n_out, dof))
-# pa = mechanical.reshape_modes_output(xa, np.zeros_like(xa))
-# Z = [[modes._fun(pa + l1*pi + l2*pf) for l1, l2 in zip(X[i, :], Y[i, :])]
-#      for i in range(X.shape[0])]
-# Z = np.array(Z)
-# ax.plot_surface(X, Y, Z)
-# # Label the axes
-# ax.set_xlabel('x')
-# ax.set_ylabel('y')
-# ax.set_zlabel('Objective')
+fig, ax = plt.subplots(subplot_kw={"projection": "3d"})
+X = np.linspace(-2, 2, 200)
+Y = np.linspace(-1, 1, 200)
+X, Y = np.meshgrid(X, Y)
+xa = rng.normal(size=(n_out, dof))
+pa = mechanical.reshape_modes_output(xa, np.zeros_like(xa))
+Z = [[mode_fitter._fun(center + l0*p0 + l1*p1) for l0, l1 in zip(X[i, :], Y[i, :])]
+     for i in range(X.shape[0])]
+Z = np.array(Z)
+ax.plot_surface(X, Y, Z)
+ax.scatter([0], [0], [mode_fitter._fun(center)], color='r')
+ax.scatter([l0_], [l1_], [mode_fitter._fun(center + p0_ + p1_)], color='g')
+# Label the axes
+ax.set_xlabel('p0')
+ax.set_ylabel('p1')
+ax.set_zlabel('Objective')
 
-# plt.show()
+plt.show()
+
+# %%

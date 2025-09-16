@@ -343,7 +343,7 @@ class PartialModesMap:
         self.freqs = freqs
 
         assert coords.ndim == 1, 'Expected a 1D-array for coords.'
-        assert len(coords) < len(freqs), 'Invalid length for coords.'
+        assert len(coords) <= len(freqs), 'Invalid length for coords.'
         self.coords = coords.astype(int)
 
         self._point = None
@@ -412,7 +412,7 @@ class PartialModesMap:
         try:
             q, s, s_inv = derivatives.grass(x.T, self.coords)
         except (scipy.linalg.LinAlgError, scipy.linalg.LinAlgWarning):
-            logging.warning('q[coords] is singular.')
+            logger.warning('q[coords] is singular.')
             self._psi = np.nan
             return
         self._grass = (q, s, s_inv)
@@ -433,7 +433,7 @@ class PartialModesMap:
                 m, lower=False, overwrite_a=True)
         except scipy.linalg.LinAlgError:
             self._chk = np.nan
-            logging.warning('Mass matrix is not positive-definite.')
+            logger.warning('Mass matrix is not positive-definite.')
             self._psi = np.nan
             return
 
@@ -616,7 +616,7 @@ class PartialModesMap:
         return hessp_fun
 
 
-class ModesProp:
+class RealModes:
 
     def __init__(
         self,
@@ -715,11 +715,13 @@ class ModesProp:
              for q in range(n_in)])
         Bx = 2*np.concatenate(
             [2*t1[:n_in] + t2, t1[n_in:]], axis=0)
-
         return (Ap + Bx).flatten()
 
-    def fit(self):
+    def fit(self, options:dict=None):
         n_out, _, dof = self.amps.shape
+        options = {} if options is None else options
+        if 'gtol' not in options.keys():
+            options['gtol'] = 1e-2
 
         x0 = np.real(amps_to_modes(self.amps))
         x0 = x0.flatten()
@@ -731,10 +733,10 @@ class ModesProp:
             x0=x0,
             bounds=bounds,
             minimizer_kwargs={
-                'method': 'Newton-CG',
+                'method': 'trust-ncg',
                 'jac': self._jac,
                 'hessp': self._hessp,
-                'options': {'xtol': 1e-4}
+                'options': options
             })
         self.modes_fit_ = res.x.reshape(n_out, dof)
         self.success_ = res.success
@@ -831,7 +833,7 @@ LinearOperator):
     def _adjoint(self):
         return self
 
-class Modes:
+class ComplexModes:
 
     def __init__(
         self,
@@ -991,7 +993,7 @@ class Modes:
         )
         return r
 
-    def fit(self, x0, options=None):
+    def fit(self, x0, options:dict=None):
         options = {} if options is None else options
         if 'gtol' not in options.keys():
             options['gtol'] = 1e-2
@@ -1114,14 +1116,16 @@ def randomSystem(
         damping_type='prop',
         seed=None
     ):
-    rng = np.random.default_rng(seed)
-    m = rng.uniform(*mass_range, dofs)
-    zeta = rng.uniform(*damping_range, dofs)
-    freqs = rng.uniform(*freqs_range, dofs)
-    
+    parent_rng = np.random.default_rng(seed)
+    child = parent_rng.spawn(4)
+
+    m = child[0].uniform(*mass_range, dofs)
+    zeta = child[1].uniform(*damping_range, dofs)
+    freqs = child[2].uniform(*freqs_range, dofs)
+
     # Generate rotation matrices.
     if dofs > 1:
-        U = scipy.stats.ortho_group(dim=dofs, seed=seed)
+        U = scipy.stats.ortho_group(dim=dofs, seed=child[3])
         Um = U.rvs()
         Uk = U.rvs()
         if damping_type == 'prop':
