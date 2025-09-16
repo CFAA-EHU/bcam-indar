@@ -1,7 +1,10 @@
 #!/usr/bin/env python
 
 # %%
+import logging
+
 import numpy as np
+import pandas as pd
 
 from bcam.resonance import mechanical
 
@@ -53,19 +56,24 @@ def check_stability(
     mode_fitter = mechanical.RealModes(freqs, amps_fit/rescale, fs, ns)
     modes_fit_R = np.sqrt(rescale) * mode_fitter.fit(options={'gtol': 1e-3})
 
+    errors = np.zeros(2)
+
     amps_R = mechanical.mode_to_amps(modes_fit_R, n_out, n_in)
     kernel_fit = kernel(ns, fs, amps_R, freqs)
     error = np.sum(
         ((kernel_fit - data)**2)*(1 - np.arange(ns)/ns).reshape(1, 1, ns)
     )
     error = np.sqrt(error/fs)
-    print(f'Error (real modes): {error:.2e}')
+    errors[0] = error
 
     # Fit with complex modes.
     coords = np.arange(n_out)
     mode_fitter = mechanical.ComplexModes(freqs, coords, amps_fit/rescale, fs, ns)
     x0 = (modes_fit_R/np.sqrt(rescale), np.zeros_like(modes_fit_R))
-    modes_fit_C = np.sqrt(rescale) * mode_fitter.fit(x0, options={'verbose': 0, 'gtol': 1e-3})
+
+    mech_logger = logging.getLogger('bcam.resonance._core.mechanical')
+    mech_logger.setLevel('ERROR')
+    modes_fit_C = np.sqrt(rescale) * mode_fitter.fit(x0, options={'verbose': 2, 'gtol': 1e-3})
 
     amps_C = mechanical.mode_to_amps(modes_fit_C, n_out, n_in)
     kernel_fit = kernel(ns, fs, amps_C, freqs)
@@ -73,15 +81,29 @@ def check_stability(
         ((kernel_fit - data)**2)*(1 - np.arange(ns)/ns).reshape(1, 1, ns)
     )
     error = np.sqrt(error/fs)
-    print(f'Error (complex modes): {error:.2e}')
+    errors[1] = error
+
+    return errors
 
 # %%
-check_stability(
-    dof=4,
-    n_out=3,
-    n_in=2,
-    ns=210,
-    fs=100,
-    noise=0,
-    seed=None
-)
+seed = 12335646456
+parent_rng = np.random.default_rng(seed)
+n_rep = 1
+errors = np.zeros((n_rep, 2))
+print('Running stability check...')
+print(50*'-')
+print('Rep\tReal\t\tComplex\t\tRatio')
+print(50*'-')
+for i, child in enumerate((parent_rng.spawn(n_rep))):
+    errors[i] = check_stability(
+        dof=4,
+        n_out=3,
+        n_in=2,
+        ns=210,
+        fs=100,
+        noise=1e-10,
+        seed=child
+    )
+    print(f'{i+1}/{n_rep}\t{errors[i, 0]:.4e}\t{errors[i, 1]:.4e}\t{errors[i, 1]/errors[i, 0]:.2e}')
+print(50*'-')
+df = pd.DataFrame(errors, columns=['Real', 'Complex'])

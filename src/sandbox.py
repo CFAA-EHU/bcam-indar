@@ -2,8 +2,8 @@
 
 # %%
 import logging
+
 import numpy as np
-import scipy
 import matplotlib.pyplot as plt
 
 from bcam.resonance import mechanical
@@ -20,7 +20,7 @@ def kernel(ns, fs, a, freqs):
     return K
 
 # %%
-seed = 123466
+seed = None
 dof = 4
 modal = mechanical.randomSystem(
     dof,
@@ -42,7 +42,7 @@ rng = np.random.default_rng(seed)
 amps = mechanical.mode_to_amps(modes, n_out, n_in)
 
 data = kernel(ns, fs, amps, freqs)
-data_noise = data + rng.normal(scale=0, size=data.shape)
+data_noise = data + rng.normal(scale=4e-2, size=data.shape)
 
 # %%
 # Plot kernel and noisy version
