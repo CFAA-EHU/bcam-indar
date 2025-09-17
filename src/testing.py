@@ -209,17 +209,6 @@ if __name__ == '__main__':
     logging.basicConfig()
     logger.setLevel(logging.DEBUG)
 
-# %%
-# ==== Test normal AAA (1DoF) ====
-    M = 10
-    N = 2 * (M + 1) + 10 # N >= 2 * (M + 1)
-    kwargs = {'max_order': None, 'tol': 1e-6}
-    test = Test_RationalApproximation(N, M, seed=None)
-    test.rational_fit(rational_kwargs=kwargs)
-    test.plot_poles()
-    test.plot_approximation()
-    plt.show()
-
 # # %%
 # # ==== Test symmetric AAA (1DoF) ====
 #     M = 10 # Even number
