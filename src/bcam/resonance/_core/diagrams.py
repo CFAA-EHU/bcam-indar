@@ -210,8 +210,3 @@ def hayes(b0, b1, tau=1):
     if (b1 >= -b0) or (b1 <= bdr):
         return True
     return False
-
-
-if __name__ == '__main__':
-    import matplotlib.pyplot as plt
-

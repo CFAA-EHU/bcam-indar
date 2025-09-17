@@ -608,7 +608,3 @@ class Espira:
             t,
             fs=self.fs
         )
-
-
-if __name__ == '__main__':
-    import matplotlib.pyplot as plt
