@@ -7,5 +7,6 @@ from . import (
     matrices,
     lti,
     mechanical,
-    derivatives
+    derivatives,
+    espira,
 )
