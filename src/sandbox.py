@@ -8,6 +8,11 @@ import matplotlib.pyplot as plt
 
 from bcam.resonance import mechanical
 
+rng = np.random.default_rng(234)
+X = rng.normal(size=(10, 5))
+Y = rng.normal(size=(5,))
+print((X @ Y).shape)
+
 # %%
 def kernel(ns, fs, a, freqs):
     dof = len(freqs)

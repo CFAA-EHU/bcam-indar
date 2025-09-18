@@ -1,6 +1,5 @@
 #!/usr/bin/env python
 
-import warnings
 import logging
 from itertools import product
 import bisect
@@ -141,51 +140,6 @@ def fit_amplitudes(data, poles):
     return residues, amplitudes, errors
 
 
-class Smap:
-
-    def __init__(self, index=None, data=None):
-        self.index = []
-        self.data = []
-
-        if index is not None:
-            if isinstance(index, list):
-                self.index = index
-            else:
-                self.index = list(index)
-        if data is not None:
-            if isinstance(data, list):
-                self.data = data
-            else:
-                self.data = list(data)
-        
-        if len(self.index) != len(self.data):
-            msg = 'The number of indices and data must be the same.'
-            raise ValueError(msg)
-        if sorted(self.index) != self.index:
-            msg = 'The indices must be sorted.'
-            raise ValueError(msg)
-        
-    def __getitem__(self, i):
-        return self.data[i]
-
-    def __len__(self):
-        return len(self.index)
-    
-    def __iter__(self):
-        yield from zip(self.index, self.data)
-
-    def add(self, index, data):
-        if index in self.index:
-            msg = f'The index {index} already exists.'
-            raise ValueError(msg)
-        id = bisect.bisect_left(self.index, index)
-        self.index.insert(id, index)
-        self.data.insert(id, data)
-    
-    def iremove(self, i):
-        del self.index[i], self.data[i]
-
-
 class RationalApproximation:
     '''Rational Approximation using AAA algorithm.
 
@@ -223,8 +177,8 @@ class RationalApproximation:
             raise ValueError(
                 f'Expected mode either "normal" or "symmetric", got {mode}.'
             )
-        
-        self.tol = max(tol, 0)
+
+        self.tol = tol
         self.mode = mode
         self.max_order = max_order
 
@@ -232,15 +186,17 @@ class RationalApproximation:
 
     def _initialize_sets(self, X):
         N, n_comps = X.shape
-        gG = Smap(range(N), X)
-        gS = Smap()
+        gG = {'index': list(range(N)), 'data': list(X)}
+        gS = {'index': [], 'data': []}
         if self.mode == 'normal':
             for k in range(n_comps):
-                idx = np.argmax(np.abs(np.array(gG.data)[:, k]))
-                gS.add(gG.index[idx], gG[idx])
-                gG.iremove(idx)
-            maxVol = np.prod(np.linalg.norm(np.array(gS.data), axis=1))
-            independence = np.linalg.det(np.array(gS.data))
+                idx = np.argmax(np.abs([e[k] for e in gG['data']]))
+                gS['index'].append(gG['index'][idx])
+                gS['data'].append(gG['data'][idx])
+                gG['index'].pop(idx)
+                gG['data'].pop(idx)
+            maxVol = np.prod(np.linalg.norm(np.array(gS['data']), axis=1))
+            independence = np.linalg.det(np.array(gS['data']))
             if np.abs(independence) / maxVol < 1e-6:
                 msg = 'The input signal is not independent.'
                 raise ValueError(msg)
@@ -272,14 +228,14 @@ class RationalApproximation:
             if max_order > N // 2 - 1:
                 msg = f'The number of poles must be less than half of the number of samples. \
                 max_order readjusted to {N // 2 - 1}'
-                warnings.warn(msg, stacklevel=2)
+                logger.warning(msg, stacklevel=2)
             max_order_ = min(max_order, N // 2 - 1)
 
         return max_order_
 
     def fit(self, X):
-        X = _validate_data(X)
-        maxX = np.max(np.linalg.norm(X, axis=1))
+        if X.ndim == 1:
+            X = np.atleast_2d(X).T
         N = X.shape[0]
 
         max_order_ = self._get_max_order(self.max_order, X.shape[0])
@@ -291,58 +247,58 @@ class RationalApproximation:
             X[1:] = 0.5 * (X[1:] + np.conj(X[-1:0:-1]))
 
         gS, gG = self._initialize_sets(X)
-        r = np.zeros_like(np.array(gG.data))
+        r = np.zeros_like(np.array(gG['data']))
         w = np.nan
-        lastS = np.nan
 
         logger.debug(f'==== step: 0 ====')
         succeed = False
         step = 1
         while not succeed:
-            idx = np.argmax(np.linalg.norm(gG.data - r, axis=1))
-            error = np.linalg.norm(gG.data - r, axis=1)[idx]
+            idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
+            error = np.linalg.norm(gG['data'] - r, axis=1)[idx]
             logger.debug(f'error: {error}')
 
-            if error / maxX < self.tol:
+            if error < self.tol:
                 succeed = True
             elif len(gS) >= max_order_ + 1:
                 msg = 'Convergence failed after the maximum number of poles is reached.\n'
-                msg += f'The relative error is {error / maxX}'
-                warnings.warn(msg, stacklevel=2)
+                msg += f'The error is {error}'
+                logger.warning(msg, stacklevel=2)
                 break
             else:
                 logger.debug(f'==== step: {step} ====')
-                r, w, lastS = _fit(N, gS, gG, idx)
+                self.freqs_ = self._update_sets(gS, gG, idx)
+                r, w = _fit(N, gS, gG)
             step += 1
-        self.error_ = error / maxX
+        self.error_ = error
         
         barycentric = (gS, w)
-        self._normal_form(X, barycentric, lastS)
+        self._normal_form(N, barycentric)
         
         return self
 
     @staticmethod
-    def _normal_fit(N, gS, gG, idx):
-        n_comps = len(gG[0])
-        ωN = np.exp(-2j * np.pi / N)
-        gS.add(gG.index[idx], gG[idx])
-        lastS = gG.index[idx]
-        gG.iremove(idx)
-        n_freqs = len(gS)
+    def _update_sets(gS, gG, idx):
+        gS['index'].append(gG['index'][idx])
+        gS['data'].append(gG['data'][idx])
+        gG['index'].pop(idx)
+        gG['data'].pop(idx)
+        return np.array(gS['index'])
 
-        C = ωN**(-np.array(gG.index))[:, np.newaxis] - ωN**(-np.array(gS.index))[np.newaxis, :]
-        C = 1 / C
-        L = np.zeros(((N-n_freqs) * n_comps, n_freqs), dtype=np.complex128)
-        for i, j in product(range(N-n_freqs), range(n_freqs)):
-            gl, gk = gG[i], gS[j]
-            L[n_comps*i:n_comps*(i+1), j] = (gl - gk) * C[i, j]
-        
+    @staticmethod
+    def _normal_fit(N, gS, gG):
+        n_freqs = len(gS['data'])
+        n_comps = len(gS['data'][0])
+        ωN = np.exp(-2j * np.pi / N)
+        C = ωN**(-np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
+        L = np.array(gS['data'])[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
+        L = L / C[..., np.newaxis]
+        L = L.reshape(n_freqs, -1).T
+
         # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
         In = scipy.linalg.qr(
-            np.array(gS.data), pivoting=True)[0]
+            np.array(gS['data']), pivoting=True)[0]
         In = np.conj(In[:, n_comps:])
-        # _, _, In = scipy.linalg.svd(np.array(gS.data).T, full_matrices=True)
-        # In = np.conj(In[n_comps:].T)
         # Compute weights to find best rational approximation.
         L = L @ In
         _, eigval, w = scipy.linalg.svd(
@@ -351,10 +307,10 @@ class RationalApproximation:
             full_matrices=True)
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
         w = In @ np.conj(w[-1])
-        r = np.array([w[i] * gS[i] for i in range(n_freqs)])
-        r = (C @ r) / (np.expand_dims(C @ w, axis=1))
+        r = np.array([w[i] * gS['data'][i] for i in range(n_freqs)])
+        r = ((1/C.T) @ r) / ((1/C.T) @ w)[:, np.newaxis]
 
-        return r, w, lastS
+        return r, w
 
     @staticmethod
     def _symmetric_fit(N, gS, gG, idx):
@@ -439,20 +395,25 @@ class RationalApproximation:
 
         return r, w, lastS
 
-    def _normal_form(self, X, barycentric, lastS):
-        if lastS is np.nan:
+    def _normal_form(self, N, barycentric):
+        gS, w = barycentric
+        if isinstance(w, float) and np.isnan(w):
             msg = 'The zero function is the best approximation.\
                 The tolerance is perhaps too high.'
-            warnings.warn(msg, stacklevel=2)
+            logger.warning(msg, stacklevel=2)
             self.poles_ = np.array([])
             self.residues_ = np.array([])
             return
-        
-        gS, w = barycentric
-        M = len(gS) - 1
-        N, n_comps = X.shape
+
+        S = np.array(gS['index'])
+        gS = np.array(gS['data'])
+        lastS = S[-1]
+        M = len(S) - 1
+        idxs = np.argsort(S)
+        S = S[idxs]
+        w = w[idxs]
+        gS = gS[idxs]
         ωN = np.exp(-2j * np.pi / N)
-        S = np.array(gS.index)
 
         a = np.zeros((M+2, M+2), dtype=np.complex128)
         a[1:, 0] = 1
@@ -467,20 +428,13 @@ class RationalApproximation:
 
         idx = np.searchsorted(S, lastS)
         S = np.delete(S, idx)
-        gS = np.delete(np.array(gS.data), idx, axis=0)
+        gS = np.delete(gS, idx, axis=0)
         C = ωN**(-S)[:, np.newaxis] - poles[np.newaxis, :]
         C = 1 / C
-        residues = np.zeros((M, n_comps), dtype=np.complex128)
-        for i in range(n_comps):
-            residues[:, i] = np.linalg.solve(C, gS[:, i])
+        residues = scipy.linalg.solve(C, gS)
 
         # Remove instable poles.
         idxs = np.nonzero(np.abs(poles) <= 1)
-        poles, residues = poles[idxs], residues[idxs]
-
-        # Sort poles by increasing absolute value.
-        idxs = np.argsort((np.abs(poles)))
-        idxs = idxs[::-1]
         poles, residues = poles[idxs], residues[idxs]
 
         self.poles_ = poles

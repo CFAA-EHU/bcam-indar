@@ -221,18 +221,6 @@ if __name__ == '__main__':
 #     plt.show()
 
 # # %%
-# # ==== Test normal AAA (nDoF) ====
-#     M = 10
-#     L = 4
-#     N = 2 * (M + 1) + 40 # N >= 2 * (M + 1)
-#     kwargs = {'max_order': None, 'tol': 1e-6}
-#     test = Test_RationalApproximation(N, M, n_comps=L, seed=None)
-#     test.rational_fit(rational_kwargs=kwargs)
-#     test.plot_poles()
-#     test.plot_approximation(comp=3)
-#     plt.show()
-
-# # %%
 # # ==== Test symmetric AAA (nDoF) ====
 #     M = 10 # Even number
 #     L = 4
