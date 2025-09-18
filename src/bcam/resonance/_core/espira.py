@@ -184,22 +184,37 @@ class RationalApproximation:
 
         self._removed = False
 
-    def _initialize_sets(self, X):
-        N, n_comps = X.shape
-        gG = {'index': list(range(N)), 'data': list(X)}
+    def _initialize_sets(self, x):
+        N, n_comps = x.shape
+        gG = {'index': list(range(N)), 'data': list(x)}
         gS = {'index': [], 'data': []}
+
         if self.mode == 'normal':
-            for k in range(n_comps):
-                idx = np.argmax(np.abs([e[k] for e in gG['data']]))
-                gS['index'].append(gG['index'][idx])
-                gS['data'].append(gG['data'][idx])
+            # Choose n_comps + 1 peaks as initial frequencies.
+            upper = int(np.floor(np.log(N/5)/np.log(1.5)))
+            peaks = scipy.signal.find_peaks_cwt(
+                np.linalg.norm(x, axis=1),
+                widths=1.5**np.arange(0, upper+1))
+            idxs = np.argsort(np.linalg.norm(x, axis=1)[peaks])[::-1]
+            if len(idxs) >= n_comps+1:
+                peaks = peaks[idxs[:n_comps+1]]
+            else:
+                # Generate additional random indices.
+                rng = np.random.default_rng()
+                additional = rng.choice(
+                    np.setdiff1d(np.arange(N), peaks),
+                    size=(n_comps+1)-len(idxs), replace=False)
+                peaks = np.concatenate((peaks, additional))
+                logger.warning(
+                    'Not enough peaks found. Adding random indices.', stacklevel=2)
+
+            gS['index'].extend(gG['index'][p] for p in peaks)
+            gS['data'].extend(gG['data'][p] for p in peaks)
+            for p in peaks:
+                idx = bisect.bisect_left(gG['index'], p)
                 gG['index'].pop(idx)
                 gG['data'].pop(idx)
-            maxVol = np.prod(np.linalg.norm(np.array(gS['data']), axis=1))
-            independence = np.linalg.det(np.array(gS['data']))
-            if np.abs(independence) / maxVol < 1e-6:
-                msg = 'The input signal is not independent.'
-                raise ValueError(msg)
+
         elif self.mode == 'symmetric':
             tmp = []
             for k in range(n_comps):
@@ -233,22 +248,34 @@ class RationalApproximation:
 
         return max_order_
 
-    def fit(self, X):
+    def fit(self, X, tol=0.01):
         if X.ndim == 1:
             X = np.atleast_2d(X).T
-        N = X.shape[0]
+        N, n_comps = X.shape
+        if n_comps > 1:
+            q, s, self._vh = scipy.linalg.svd(X, full_matrices=False)
+            test = np.cumsum(s**2) / np.sum(s**2)
+            test = np.nonzero(test >= 1-tol)[0]
+            if len(test) > 1:
+                logger.info(f'Rank deficient data.')
+            s = s[:test[0]+1]
+            x = q[:, :test[0]+1]*s[np.newaxis, :]
+            del q, s
+        else:
+            self._vh = np.array([[1]])
+            x = np.copy(X)
 
-        max_order_ = self._get_max_order(self.max_order, X.shape[0])
+        max_order_ = self._get_max_order(self.max_order, x.shape[0])
 
         if self.mode == 'normal':
             _fit = self._normal_fit
         elif self.mode == 'symmetric':
             _fit = self._symmetric_fit
-            X[1:] = 0.5 * (X[1:] + np.conj(X[-1:0:-1]))
+            x[1:] = 0.5 * (x[1:] + np.conj(x[-1:0:-1]))
 
-        gS, gG = self._initialize_sets(X)
-        r = np.zeros_like(np.array(gG['data']))
-        w = np.nan
+        gS, gG = self._initialize_sets(x)
+        self.freqs_ = np.array(gS['index'])
+        r, w = _fit(N, gS, gG)
 
         logger.debug(f'==== step: 0 ====')
         succeed = False
@@ -397,14 +424,6 @@ class RationalApproximation:
 
     def _normal_form(self, N, barycentric):
         gS, w = barycentric
-        if isinstance(w, float) and np.isnan(w):
-            msg = 'The zero function is the best approximation.\
-                The tolerance is perhaps too high.'
-            logger.warning(msg, stacklevel=2)
-            self.poles_ = np.array([])
-            self.residues_ = np.array([])
-            return
-
         S = np.array(gS['index'])
         gS = np.array(gS['data'])
         lastS = S[-1]
@@ -436,9 +455,14 @@ class RationalApproximation:
         # Remove instable poles.
         idxs = np.nonzero(np.abs(poles) <= 1)
         poles, residues = poles[idxs], residues[idxs]
+        if residues.shape[1] < self._vh.shape[0]:
+            residues = np.pad(
+                residues,
+                ((0, 0), (0, self._vh.shape[0]-residues.shape[1])),
+                mode='constant')
 
         self.poles_ = poles
-        self.residues_ = residues
+        self.residues_ = residues @ self._vh
 
     def remove_spurious(self, rtol=1e-6):
         if not self._removed:
