@@ -49,7 +49,7 @@ class Test_RationalApproximation:
 
         # Fit the signal.
         res = espira.RationalApproximation(tol=1e-6)
-        res.fit(x)
+        res.fit(x, tol=1e-6)
 
         assert len(res.poles_) == M
         assert np.allclose(np.sort_complex(res.poles_), np.sort_complex(poles))
@@ -75,7 +75,7 @@ class Test_RationalApproximation:
 
         # Fit the signal.
         res = espira.RationalApproximation(tol=1e-6)
-        res.fit(x)
+        res.fit(x, tol=1e-6)
 
         assert len(res.poles_) == M
         assert np.allclose(np.sort_complex(res.poles_), np.sort_complex(poles))

@@ -140,46 +140,14 @@ def fit_amplitudes(data, poles):
     return residues, amplitudes, errors
 
 
-class RationalApproximation:
-    '''Rational Approximation using AAA algorithm.
-
-    This implementation is based on...
-
-    Parameters
-    ----------
-    tol : float, default=1e-3
-        Tolerance for stopping criterion.
-    mode : str, default='normal'
-        Mode of the algorithm. Either 'normal' or 'symmetric'.
-    max_order : int, default=None
-        Maximum number of poles to be used in the approximation.
-        By default, the maximum possible.
-
-    Attributes
-    ----------
-    error_ : float
-    poles_ : array_like
-    residues_ : array_like
-    '''
+class RatAppSym:
 
     def __init__(
-            self,
-            tol=1e-3,
-            mode='normal',
-            max_order=None
-        ):
-
-        if mode == 'normal':
-            self._fit = self._normal_fit
-        elif mode == 'symmetric':
-            self._fit = self._symmetric_fit
-        else:
-            raise ValueError(
-                f'Expected mode either "normal" or "symmetric", got {mode}.'
-            )
-
+        self,
+        tol=1e-3,
+        max_order=None
+    ):
         self.tol = tol
-        self.mode = mode
         self.max_order = max_order
 
         self._removed = False
@@ -189,13 +157,13 @@ class RationalApproximation:
         gG = {'index': list(range(N)), 'data': list(x)}
         gS = {'index': [], 'data': []}
 
-        if self.mode == 'normal':
+        def get_peaks(y):
             # Choose n_comps + 1 peaks as initial frequencies.
             upper = int(np.floor(np.log(N/5)/np.log(1.5)))
             peaks = scipy.signal.find_peaks_cwt(
-                np.linalg.norm(x, axis=1),
+                np.linalg.norm(y, axis=1),
                 widths=1.5**np.arange(0, upper+1))
-            idxs = np.argsort(np.linalg.norm(x, axis=1)[peaks])[::-1]
+            idxs = np.argsort(np.linalg.norm(y, axis=1)[peaks])[::-1]
             if len(idxs) >= n_comps+1:
                 peaks = peaks[idxs[:n_comps+1]]
             else:
@@ -207,32 +175,27 @@ class RationalApproximation:
                 peaks = np.concatenate((peaks, additional))
                 logger.warning(
                     'Not enough peaks found. Adding random indices.', stacklevel=2)
+            return peaks
 
-            gS['index'].extend(gG['index'][p] for p in peaks)
-            gS['data'].extend(gG['data'][p] for p in peaks)
-            for p in peaks:
-                idx = bisect.bisect_left(gG['index'], p)
-                gG['index'].pop(idx)
-                gG['data'].pop(idx)
+        peaks = get_peaks(x[:N//2+1])
 
-        elif self.mode == 'symmetric':
-            tmp = []
-            for k in range(n_comps):
-                idx = np.argmax(np.abs(np.array(gG.data)[:, k]))
-                freqs = sorted(list(set(
-                    [gG.index[idx], (N - gG.index[idx])%N])))
-                for m, f in enumerate(freqs):
-                    idx = bisect.bisect_left(gG.index, f)
-                    gS.add(f, gG[idx])
-                    if m == 0:
-                        tmp.append(gG[idx])
-                    gG.iremove(idx)
-            tmp = np.array(tmp)
-            maxVol = np.prod(np.linalg.norm(tmp, axis=1))
-            independence = np.linalg.det(tmp)
-            if np.abs(independence) / maxVol < 1e-6:
-                msg = 'The input signal is not independent.'
-                raise ValueError(msg)
+            # tmp = []
+            # for k in range(n_comps):
+            #     idx = np.argmax(np.abs(np.array(gG.data)[:, k]))
+            #     freqs = sorted(list(set(
+            #         [gG.index[idx], (N - gG.index[idx])%N])))
+            #     for m, f in enumerate(freqs):
+            #         idx = bisect.bisect_left(gG.index, f)
+            #         gS.add(f, gG[idx])
+            #         if m == 0:
+            #             tmp.append(gG[idx])
+            #         gG.iremove(idx)
+            # tmp = np.array(tmp)
+            # maxVol = np.prod(np.linalg.norm(tmp, axis=1))
+            # independence = np.linalg.det(tmp)
+            # if np.abs(independence) / maxVol < 1e-6:
+            #     msg = 'The input signal is not independent.'
+            #     raise ValueError(msg)
 
         return gS, gG
     
@@ -248,13 +211,14 @@ class RationalApproximation:
 
         return max_order_
 
-    def fit(self, X, tol=0.01):
-        if X.ndim == 1:
-            X = np.atleast_2d(X).T
-        N, n_comps = X.shape
-        if n_comps > 1:
+    def fit(self, x, tol=0.01):
+        if x.ndim == 1:
+            x = np.atleast_2d(x).T
+        N, m = x.shape
+        if m > 1:
+            # Check for rank deficiency.
             q, s, self._vh = scipy.linalg.svd(X, full_matrices=False)
-            test = np.cumsum(s**2) / np.sum(s**2)
+            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
             test = np.nonzero(test >= 1-tol)[0]
             if len(test) > 1:
                 logger.info(f'Rank deficient data.')
@@ -304,55 +268,22 @@ class RationalApproximation:
         
         return self
 
-    @staticmethod
-    def _update_sets(gS, gG, idx):
-        gS['index'].append(gG['index'][idx])
-        gS['data'].append(gG['data'][idx])
-        gG['index'].pop(idx)
-        gG['data'].pop(idx)
-        return np.array(gS['index'])
+    def _update_sets(self, gS, gG, idx):
+        pass
+            #  # Find indeces to insert the frequency of the maximum.
+            # freqs = sorted(
+            #     list(set([gG.index[idx], (N - gG.index[idx])%N])))
+            # for f in freqs:
+            #     idx = bisect.bisect_left(gG.index, f)
+            #     gS.add(f, gG[idx])
+            #     gG.iremove(idx)
 
     @staticmethod
-    def _normal_fit(N, gS, gG):
+    def _fit(N, gS, gG):
         n_freqs = len(gS['data'])
         n_comps = len(gS['data'][0])
         ωN = np.exp(-2j * np.pi / N)
-        C = ωN**(-np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
-        L = np.array(gS['data'])[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
-        L = L / C[..., np.newaxis]
-        L = L.reshape(n_freqs, -1).T
 
-        # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
-        In = scipy.linalg.qr(
-            np.array(gS['data']), pivoting=True)[0]
-        In = np.conj(In[:, n_comps:])
-        # Compute weights to find best rational approximation.
-        L = L @ In
-        _, eigval, w = scipy.linalg.svd(
-            L,
-            overwrite_a=True,
-            full_matrices=True)
-        logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
-        w = In @ np.conj(w[-1])
-        r = np.array([w[i] * gS['data'][i] for i in range(n_freqs)])
-        r = ((1/C.T) @ r) / ((1/C.T) @ w)[:, np.newaxis]
-
-        return r, w
-
-    @staticmethod
-    def _symmetric_fit(N, gS, gG, idx):
-        n_comps = len(gG[0])
-        ωN = np.exp(-2j * np.pi / N)
-        # Find indeces to insert the frequency of the maximum.
-        freqs = sorted(
-            list(set([gG.index[idx], (N - gG.index[idx])%N])))
-        for f in freqs:
-            idx = bisect.bisect_left(gG.index, f)
-            gS.add(f, gG[idx])
-            gG.iremove(idx)
-        lastS = freqs[0]
-
-        n_freqs = len(gS)
         C = ωN**(-np.array(gG.index))[:, np.newaxis] - ωN**(-np.array(gS.index))[np.newaxis, :]
         C = 1 / C
 
@@ -393,8 +324,6 @@ class RationalApproximation:
         In = scipy.linalg.qr(tmp, pivoting=True)[0]
         In = In[:, n_comps:]
 
-        # _, _, In = scipy.linalg.svd(tmp.T, full_matrices=True)
-        # In = In[n_comps:].T
         # Compute weights to find best rational approximation.
         L = L @ In
         _, eigval, w = scipy.linalg.svd(
@@ -420,7 +349,7 @@ class RationalApproximation:
         r = np.array([w[i] * gS[i] for i in range(n_freqs)])
         r = (C @ r) / (np.expand_dims(C @ w, axis=1))
 
-        return r, w, lastS
+        return r, w
 
     def _normal_form(self, N, barycentric):
         gS, w = barycentric
@@ -463,6 +392,223 @@ class RationalApproximation:
 
         self.poles_ = poles
         self.residues_ = residues @ self._vh
+
+    def remove_spurious(self, rtol=1e-6):
+        if not self._removed:
+            r = np.linalg.norm(self.residues_, ord=2, axis=1)**2
+            r = r / np.sum(r)
+            idxs = np.argsort(r)
+            stop = np.nonzero(np.sqrt(np.cumsum(r[idxs])) < rtol)[0]
+            if len(stop) == 0:
+                return
+            else:
+                stop = stop[-1]
+                idxs = idxs[:stop+1]
+                self.poles_ = np.delete(self.poles_, idxs)
+                self.residues_ = np.delete(self.residues_, idxs, axis=0)
+            self._removed = True
+
+    def eval(self, z, pole_idxs=None):
+        M = len(self.poles_)
+        pole_idxs = np.arange(M) if pole_idxs is None else pole_idxs
+        return rational_function(
+            self.poles_[pole_idxs],
+            self.residues_[pole_idxs],
+            z)
+
+class RationalApproximation:
+    '''Rational Approximation using AAA algorithm.
+
+    This implementation is based on...
+
+    Parameters
+    ----------
+    tol : float, default=1e-3
+        Tolerance for stopping criterion.
+    mode : str, default='normal'
+        Mode of the algorithm. Either 'normal' or 'symmetric'.
+    max_order : int, default=None
+        Maximum number of poles to be used in the approximation.
+        By default, the maximum possible.
+
+    Attributes
+    ----------
+    error_ : float
+    poles_ : array_like
+    residues_ : array_like
+    '''
+
+    def __init__(self, tol=1e-3, mode='normal', max_order=None):
+        self.tol = tol
+        self.mode = mode
+        self.max_order = max_order
+
+        self._removed = False
+
+    @staticmethod
+    def _initialize_sets(x, rank):
+        N = x.shape[0]
+        gG = {'index': list(range(N)), 'data': list(x)}
+        gS = {'index': [], 'data': []}
+
+        # Choose rank + 1 peaks as initial frequencies.
+        upper = int(np.floor(np.log(N/5)/np.log(1.5)))
+        peaks = scipy.signal.find_peaks_cwt(
+            np.linalg.norm(x, axis=1),
+            widths=1.5**np.arange(0, upper+1))
+        idxs = np.argsort(np.linalg.norm(x, axis=1)[peaks])[::-1]
+        if len(idxs) >= rank+1:
+            peaks = peaks[idxs[:rank+1]]
+        else:
+            # Generate additional random indices.
+            rng = np.random.default_rng()
+            additional = rng.choice(
+                np.setdiff1d(np.arange(N), peaks),
+                size=(rank+1)-len(idxs), replace=False)
+            peaks = np.concatenate((peaks, additional))
+            logger.warning(
+                'Not enough peaks found. Adding random indices.', stacklevel=2)
+
+        gS['index'].extend(gG['index'][p] for p in peaks)
+        gS['data'].extend(gG['data'][p] for p in peaks)
+        for p in peaks:
+            idx = bisect.bisect_left(gG['index'], p)
+            gG['index'].pop(idx)
+            gG['data'].pop(idx)
+        return gS, gG
+    
+    def _get_max_order(self, max_order, N):
+        if max_order is None:
+            max_order_ = N // 2 - 1
+        else:
+            if max_order > N // 2 - 1:
+                msg = f'The number of poles must be less than half of the number of samples. \
+                max_order readjusted to {N // 2 - 1}'
+                logger.warning(msg, stacklevel=2)
+            max_order_ = min(max_order, N // 2 - 1)
+
+        return max_order_
+
+    def fit(self, x, tol=0.01):
+        if x.ndim == 1:
+            x = np.atleast_2d(x).T
+        N, m = x.shape
+        if m > 1:
+            # Check for rank deficiency.
+            s = scipy.linalg.svd(x, compute_uv=False)
+            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
+            test = np.nonzero(test >= 1-tol)[0]
+            if len(test) > 1:
+                logger.info(f'Rank deficient data.')
+            rank = test[0]+1
+        else:
+            rank = 1
+
+        max_order_ = self._get_max_order(self.max_order, x.shape[0])
+
+        gS, gG = self._initialize_sets(x, rank)
+        self.freqs_ = np.array(gS['index'])
+        r, w = self._fit(N, gS, gG, rank)
+
+        logger.debug(f'==== step: 0 ====')
+        succeed = False
+        step = 1
+        while not succeed:
+            idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
+            error = np.linalg.norm(gG['data'] - r, axis=1)[idx]
+            logger.debug(f'error: {error}')
+
+            if error < self.tol:
+                succeed = True
+            elif len(gS) >= max_order_ + 1:
+                msg = 'Convergence failed after the maximum number of poles is reached.\n'
+                msg += f'The error is {error}'
+                logger.warning(msg, stacklevel=2)
+                break
+            else:
+                logger.debug(f'==== step: {step} ====')
+                self.freqs_ = self._update_sets(gS, gG, idx)
+                r, w = self._fit(N, gS, gG, rank)
+            step += 1
+        self.error_ = error
+        
+        barycentric = (gS, w)
+        p, res = self._normal_form(N, barycentric)
+        self.poles_ = p
+        self.residues_ = res
+
+        return self
+
+    @staticmethod
+    def _update_sets(gS, gG, idx):
+        gS['index'].append(gG['index'][idx])
+        gS['data'].append(gG['data'][idx])
+        gG['index'].pop(idx)
+        gG['data'].pop(idx)
+        return np.array(gS['index'])
+
+    @staticmethod
+    def _fit(N, gS, gG, rank):
+        n_freqs = len(gS['data'])
+        ωN = np.exp(-2j * np.pi / N)
+        C = ωN**(-np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
+        L = np.array(gS['data'])[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
+        L = L / C[..., np.newaxis]
+        L = L.reshape(n_freqs, -1).T
+
+        # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
+        In = scipy.linalg.qr(
+            np.array(gS['data']), pivoting=True)[0]
+        In = np.conj(In[:, rank:])
+        # Compute weights to find best rational approximation.
+        L = L @ In
+        _, eigval, w = scipy.linalg.svd(
+            L,
+            overwrite_a=True,
+            full_matrices=True)
+        logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
+        w = In @ np.conj(w[-1])
+        r = np.array([w[i] * gS['data'][i] for i in range(n_freqs)])
+        r = ((1/C.T) @ r) / ((1/C.T) @ w)[:, np.newaxis]
+
+        return r, w
+
+    @staticmethod
+    def _normal_form(N, barycentric):
+        gS, w = barycentric
+        S = np.array(gS['index'])
+        gS = np.array(gS['data'])
+        lastS = S[-1]
+        M = len(S) - 1
+        idxs = np.argsort(S)
+        S = S[idxs]
+        w = w[idxs]
+        gS = gS[idxs]
+        ωN = np.exp(-2j * np.pi / N)
+
+        a = np.zeros((M+2, M+2), dtype=np.complex128)
+        a[1:, 0] = 1
+        a[0, 1:] = w
+        a[1:, 1:] = np.diag(ωN**(-S))
+
+        b = np.eye(M+2, dtype=np.complex128)
+        b[0, 0] = 0
+
+        poles, _ = scipy.linalg.eig(a, b, overwrite_a=True, overwrite_b=True)
+        poles = poles[2:]
+
+        idx = np.searchsorted(S, lastS)
+        S = np.delete(S, idx)
+        gS = np.delete(gS, idx, axis=0)
+        C = ωN**(-S)[:, np.newaxis] - poles[np.newaxis, :]
+        C = 1 / C
+        residues = scipy.linalg.solve(C, gS)
+
+        # Remove instable poles.
+        idxs = np.nonzero(np.abs(poles) <= 1)
+        poles, residues = poles[idxs], residues[idxs]
+ 
+        return poles, residues
 
     def remove_spurious(self, rtol=1e-6):
         if not self._removed:
