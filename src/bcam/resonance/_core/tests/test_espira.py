@@ -82,4 +82,26 @@ class Test_RationalApproximation:
         assert np.allclose(res.eval(ωN**(-np.arange(N))), x)
 
     def test_symmetric_fit(self):
-        pass
+        M = 6
+        N = 2 * (2*M + 1) + 10
+        rng = np.random.default_rng()
+
+        # Create complex frequencies and residues.
+        r = rng.uniform(0.7, 0.9, M)
+        phase = rng.uniform(0, 1, M)
+        poles = r * np.exp(2j * np.pi * phase)
+        poles = np.concatenate((poles, np.conj(poles)))
+        residues = rng.normal(0, 2, (M, 1)) + 1j * rng.normal(0, 2, (M, 1))
+        residues = np.concatenate((residues, np.conj(residues)), axis=0)
+
+        # Construct signal.
+        ωN = np.exp(-2j * np.pi / N)
+        x = espira.rational_function(poles, residues, ωN**(-np.arange(N)))
+
+        # Fit the signal.
+        res = espira.RatAppSym(tol=1e-6)
+        res.fit(x)
+
+        # assert len(res.poles_) == M
+        # assert np.allclose(np.sort_complex(res.poles_), np.sort_complex(poles))
+        # assert np.allclose(res.eval(ωN**(-np.arange(N))), x)

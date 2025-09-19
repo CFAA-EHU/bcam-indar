@@ -152,94 +152,86 @@ class RatAppSym:
 
         self._removed = False
 
-    def _initialize_sets(self, x):
-        N, n_comps = x.shape
+    @staticmethod
+    def _initialize_sets(x, rank):
+        N = x.shape[0]
         gG = {'index': list(range(N)), 'data': list(x)}
         gS = {'index': [], 'data': []}
 
-        def get_peaks(y):
-            # Choose n_comps + 1 peaks as initial frequencies.
-            upper = int(np.floor(np.log(N/5)/np.log(1.5)))
-            peaks = scipy.signal.find_peaks_cwt(
-                np.linalg.norm(y, axis=1),
-                widths=1.5**np.arange(0, upper+1))
-            idxs = np.argsort(np.linalg.norm(y, axis=1)[peaks])[::-1]
-            if len(idxs) >= n_comps+1:
-                peaks = peaks[idxs[:n_comps+1]]
-            else:
-                # Generate additional random indices.
-                rng = np.random.default_rng()
-                additional = rng.choice(
-                    np.setdiff1d(np.arange(N), peaks),
-                    size=(n_comps+1)-len(idxs), replace=False)
-                peaks = np.concatenate((peaks, additional))
-                logger.warning(
-                    'Not enough peaks found. Adding random indices.', stacklevel=2)
-            return peaks
-
-        peaks = get_peaks(x[:N//2+1])
-
-            # tmp = []
-            # for k in range(n_comps):
-            #     idx = np.argmax(np.abs(np.array(gG.data)[:, k]))
-            #     freqs = sorted(list(set(
-            #         [gG.index[idx], (N - gG.index[idx])%N])))
-            #     for m, f in enumerate(freqs):
-            #         idx = bisect.bisect_left(gG.index, f)
-            #         gS.add(f, gG[idx])
-            #         if m == 0:
-            #             tmp.append(gG[idx])
-            #         gG.iremove(idx)
-            # tmp = np.array(tmp)
-            # maxVol = np.prod(np.linalg.norm(tmp, axis=1))
-            # independence = np.linalg.det(tmp)
-            # if np.abs(independence) / maxVol < 1e-6:
-            #     msg = 'The input signal is not independent.'
-            #     raise ValueError(msg)
-
-        return gS, gG
-    
-    def _get_max_order(self, max_order, N):
-        if max_order is None:
-            max_order_ = N // 2 - 1
+        # Choose rank + 1 peaks as initial frequencies.
+        upper = int(np.floor(np.log(N/5)/np.log(1.5)))
+        peaks = scipy.signal.find_peaks_cwt(
+            np.linalg.norm(x, axis=1),
+            widths=1.5**np.arange(upper+1))
+        idxs = np.argsort(np.linalg.norm(x, axis=1)[peaks])[::-1]
+        peaks = peaks[idxs]
+        iszero = np.nonzero(peaks == 0)[0]
+        if N%2 == 0:
+            isend = np.nonzero(peaks == N//2)[0]
+        ends = np.sort(np.concatenate((iszero, isend)))
+        if 2*len(idxs) - len(ends) >= rank+1:
+            peaks_ = []
+            c = 0
+            for p in peaks:
+                if c >= rank+1:
+                    break
+                peaks_.append(p)
+                if p in ends:
+                    c += 1
+                else:
+                    c += 2
+            peaks = np.array(peaks_)
         else:
-            if max_order > N // 2 - 1:
-                msg = f'The number of poles must be less than half of the number of samples. \
-                max_order readjusted to {N // 2 - 1}'
-                logger.warning(msg, stacklevel=2)
-            max_order_ = min(max_order, N // 2 - 1)
+            # Generate additional random indices.
+            rng = np.random.default_rng()
+            c = rank+1 - 2*len(idxs) + len(ends)
+            peaks = list(peaks)
+            while c < rank+1:
+                p = rng.choice(
+                    np.setdiff1d(np.arange(N), peaks, assume_unique=True),
+                    size=1, replace=False)[0]
+                peaks.append(p)
+                if (p == 0) or (N%2 == 0 and p == N//2):
+                    c += 1
+                else:
+                    c += 2
+            peaks = np.array(peaks)
+            logger.warning(
+                'Not enough peaks found. Adding random indices.', stacklevel=2)
 
-        return max_order_
+        gS['index'].extend(gG['index'][p] for p in peaks)
+        gS['data'].extend(gG['data'][p] for p in peaks)
+        for p in peaks:
+            idx = bisect.bisect_left(gG['index'], p)
+            gG['index'].pop(idx)
+            gG['data'].pop(idx)
+        return gS, gG
 
     def fit(self, x, tol=0.01):
+        x[1:] = 0.5 * (x[1:] + np.conj(x[-1:0:-1]))
         if x.ndim == 1:
             x = np.atleast_2d(x).T
         N, m = x.shape
+        y = np.concatenate(
+            (np.real(x[:N//2+1]), np.imag(x)[1:(N+1)//2]), axis=0)
         if m > 1:
             # Check for rank deficiency.
-            q, s, self._vh = scipy.linalg.svd(X, full_matrices=False)
+            s = scipy.linalg.svd(y, compute_uv=False)
             test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
             test = np.nonzero(test >= 1-tol)[0]
             if len(test) > 1:
                 logger.info(f'Rank deficient data.')
-            s = s[:test[0]+1]
-            x = q[:, :test[0]+1]*s[np.newaxis, :]
-            del q, s
+            rank = test[0]+1
         else:
-            self._vh = np.array([[1]])
-            x = np.copy(X)
+            rank = 1
+        del y
 
-        max_order_ = self._get_max_order(self.max_order, x.shape[0])
+        # TODO: take into account double.
+        max_order_ = _get_max_order(self.max_order, x.shape[0])
 
-        if self.mode == 'normal':
-            _fit = self._normal_fit
-        elif self.mode == 'symmetric':
-            _fit = self._symmetric_fit
-            x[1:] = 0.5 * (x[1:] + np.conj(x[-1:0:-1]))
-
-        gS, gG = self._initialize_sets(x)
+        gS, gG = self._initialize_sets(x[:N//2+1], rank)
         self.freqs_ = np.array(gS['index'])
-        r, w = _fit(N, gS, gG)
+        r, w = self._fit(N, gS, gG, rank)
 
         logger.debug(f'==== step: 0 ====')
         succeed = False
@@ -258,140 +250,89 @@ class RatAppSym:
                 break
             else:
                 logger.debug(f'==== step: {step} ====')
-                self.freqs_ = self._update_sets(gS, gG, idx)
-                r, w = _fit(N, gS, gG)
+                self.freqs_ = _update_sets(gS, gG, idx)
+                r, w = self._fit(N, gS, gG)
             step += 1
         self.error_ = error
-        
-        barycentric = (gS, w)
-        self._normal_form(N, barycentric)
-        
-        return self
 
-    def _update_sets(self, gS, gG, idx):
-        pass
-            #  # Find indeces to insert the frequency of the maximum.
-            # freqs = sorted(
-            #     list(set([gG.index[idx], (N - gG.index[idx])%N])))
-            # for f in freqs:
-            #     idx = bisect.bisect_left(gG.index, f)
-            #     gS.add(f, gG[idx])
-            #     gG.iremove(idx)
+        # TODO: correct this representation.
+        barycentric = (gS, w)
+        p, res = _normal_form(N, barycentric)
+        self.poles_ = p
+        self.residues_ = res
 
     @staticmethod
-    def _fit(N, gS, gG):
+    def _fit(N, gS, gG, rank):
         n_freqs = len(gS['data'])
         n_comps = len(gS['data'][0])
         ωN = np.exp(-2j * np.pi / N)
+        Gidx = np.array(gG['index'])
+        iszero = np.nonzero(Gidx == 0)[0]
+        if N%2 == 0:
+            isend = np.nonzero(Gidx == N//2)[0]
+        ends = np.sort(np.concatenate((iszero, isend)))
+        innersG = np.setdiff1d(np.arange(len(Gidx)), ends, assume_unique=True)
 
-        C = ωN**(-np.array(gG.index))[:, np.newaxis] - ωN**(-np.array(gS.index))[np.newaxis, :]
-        C = 1 / C
-
-        L = []
-        for l, gl in gG:
-            if l > N//2:
-                break
-            row = []
-            for k, gk in gS:
-                if k > N//2:
-                    break
-                a = (gl - gk) / (ωN**(-l) - ωN**(-k))
-                if k in [0, (N+1)//2]:
-                    row += [a]
-                else:
-                    b = (gl - np.conj(gk)) / (ωN**(-l) - ωN**(k))
-                    row += [a + b, 1j * (a - b)]
-            row = np.array(row, dtype=np.complex128)
-            row = row.T
-            rowt = np.real(row)
-            rowb = np.imag(row)
-            row = np.concatenate((rowt, rowb))
-            if l in [0, (N+1)//2]:
-                row = 0.5 * row
-            L.append(row.real)
-        L = np.concatenate(L, axis=0)
+        Cp = ωN**(-np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
+        Cm = ωN**(np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
+        Lp = np.array(gS['data'])[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
+        Lm = np.conj(np.array(gS['data']))[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
+        Lp = Lp / Cp[..., np.newaxis]
+        Lm = Lm / Cm[..., np.newaxis]
+        # Determine if 0 and N/2 are in gS.
+        Sidx = np.array(gS['index'])
+        iszero = np.nonzero(Sidx == 0)[0]
+        if N%2 == 0:
+            isend = np.nonzero(Sidx == N//2)[0]
+        ends = np.sort(np.concatenate((iszero, isend)))
+        mr = 2*len(Sidx) - len(ends)
+        # Adapt matrix L for real and imaginary parts.
+        LR = np.zeros(
+            (mr, 2*len(gG['data']), n_comps),
+            dtype=np.float64)
+        # Add frequencies 0 and N/2 if they are in gS.
+        ends_ = 2*ends - np.array([-i for i in range(len(ends))])
+        LR[ends_, ::2] = np.real(Lp[ends])
+        LR[ends_, 1::2] = np.imag(Lp[ends])
+        # Add inner frequencies.
+        inners = np.setdiff1d(np.arange(len(Sidx)), ends, assume_unique=True)
+        inners_ = np.setdiff1d(np.arange(mr), ends_, assume_unique=True)
+        LR[inners_[::2], ::2] = np.real(Lp[inners]) + np.real(Lm[inners])
+        LR[inners_[::2], 1::2] = np.imag(Lp[inners]) + np.imag(Lm[inners])
+        LR[inners_[1::2], ::2] = -np.imag(Lp[inners]) + np.imag(Lm[inners])
+        LR[inners_[1::2], 1::2] = np.real(Lp[inners]) - np.real(Lm[inners])
+        LR[:, 2*innersG] = LR[:, 2*innersG] * np.sqrt(2)
+        LR = LR.reshape(mr, -1).T
+        del Lp, Lm
 
         # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
-        tmp = []
-        for k, gk in gS:
-            if k > N//2:
-                break
-            if k in [0, (N+1)//2]:
-                tmp += [gk.real]
-            else:
-                tmp += [2 * gk.real, -2 * gk.imag]
-        tmp = np.array(tmp)
-        In = scipy.linalg.qr(tmp, pivoting=True)[0]
-        In = In[:, n_comps:]
+        gS_ = np.zeros((mr, n_comps), dtype=np.float64)
+        gS_[ends_, :] = np.real(np.array(gS['data'])[ends])
+        gS_[inners_[::2], :] = 2*np.real(np.array(gS['data'])[inners])
+        gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
+        In = scipy.linalg.qr(gS_, pivoting=True)[0]
+        In = In[:, rank:]
 
         # Compute weights to find best rational approximation.
-        L = L @ In
+        LR = LR @ In
         _, eigval, w = scipy.linalg.svd(
-            L,
+            LR,
             overwrite_a=True,
-            full_matrices=True)
+            full_matrices=False)
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
         w = In @ w[-1]
-        tmp = []
-        ctmp = []
-        for k, _ in gS:
-            if k > N//2:
-                break
-            if k in [0, (N+1)//2]:
-                tmp.append(w[0])
-                w = np.delete(w, 0)
-            else:
-                tmp.append(w[0] + 1j * w[1])
-                ctmp.append(w[0] - 1j * w[1])
-                w = np.delete(w, [0, 1])
-        w = tmp + list(reversed(ctmp))
-        w = np.array(w, dtype=np.complex128)
-        r = np.array([w[i] * gS[i] for i in range(n_freqs)])
-        r = (C @ r) / (np.expand_dims(C @ w, axis=1))
+        w_ = np.zeros((n_freqs,), dtype=np.complex128)
+        w_[ends] = w[ends_].astype(np.complex128)
+        w_[inners] = w[inners_[::2]] + 1j * w[inners_[1::2]]
+        w = w_
 
-        return r, w
+        # Compute rational function at G frequencies.
+        rp = w * np.array(gS['data'])
+        rm = np.conj(w) * np.conj(np.array(gS['data']))
+        p = (1/Cp).T @ rp + (1/Cm[inners]).T @ rm[inners]
+        q = (1/Cp).T @ w + (1/Cm[inners]).T @ np.conj(w)[inners]
 
-    def _normal_form(self, N, barycentric):
-        gS, w = barycentric
-        S = np.array(gS['index'])
-        gS = np.array(gS['data'])
-        lastS = S[-1]
-        M = len(S) - 1
-        idxs = np.argsort(S)
-        S = S[idxs]
-        w = w[idxs]
-        gS = gS[idxs]
-        ωN = np.exp(-2j * np.pi / N)
-
-        a = np.zeros((M+2, M+2), dtype=np.complex128)
-        a[1:, 0] = 1
-        a[0, 1:] = w
-        a[1:, 1:] = np.diag(ωN**(-S))
-
-        b = np.eye(M+2, dtype=np.complex128)
-        b[0, 0] = 0
-
-        poles, _ = scipy.linalg.eig(a, b, overwrite_a=True, overwrite_b=True)
-        poles = poles[2:]
-
-        idx = np.searchsorted(S, lastS)
-        S = np.delete(S, idx)
-        gS = np.delete(gS, idx, axis=0)
-        C = ωN**(-S)[:, np.newaxis] - poles[np.newaxis, :]
-        C = 1 / C
-        residues = scipy.linalg.solve(C, gS)
-
-        # Remove instable poles.
-        idxs = np.nonzero(np.abs(poles) <= 1)
-        poles, residues = poles[idxs], residues[idxs]
-        if residues.shape[1] < self._vh.shape[0]:
-            residues = np.pad(
-                residues,
-                ((0, 0), (0, self._vh.shape[0]-residues.shape[1])),
-                mode='constant')
-
-        self.poles_ = poles
-        self.residues_ = residues @ self._vh
+        return p/q[:, np.newaxis], w
 
     def remove_spurious(self, rtol=1e-6):
         if not self._removed:
@@ -415,6 +356,92 @@ class RatAppSym:
             self.poles_[pole_idxs],
             self.residues_[pole_idxs],
             z)
+
+def _get_max_order(max_order, N):
+    if max_order is None:
+        max_order_ = N // 2 - 1
+    else:
+        if max_order > N // 2 - 1:
+            msg = f'The number of poles must be less than half of the number of samples. \
+            max_order readjusted to {N // 2 - 1}'
+            logger.warning(msg, stacklevel=2)
+        max_order_ = min(max_order, N // 2 - 1)
+
+    return max_order_
+
+def _initialize_sets(x, rank):
+    N = x.shape[0]
+    gG = {'index': list(range(N)), 'data': list(x)}
+    gS = {'index': [], 'data': []}
+
+    # Choose rank + 1 peaks as initial frequencies.
+    upper = int(np.floor(np.log(N/5)/np.log(1.5)))
+    peaks = scipy.signal.find_peaks_cwt(
+        np.linalg.norm(x, axis=1),
+        widths=1.5**np.arange(upper+1))
+    idxs = np.argsort(np.linalg.norm(x, axis=1)[peaks])[::-1]
+    if len(idxs) >= rank+1:
+        peaks = peaks[idxs[:rank+1]]
+    else:
+        # Generate additional random indices.
+        rng = np.random.default_rng()
+        additional = rng.choice(
+            np.setdiff1d(np.arange(N), peaks),
+            size=(rank+1)-len(idxs), replace=False)
+        peaks = np.concatenate((peaks, additional))
+        logger.warning(
+            'Not enough peaks found. Adding random indices.', stacklevel=2)
+
+    gS['index'].extend(gG['index'][p] for p in peaks)
+    gS['data'].extend(gG['data'][p] for p in peaks)
+    for p in peaks:
+        idx = bisect.bisect_left(gG['index'], p)
+        gG['index'].pop(idx)
+        gG['data'].pop(idx)
+    return gS, gG
+
+def _update_sets(gS, gG, idx):
+    gS['index'].append(gG['index'][idx])
+    gS['data'].append(gG['data'][idx])
+    gG['index'].pop(idx)
+    gG['data'].pop(idx)
+    return np.array(gS['index'])
+    
+def _normal_form(N, barycentric):
+    gS, w = barycentric
+    S = np.array(gS['index'])
+    gS = np.array(gS['data'])
+    lastS = S[-1]
+    M = len(S) - 1
+    idxs = np.argsort(S)
+    S = S[idxs]
+    w = w[idxs]
+    gS = gS[idxs]
+    ωN = np.exp(-2j * np.pi / N)
+
+    a = np.zeros((M+2, M+2), dtype=np.complex128)
+    a[1:, 0] = 1
+    a[0, 1:] = w
+    a[1:, 1:] = np.diag(ωN**(-S))
+
+    b = np.eye(M+2, dtype=np.complex128)
+    b[0, 0] = 0
+
+    poles, _ = scipy.linalg.eig(a, b, overwrite_a=True, overwrite_b=True)
+    poles = poles[2:]
+
+    idx = np.searchsorted(S, lastS)
+    S = np.delete(S, idx)
+    gS = np.delete(gS, idx, axis=0)
+    C = ωN**(-S)[:, np.newaxis] - poles[np.newaxis, :]
+    C = 1 / C
+    residues = scipy.linalg.solve(C, gS)
+
+    # Remove instable poles.
+    idxs = np.nonzero(np.abs(poles) <= 1)
+    poles, residues = poles[idxs], residues[idxs]
+ 
+    return poles, residues
 
 class RationalApproximation:
     '''Rational Approximation using AAA algorithm.
@@ -445,50 +472,6 @@ class RationalApproximation:
 
         self._removed = False
 
-    @staticmethod
-    def _initialize_sets(x, rank):
-        N = x.shape[0]
-        gG = {'index': list(range(N)), 'data': list(x)}
-        gS = {'index': [], 'data': []}
-
-        # Choose rank + 1 peaks as initial frequencies.
-        upper = int(np.floor(np.log(N/5)/np.log(1.5)))
-        peaks = scipy.signal.find_peaks_cwt(
-            np.linalg.norm(x, axis=1),
-            widths=1.5**np.arange(0, upper+1))
-        idxs = np.argsort(np.linalg.norm(x, axis=1)[peaks])[::-1]
-        if len(idxs) >= rank+1:
-            peaks = peaks[idxs[:rank+1]]
-        else:
-            # Generate additional random indices.
-            rng = np.random.default_rng()
-            additional = rng.choice(
-                np.setdiff1d(np.arange(N), peaks),
-                size=(rank+1)-len(idxs), replace=False)
-            peaks = np.concatenate((peaks, additional))
-            logger.warning(
-                'Not enough peaks found. Adding random indices.', stacklevel=2)
-
-        gS['index'].extend(gG['index'][p] for p in peaks)
-        gS['data'].extend(gG['data'][p] for p in peaks)
-        for p in peaks:
-            idx = bisect.bisect_left(gG['index'], p)
-            gG['index'].pop(idx)
-            gG['data'].pop(idx)
-        return gS, gG
-    
-    def _get_max_order(self, max_order, N):
-        if max_order is None:
-            max_order_ = N // 2 - 1
-        else:
-            if max_order > N // 2 - 1:
-                msg = f'The number of poles must be less than half of the number of samples. \
-                max_order readjusted to {N // 2 - 1}'
-                logger.warning(msg, stacklevel=2)
-            max_order_ = min(max_order, N // 2 - 1)
-
-        return max_order_
-
     def fit(self, x, tol=0.01):
         if x.ndim == 1:
             x = np.atleast_2d(x).T
@@ -504,9 +487,9 @@ class RationalApproximation:
         else:
             rank = 1
 
-        max_order_ = self._get_max_order(self.max_order, x.shape[0])
+        max_order_ = _get_max_order(self.max_order, x.shape[0])
 
-        gS, gG = self._initialize_sets(x, rank)
+        gS, gG = _initialize_sets(x, rank)
         self.freqs_ = np.array(gS['index'])
         r, w = self._fit(N, gS, gG, rank)
 
@@ -527,25 +510,15 @@ class RationalApproximation:
                 break
             else:
                 logger.debug(f'==== step: {step} ====')
-                self.freqs_ = self._update_sets(gS, gG, idx)
+                self.freqs_ = _update_sets(gS, gG, idx)
                 r, w = self._fit(N, gS, gG, rank)
             step += 1
         self.error_ = error
         
         barycentric = (gS, w)
-        p, res = self._normal_form(N, barycentric)
+        p, res = _normal_form(N, barycentric)
         self.poles_ = p
         self.residues_ = res
-
-        return self
-
-    @staticmethod
-    def _update_sets(gS, gG, idx):
-        gS['index'].append(gG['index'][idx])
-        gS['data'].append(gG['data'][idx])
-        gG['index'].pop(idx)
-        gG['data'].pop(idx)
-        return np.array(gS['index'])
 
     @staticmethod
     def _fit(N, gS, gG, rank):
@@ -565,50 +538,13 @@ class RationalApproximation:
         _, eigval, w = scipy.linalg.svd(
             L,
             overwrite_a=True,
-            full_matrices=True)
+            full_matrices=False)
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
         w = In @ np.conj(w[-1])
         r = np.array([w[i] * gS['data'][i] for i in range(n_freqs)])
         r = ((1/C.T) @ r) / ((1/C.T) @ w)[:, np.newaxis]
 
         return r, w
-
-    @staticmethod
-    def _normal_form(N, barycentric):
-        gS, w = barycentric
-        S = np.array(gS['index'])
-        gS = np.array(gS['data'])
-        lastS = S[-1]
-        M = len(S) - 1
-        idxs = np.argsort(S)
-        S = S[idxs]
-        w = w[idxs]
-        gS = gS[idxs]
-        ωN = np.exp(-2j * np.pi / N)
-
-        a = np.zeros((M+2, M+2), dtype=np.complex128)
-        a[1:, 0] = 1
-        a[0, 1:] = w
-        a[1:, 1:] = np.diag(ωN**(-S))
-
-        b = np.eye(M+2, dtype=np.complex128)
-        b[0, 0] = 0
-
-        poles, _ = scipy.linalg.eig(a, b, overwrite_a=True, overwrite_b=True)
-        poles = poles[2:]
-
-        idx = np.searchsorted(S, lastS)
-        S = np.delete(S, idx)
-        gS = np.delete(gS, idx, axis=0)
-        C = ωN**(-S)[:, np.newaxis] - poles[np.newaxis, :]
-        C = 1 / C
-        residues = scipy.linalg.solve(C, gS)
-
-        # Remove instable poles.
-        idxs = np.nonzero(np.abs(poles) <= 1)
-        poles, residues = poles[idxs], residues[idxs]
- 
-        return poles, residues
 
     def remove_spurious(self, rtol=1e-6):
         if not self._removed:
