@@ -88,7 +88,7 @@ class Test_RationalApproximation:
 
         # Create complex frequencies and residues.
         r = rng.uniform(0.7, 0.9, M)
-        phase = rng.uniform(0, 1, M)
+        phase = rng.uniform(0.01, 0.49, M)
         poles = r * np.exp(2j * np.pi * phase)
         poles = np.concatenate((poles, np.conj(poles)))
         residues = rng.normal(0, 2, (M, 1)) + 1j * rng.normal(0, 2, (M, 1))

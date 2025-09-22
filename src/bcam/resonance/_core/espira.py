@@ -155,49 +155,50 @@ class RatAppSym:
     @staticmethod
     def _initialize_sets(x, rank):
         N = x.shape[0]
-        gG = {'index': list(range(N)), 'data': list(x)}
+        m = N // 2 + 1
+        gG = {'index': list(range(m)), 'data': list(x[:m])}
         gS = {'index': [], 'data': []}
 
         # Choose rank + 1 peaks as initial frequencies.
-        upper = int(np.floor(np.log(N/5)/np.log(1.5)))
-        peaks = scipy.signal.find_peaks_cwt(
-            np.linalg.norm(x, axis=1),
-            widths=1.5**np.arange(upper+1))
-        idxs = np.argsort(np.linalg.norm(x, axis=1)[peaks])[::-1]
+        abs_v = np.linalg.norm(x, axis=1)
+        abs_v = np.concatenate((abs_v, abs_v))
+        peaks, h = scipy.signal.find_peaks(
+            abs_v,
+            height=np.max(abs_v)/5,
+            distance=np.max((N//(8*(rank+1)), 2))
+        )
+        idxs = np.argsort(h['peak_heights'])
         peaks = peaks[idxs]
-        iszero = np.nonzero(peaks == 0)[0]
-        if N%2 == 0:
-            isend = np.nonzero(peaks == N//2)[0]
-        ends = np.sort(np.concatenate((iszero, isend)))
-        if 2*len(idxs) - len(ends) >= rank+1:
-            peaks_ = []
-            c = 0
-            for p in peaks:
-                if c >= rank+1:
-                    break
-                peaks_.append(p)
-                if p in ends:
-                    c += 1
-                else:
-                    c += 2
-            peaks = np.array(peaks_)
-        else:
-            # Generate additional random indices.
+        peaks = np.unique(peaks%N)
+        peaks = peaks[peaks < m]
+        peaks_ = list(peaks)
+        peaks = []
+        c = 0
+        while c < rank+1:
+            try:
+                p = peaks_.pop()
+            except IndexError:
+                break
+            peaks.append(p)
+            if (p == 0) or (N%2 == 0 and p == N//2):
+                c += 1
+            else:
+                c += 2
+        # Generate additional random indices if c < rank + 1.
+        if c < rank + 1:
+            logger.warning(
+                'Not enough peaks found. Adding random indices.', stacklevel=2)
+            diff = np.setdiff1d(np.arange(m), peaks, assume_unique=True)
             rng = np.random.default_rng()
-            c = rank+1 - 2*len(idxs) + len(ends)
-            peaks = list(peaks)
+            rng.shuffle(diff)
+            diff = list(diff)
             while c < rank+1:
-                p = rng.choice(
-                    np.setdiff1d(np.arange(N), peaks, assume_unique=True),
-                    size=1, replace=False)[0]
+                p = diff.pop()
                 peaks.append(p)
                 if (p == 0) or (N%2 == 0 and p == N//2):
                     c += 1
                 else:
                     c += 2
-            peaks = np.array(peaks)
-            logger.warning(
-                'Not enough peaks found. Adding random indices.', stacklevel=2)
 
         gS['index'].extend(gG['index'][p] for p in peaks)
         gS['data'].extend(gG['data'][p] for p in peaks)
@@ -212,24 +213,29 @@ class RatAppSym:
         if x.ndim == 1:
             x = np.atleast_2d(x).T
         N, m = x.shape
-        y = np.concatenate(
-            (np.real(x[:N//2+1]), np.imag(x)[1:(N+1)//2]), axis=0)
         if m > 1:
+            y = np.concatenate(
+                (np.real(x[:N//2+1]), np.imag(x)[1:(N+1)//2]), axis=0)
             # Check for rank deficiency.
-            s = scipy.linalg.svd(y, compute_uv=False)
+            s = scipy.linalg.svdvals(y, overwrite_a=True)
             test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
             test = np.nonzero(test >= 1-tol)[0]
             if len(test) > 1:
                 logger.info(f'Rank deficient data.')
             rank = test[0]+1
+            del y
         else:
             rank = 1
-        del y
 
-        # TODO: take into account double.
         max_order_ = _get_max_order(self.max_order, x.shape[0])
 
-        gS, gG = self._initialize_sets(x[:N//2+1], rank)
+        gS, gG = self._initialize_sets(x, rank)
+        n_poles = 0
+        for p in gS['index']:
+            if (p == 0) or (N%2 == 0 and p == N//2):
+                n_poles += 1
+            else:
+                n_poles += 2
         self.freqs_ = np.array(gS['index'])
         r, w = self._fit(N, gS, gG, rank)
 
@@ -243,7 +249,7 @@ class RatAppSym:
 
             if error < self.tol:
                 succeed = True
-            elif len(gS) >= max_order_ + 1:
+            elif n_poles >= max_order_ + 1:
                 msg = 'Convergence failed after the maximum number of poles is reached.\n'
                 msg += f'The error is {error}'
                 logger.warning(msg, stacklevel=2)
@@ -251,7 +257,11 @@ class RatAppSym:
             else:
                 logger.debug(f'==== step: {step} ====')
                 self.freqs_ = _update_sets(gS, gG, idx)
-                r, w = self._fit(N, gS, gG)
+                r, w = self._fit(N, gS, gG, rank)
+                if (gS['index'][-1] == 0) or (N%2 == 0 and gS['index'][-1] == N//2):
+                    n_poles += 1
+                else:
+                    n_poles += 2
             step += 1
         self.error_ = error
 
@@ -266,12 +276,13 @@ class RatAppSym:
         n_freqs = len(gS['data'])
         n_comps = len(gS['data'][0])
         ωN = np.exp(-2j * np.pi / N)
-        Gidx = np.array(gG['index'])
-        iszero = np.nonzero(Gidx == 0)[0]
-        if N%2 == 0:
-            isend = np.nonzero(Gidx == N//2)[0]
-        ends = np.sort(np.concatenate((iszero, isend)))
-        innersG = np.setdiff1d(np.arange(len(Gidx)), ends, assume_unique=True)
+        # Locate zero and N/2.
+        endsS = []
+        if gG['index'][0] != 0:
+            endsS.append(gS['index'].index(0))
+        if N%2 == 0 and (gG['index'][-1] != N//2):
+            endsS.append(gS['index'].index(N//2))
+        endsS = np.sort(np.array(endsS, dtype=np.int64))
 
         Cp = ωN**(-np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
         Cm = ωN**(np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
@@ -279,35 +290,33 @@ class RatAppSym:
         Lm = np.conj(np.array(gS['data']))[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
         Lp = Lp / Cp[..., np.newaxis]
         Lm = Lm / Cm[..., np.newaxis]
-        # Determine if 0 and N/2 are in gS.
-        Sidx = np.array(gS['index'])
-        iszero = np.nonzero(Sidx == 0)[0]
-        if N%2 == 0:
-            isend = np.nonzero(Sidx == N//2)[0]
-        ends = np.sort(np.concatenate((iszero, isend)))
-        mr = 2*len(Sidx) - len(ends)
+        mr = 2*len(gS['index']) - len(endsS)
         # Adapt matrix L for real and imaginary parts.
         LR = np.zeros(
             (mr, 2*len(gG['data']), n_comps),
             dtype=np.float64)
         # Add frequencies 0 and N/2 if they are in gS.
-        ends_ = 2*ends - np.array([-i for i in range(len(ends))])
-        LR[ends_, ::2] = np.real(Lp[ends])
-        LR[ends_, 1::2] = np.imag(Lp[ends])
+        ends_ = 2*endsS - np.arange(len(endsS))
+        LR[ends_, ::2] = np.real(Lp[endsS])
+        LR[ends_, 1::2] = np.imag(Lp[endsS])
         # Add inner frequencies.
-        inners = np.setdiff1d(np.arange(len(Sidx)), ends, assume_unique=True)
+        inners = np.setdiff1d(np.arange(n_freqs), endsS, assume_unique=True)
         inners_ = np.setdiff1d(np.arange(mr), ends_, assume_unique=True)
         LR[inners_[::2], ::2] = np.real(Lp[inners]) + np.real(Lm[inners])
         LR[inners_[::2], 1::2] = np.imag(Lp[inners]) + np.imag(Lm[inners])
         LR[inners_[1::2], ::2] = -np.imag(Lp[inners]) + np.imag(Lm[inners])
         LR[inners_[1::2], 1::2] = np.real(Lp[inners]) - np.real(Lm[inners])
-        LR[:, 2*innersG] = LR[:, 2*innersG] * np.sqrt(2)
+        # Take into account that 0 and N/2 appear only once.
+        if gG['index'][0] == 0:
+            LR[:, :2] = LR[:, :2] / np.sqrt(2)
+        if N%2 == 0 and (gG['index'][-1] == N//2):
+            LR[:, -2:] = LR[:, -2:] / np.sqrt(2)
         LR = LR.reshape(mr, -1).T
         del Lp, Lm
 
         # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
         gS_ = np.zeros((mr, n_comps), dtype=np.float64)
-        gS_[ends_, :] = np.real(np.array(gS['data'])[ends])
+        gS_[ends_, :] = np.real(np.array(gS['data'])[endsS])
         gS_[inners_[::2], :] = 2*np.real(np.array(gS['data'])[inners])
         gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
         In = scipy.linalg.qr(gS_, pivoting=True)[0]
@@ -315,24 +324,23 @@ class RatAppSym:
 
         # Compute weights to find best rational approximation.
         LR = LR @ In
-        _, eigval, w = scipy.linalg.svd(
+        eigval, w = scipy.linalg.svd(
             LR,
             overwrite_a=True,
-            full_matrices=False)
+            full_matrices=False)[1:]
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
         w = In @ w[-1]
         w_ = np.zeros((n_freqs,), dtype=np.complex128)
-        w_[ends] = w[ends_].astype(np.complex128)
+        w_[endsS] = w[ends_]
         w_[inners] = w[inners_[::2]] + 1j * w[inners_[1::2]]
         w = w_
 
         # Compute rational function at G frequencies.
-        rp = w * np.array(gS['data'])
-        rm = np.conj(w) * np.conj(np.array(gS['data']))
-        p = (1/Cp).T @ rp + (1/Cm[inners]).T @ rm[inners]
+        rp = w[:, np.newaxis] * np.array(gS['data'])
+        p = (1/Cp).T @ rp + (1/Cm[inners]).T @ np.conj(rp)[inners]
         q = (1/Cp).T @ w + (1/Cm[inners]).T @ np.conj(w)[inners]
 
-        return p/q[:, np.newaxis], w
+        return p/(q[:, np.newaxis]), w
 
     def remove_spurious(self, rtol=1e-6):
         if not self._removed:
@@ -375,22 +383,38 @@ def _initialize_sets(x, rank):
     gS = {'index': [], 'data': []}
 
     # Choose rank + 1 peaks as initial frequencies.
-    upper = int(np.floor(np.log(N/5)/np.log(1.5)))
-    peaks = scipy.signal.find_peaks_cwt(
-        np.linalg.norm(x, axis=1),
-        widths=1.5**np.arange(upper+1))
-    idxs = np.argsort(np.linalg.norm(x, axis=1)[peaks])[::-1]
-    if len(idxs) >= rank+1:
-        peaks = peaks[idxs[:rank+1]]
-    else:
-        # Generate additional random indices.
-        rng = np.random.default_rng()
-        additional = rng.choice(
-            np.setdiff1d(np.arange(N), peaks),
-            size=(rank+1)-len(idxs), replace=False)
-        peaks = np.concatenate((peaks, additional))
+    abs_v = np.linalg.norm(x, axis=1)
+    abs_v = np.concatenate((abs_v, abs_v))
+    peaks, h = scipy.signal.find_peaks(
+        abs_v,
+        height=np.max(abs_v)/5,
+        distance=np.max((N//(4*(rank+1)), 2))
+    )
+    idxs = np.argsort(h['peak_heights'])
+    peaks = peaks[idxs]
+    peaks = np.unique(peaks%N)
+    peaks_ = list(peaks)
+    peaks = []
+    c = 0
+    while c < rank+1:
+        try:
+            p = peaks_.pop()
+        except IndexError:
+            break
+        peaks.append(p)
+        c += 1
+    # Generate additional random indices if c < rank + 1.
+    if c < rank + 1:
         logger.warning(
             'Not enough peaks found. Adding random indices.', stacklevel=2)
+        diff = np.setdiff1d(np.arange(m), peaks, assume_unique=True)
+        rng = np.random.default_rng()
+        rng.shuffle(diff)
+        diff = list(diff)
+        while c < rank+1:
+            p = diff.pop()
+            peaks.append(p)
+            c += 1
 
     gS['index'].extend(gG['index'][p] for p in peaks)
     gS['data'].extend(gG['data'][p] for p in peaks)
@@ -478,7 +502,7 @@ class RationalApproximation:
         N, m = x.shape
         if m > 1:
             # Check for rank deficiency.
-            s = scipy.linalg.svd(x, compute_uv=False)
+            s = scipy.linalg.svdvals(x, overwrite_a=False)
             test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
             test = np.nonzero(test >= 1-tol)[0]
             if len(test) > 1:
@@ -535,10 +559,10 @@ class RationalApproximation:
         In = np.conj(In[:, rank:])
         # Compute weights to find best rational approximation.
         L = L @ In
-        _, eigval, w = scipy.linalg.svd(
+        eigval, w = scipy.linalg.svd(
             L,
             overwrite_a=True,
-            full_matrices=False)
+            full_matrices=False)[1:]
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
         w = In @ np.conj(w[-1])
         r = np.array([w[i] * gS['data'][i] for i in range(n_freqs)])
