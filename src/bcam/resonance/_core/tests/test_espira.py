@@ -6,7 +6,11 @@ import scipy
 from bcam.resonance._core import espira
 
 
-class Test_RationalApproximation:
+# ============================
+# Test Rational Approximation
+# ============================
+
+class Test_RatApp:
 
     def test_rational_fit(self):
         M = 10
@@ -84,6 +88,9 @@ class Test_RationalApproximation:
         assert np.allclose(
             espira.rational_function(res.poles_, res.residues_, ωN**(-np.arange(N))), x)
 
+
+class Test_RatAppSym:
+
     @staticmethod
     def _fit_symmetric(poles, residues, N):
         # Construct signal.
@@ -152,3 +159,38 @@ class Test_RationalApproximation:
         assert np.allclose(
             espira.rational_function_sym(poles_fit, residues_fit, ωN**(-np.arange(N))), x)
         
+    def test_vector_fit(self):
+        # Test only complex poles
+        # ------------------------
+        rng = np.random.default_rng()
+        M = 6
+        L = 3
+        N = 2 * (2*M + 1) + 10
+        ωN = np.exp(-2j * np.pi / N)
+
+        # Create complex frequencies and residues.
+        r = rng.uniform(0.7, 0.9, M)
+        phase = rng.uniform(0.01, 0.49, M)
+        poles = r * np.exp(2j * np.pi * phase)
+        residues = rng.normal(0, 2, (M, L)) + 1j * rng.normal(0, 2, (M, L))
+        poles = (np.array([]), poles)
+        residues = (np.array([]), residues)
+
+        x, poles_fit, residues_fit = self._fit_symmetric(poles, residues, N)
+
+        assert (len(poles_fit[0]) == 0) and (len(poles_fit[1]) == M)
+        assert np.allclose(np.sort_complex(poles_fit[1]), np.sort_complex(poles[1]))
+        assert np.allclose(
+            espira.rational_function_sym(poles_fit, residues_fit, ωN**(-np.arange(N))), x)
+
+# ============
+# Test ESPIRA
+# ============
+
+class Test_ESPIRA:
+
+    def test_espira(self):
+        M, L = 5, 2
+        N = 2 * (M + 1) + 10 # N >= 2 * (M + 1)
+        test = Test_ESPIRA(N, M, n_comps=L, seed=None)
+        test.exp_sum_fit(espira_kwargs=kwargs)

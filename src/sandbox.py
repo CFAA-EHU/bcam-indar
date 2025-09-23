@@ -10,46 +10,6 @@ import matplotlib.pyplot as plt
 from bcam.resonance import mechanical, espira
 
 # %%
-M = 6
-L = 3
-N = 2 * (M + 1) + 40 # N >= 2 * (M + 1)
-rng = np.random.default_rng()
-
-# Create complex frequencies and residues.
-r = rng.uniform(0.7, 0.9, M)
-phase = rng.uniform(0, 1, M)
-poles = r * np.exp(2j * np.pi * phase)
-residues = rng.normal(0, 2, (M, L)) + 1j * rng.normal(0, 2, (M, L))
-
-# Construct signal.
-ωN = np.exp(-2j * np.pi / N)
-x = espira.rational_function(poles, residues, ωN**(-np.arange(N)))
-
-q, s, v = scipy.linalg.svd(
-    x, full_matrices=False)
-xq = q*s[np.newaxis, :]
-
-upper = int(np.floor(np.log(N/5)/np.log(1.5)))
-peaks = scipy.signal.find_peaks_cwt(
-    np.linalg.norm(x, axis=1),
-    widths=1.5**np.arange(0, upper+1))
-idxs = np.argsort(np.linalg.norm(x, axis=1)[peaks])[::-1]
-if len(idxs) >= L+1:
-    peaks = peaks[idxs[:L+1]]
-    print('Peaks at:', peaks)
-else:
-    # Generate additional random indices.
-    additional = rng.choice(
-        np.setdiff1d(np.arange(N), peaks),
-        size=(L+1)-len(idxs), replace=False)
-    peaks = np.concatenate((peaks, additional))
-    print('Not enough peaks found.')
-
-plt.plot(np.linalg.norm(x, axis=1))
-plt.plot(np.abs(xq), alpha=0.4)
-plt.show()
-
-# %%
 def kernel(ns, fs, a, freqs):
     dof = len(freqs)
     t = np.arange(ns) / fs

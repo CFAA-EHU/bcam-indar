@@ -98,109 +98,6 @@ class Test_ESPIRA:
 
         return axs
 
-
-class Test_RationalApproximation:
-
-    def __init__(self, N, M, n_comps=1, seed=None):
-        self.N = N
-        self.M = M
-        self.n_comps = n_comps
-        self.seed = seed
-
-        self.x = None
-        self.original_poles = None
-        self.original_residues = None
-        self.rational = None
-
-    def rational_fit(self, rational_kwargs=None):
-        N, M = self.N, self.M
-        L = self.n_comps
-        rng = np.random.default_rng(self.seed)
-
-        # Create complex frequencies and residues.
-        r = rng.uniform(0.7, 0.9, M)
-        phase = rng.uniform(0, 1, M)
-        poles = r * np.exp(2j * np.pi * phase)
-        residues = rng.normal(0, 2, (M, L)) + 1j * rng.normal(0, 2, (M, L))
-
-        # Construct signal.
-        ωN = np.exp(-2j * np.pi / N)
-        x = espira.rational_function(poles, residues, ωN**(-np.arange(N)))
-
-        # Fit the signal.
-        rational_kwargs = rational_kwargs if rational_kwargs is not None else {}
-        r = espira.RatApp(**rational_kwargs)
-        r.fit(x)
-        # r.remove_spurious()
-        print(f'Number of poles: {len(r.poles_)}')
-
-        self.original_poles = poles
-        self.original_residues = residues
-        self.x = x
-        self.rational = r
-
-    def symmetric_rational_fit(self, rational_kwargs=None):
-        N, M = self.N, self.M
-        L = self.n_comps
-        rng = np.random.default_rng(self.seed)
-
-        # Create complex frequencies and coefficients.
-        r = rng.uniform(0.4, 0.9, M//2)
-        phase = rng.uniform(0.1, 0.4, M//2)
-        poles = r * np.exp(2j * np.pi * phase)
-        poles = np.concatenate((poles, np.conj(poles)))
-        residues = rng.normal(0, 2, (M//2, L)) + 1j * rng.normal(0, 2, (M//2, L))
-        residues = np.concatenate((residues, np.conj(residues)), axis=0)
-
-        # Construct signal.
-        ωN = np.exp(-2j * np.pi / N)
-        x = espira.rational_function(poles, residues, ωN**(-np.arange(N)))
-
-        # Fit the signal.
-        rational_kwargs = rational_kwargs if rational_kwargs is not None else {}
-        r = espira.RatApp(mode='symmetric', **rational_kwargs)
-        r.fit(x)
-        r.remove_spurious()
-        print(f'Number of poles: {len(r.poles_)}')
-
-        self.original_poles = poles
-        self.original_residues = residues
-        self.x = x
-        self.rational = r
-
-    def plot_poles(self):
-        z = self.original_poles
-        z_r = self.rational.poles_
-        
-        fig, axs = plt.subplots()
-        fig.suptitle('Recovered complex frequencies')
-        axs.scatter(z.real, z.imag, color='b', label='Original')
-        axs.scatter(z_r.real, z_r.imag, color='r', alpha=0.4, label='Retrieved')
-        # Draw a unit circle.
-        axs.add_patch(patches.Circle((0, 0), 1, fill=False, edgecolor='black'))
-        axs.set_aspect('equal')
-        axs.set_xlabel('Real')
-        axs.set_ylabel('Imaginary')
-        axs.legend(loc='upper right')
-
-        return axs
-
-    def plot_approximation(self, comp=0):
-        x = self.x
-        N = len(x)
-        ωN = np.exp(-2j * np.pi / N)
-        x_r = self.rational.eval(ωN**(-np.arange(N)))
-
-        fig, axs = plt.subplots()
-        fig.suptitle('Polynomial approximation')
-        axs.plot(np.abs(x[:, comp]), '-o', color='b', label='Original')
-        axs.plot(np.abs(x_r[:, comp]), '-o', color='r', alpha=0.4, label='Retrieved')
-        axs.legend()
-        axs.set_ylabel(f'|x{comp}|')
-
-        return axs
-
-
 # %%
 if __name__ == '__main__':
     import logging
@@ -208,29 +105,6 @@ if __name__ == '__main__':
     logger = logging.getLogger(espira.__name__)
     logging.basicConfig()
     logger.setLevel(logging.DEBUG)
-
-# # %%
-# # ==== Test symmetric AAA (1DoF) ====
-#     M = 10 # Even number
-#     N = 2 * (M + 1) + 1 # N >= 2 * (M + 1)
-#     kwargs = {'max_order': None, 'tol': 1e-6}
-#     test = Test_RationalApproximation(N, M, seed=None)
-#     test.symmetric_rational_fit(rational_kwargs=kwargs)
-#     test.plot_poles()
-#     test.plot_approximation()
-#     plt.show()
-
-# # %%
-# # ==== Test symmetric AAA (nDoF) ====
-#     M = 10 # Even number
-#     L = 4
-#     N = 2 * (M + 1) + 10 # N >= 2 * (M + 1)
-#     kwargs = {'max_order': None, 'tol': 1e-10}
-#     test = Test_RationalApproximation(N, M, n_comps=L, seed=None)
-#     test.symmetric_rational_fit(rational_kwargs=kwargs)
-#     test.plot_poles()
-#     test.plot_approximation(comp=1)
-#     plt.show()
 
 # # %%
 # # ==== Test ESPIRA complex ====
