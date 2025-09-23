@@ -129,7 +129,7 @@ class Test_RationalApproximation:
 
         # Fit the signal.
         rational_kwargs = rational_kwargs if rational_kwargs is not None else {}
-        r = espira.RationalApproximation(**rational_kwargs)
+        r = espira.RatApp(**rational_kwargs)
         r.fit(x)
         # r.remove_spurious()
         print(f'Number of poles: {len(r.poles_)}')
@@ -158,7 +158,7 @@ class Test_RationalApproximation:
 
         # Fit the signal.
         rational_kwargs = rational_kwargs if rational_kwargs is not None else {}
-        r = espira.RationalApproximation(mode='symmetric', **rational_kwargs)
+        r = espira.RatApp(mode='symmetric', **rational_kwargs)
         r.fit(x)
         r.remove_spurious()
         print(f'Number of poles: {len(r.poles_)}')
