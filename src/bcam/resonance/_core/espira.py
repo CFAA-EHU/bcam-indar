@@ -10,58 +10,6 @@ import scipy
 logger = logging.getLogger(__name__)
 
 
-def _validate_data(array):
-
-        array = np.asarray(array)
-
-        # If input is scalar, raise error.
-        if array.ndim == 0:
-            raise ValueError('Expected 1D or 2D array, got scalar instead.')
-        elif array.ndim > 2:
-            raise ValueError('Expected 1D or 2D array, got more than 2 dimensions.')
-        elif array.ndim == 1:
-            array = np.expand_dims(array, axis=1)
-    
-        return array
-
-def exp_sum(poles, amplitudes, t, fs=1):
-    '''
-    Parameters
-    ----------
-    poles : (M,) array_like
-    amplitudes : (M, L) array_like
-    t : scalar or (N, ) array_like
-    fs : scalar, default=1
-        Sampling frequency.
-
-    Return
-    ------
-    out : (N, L) complex ndarray
-        The values of the rational function at the points z.
-        If z is scalar, N = 1.
-    '''
-    poles = np.asarray(poles)
-    if poles.ndim != 1:
-        msg = f'Expected a 1D array for poles, got an array of dimension {poles.ndim}.'
-        raise ValueError(msg)
-
-    t = np.asarray(t)
-    if t.ndim == 0:
-        t = np.expand_dims(t, axis=0)
-    elif t.ndim > 1:
-        msg = f'Expected a 1D array for t, got an array of dimension {t.ndim}.'
-        raise ValueError(msg)
-    
-    amplitudes = np.asarray(amplitudes)
-    if amplitudes.ndim == 1:
-        amplitudes = np.expand_dims(amplitudes, axis=1)
-    elif amplitudes.ndim > 2:
-        msg = f'Expected a 1D or 2D array for amplitudes, got an array of dimension {amplitudes.ndim}.'
-        raise ValueError(msg)
-
-    return (poles[np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amplitudes
-
-
 def fit_amplitudes(data, poles):
     # Validate input data.
     data = np.array(data)
@@ -191,12 +139,8 @@ class RatApp:
     residues_ : array_like
     '''
 
-    def __init__(self, tol=1e-3, mode='normal', max_order=None):
-        self.tol = tol
-        self.mode = mode
-        self.max_order = max_order
-
-        self._removed = False
+    def __init__(self):
+        pass
 
     @staticmethod
     def _initialize_sets(x, rank):
@@ -245,54 +189,6 @@ class RatApp:
             gG['index'].pop(idx)
             gG['data'].pop(idx)
         return gS, gG
-
-    def fit(self, x, tol=0.01):
-        if x.ndim == 1:
-            x = np.atleast_2d(x).T
-        N, m = x.shape
-        if m > 1:
-            # Check for rank deficiency.
-            s = scipy.linalg.svdvals(x, overwrite_a=False)
-            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
-            test = np.nonzero(test >= 1-tol)[0]
-            if len(test) > 1:
-                logger.info(f'Rank deficient data.')
-            rank = test[0]+1
-        else:
-            rank = 1
-
-        max_order_ = _get_max_order(self.max_order, x.shape[0])
-
-        gS, gG = self._initialize_sets(x, rank)
-        self.freqs_ = np.array(gS['index'])
-        r, w = self._fit(N, gS, gG, rank)
-
-        logger.debug(f'==== step: 0 ====')
-        succeed = False
-        step = 1
-        while not succeed:
-            idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
-            error = np.linalg.norm(gG['data'] - r, axis=1)[idx]
-            logger.debug(f'error: {error}')
-
-            if error < self.tol:
-                succeed = True
-            elif len(gS) >= max_order_ + 1:
-                msg = 'Convergence failed after the maximum number of poles is reached.\n'
-                msg += f'The error is {error}'
-                logger.warning(msg, stacklevel=2)
-                break
-            else:
-                logger.debug(f'==== step: {step} ====')
-                self.freqs_ = _update_sets(gS, gG, idx)
-                r, w = self._fit(N, gS, gG, rank)
-            step += 1
-        self.error_ = error
-        
-        barycentric = (gS, w)
-        p, res = self._normal_form(N, barycentric)
-        self.poles_ = p
-        self.residues_ = res
 
     @staticmethod
     def _fit(N, gS, gG, rank):
@@ -349,18 +245,58 @@ class RatApp:
         residues = residues[:-1]
 
         return poles, residues
+    
+    def fit(self, x, tol=1e-3, max_order=None, rank_tol=0.01):
+        if x.ndim == 1:
+            x = np.atleast_2d(x).T
+        N, m = x.shape
+        if m > 1:
+            # Check for rank deficiency.
+            s = scipy.linalg.svdvals(x, overwrite_a=False)
+            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
+            test = np.nonzero(test >= 1-rank_tol)[0]
+            if len(test) > 1:
+                logger.info(f'Rank deficient data.')
+            rank = test[0]+1
+        else:
+            rank = 1
+
+        max_order_ = _get_max_order(max_order, x.shape[0])
+
+        gS, gG = self._initialize_sets(x, rank)
+        self.freqs_ = np.array(gS['index'])
+        r, w = self._fit(N, gS, gG, rank)
+
+        logger.debug(f'==== step: 0 ====')
+        succeed = False
+        step = 1
+        while not succeed:
+            idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
+            error = np.linalg.norm(gG['data'] - r, axis=1)[idx]
+            logger.debug(f'error: {error}')
+
+            if error < tol:
+                succeed = True
+            elif len(gS) >= max_order_ + 1:
+                msg = 'Convergence failed after the maximum number of poles is reached.\n'
+                msg += f'The error is {error}'
+                logger.warning(msg, stacklevel=2)
+                break
+            else:
+                logger.debug(f'==== step: {step} ====')
+                self.freqs_ = _update_sets(gS, gG, idx)
+                r, w = self._fit(N, gS, gG, rank)
+            step += 1
+        
+        barycentric = (gS, w)
+        p, res = self._normal_form(N, barycentric)
+
+        return p, res, error
 
 class RatAppSym:
 
-    def __init__(
-        self,
-        tol=1e-3,
-        max_order=None
-    ):
-        self.tol = tol
-        self.max_order = max_order
-
-        self._removed = False
+    def __init__(self):
+        pass
 
     @staticmethod
     def _initialize_sets(x, rank):
@@ -417,74 +353,6 @@ class RatAppSym:
             gG['index'].pop(idx)
             gG['data'].pop(idx)
         return gS, gG
-
-    def fit(self, x, tol=0.01):
-        x[1:] = 0.5 * (x[1:] + np.conj(x[-1:0:-1]))
-        if x.ndim == 1:
-            x = np.atleast_2d(x).T
-        N, m = x.shape
-        if m > 1:
-            y = np.concatenate(
-                (np.real(x[:N//2+1]), np.imag(x)[1:(N+1)//2]), axis=0)
-            # Check for rank deficiency.
-            s = scipy.linalg.svdvals(y, overwrite_a=True)
-            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
-            test = np.nonzero(test >= 1-tol)[0]
-            if len(test) > 1:
-                logger.info(f'Rank deficient data.')
-            rank = test[0]+1
-            del y
-        else:
-            rank = 1
-
-        max_order_ = _get_max_order(self.max_order, x.shape[0])
-
-        gS, gG = self._initialize_sets(x, rank)
-        n_freqs = 0
-        if gG['index'][0] != 0:
-            n_freqs += 1
-        if N%2 == 0 and (gG['index'][-1] != N//2):
-            n_freqs += 1
-        n_freqs = 2*len(gS['index']) - n_freqs
-        self.freqs_ = np.array(gS['index'])
-        r, w = self._fit(N, gS, gG, rank)
-
-        logger.debug(f'==== step: 0 ====')
-        succeed = False
-        step = 1
-        while not succeed:
-            idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
-            error = np.linalg.norm(gG['data'] - r, axis=1)[idx]
-            logger.debug(f'error: {error}')
-
-            if error < self.tol:
-                succeed = True
-            elif n_freqs >= max_order_ + 1:
-                msg = 'Convergence failed after the maximum number of poles is reached.\n'
-                msg += f'The error is {error}'
-                logger.warning(msg, stacklevel=2)
-                break
-            else:
-                logger.debug(f'==== step: {step} ====')
-                self.freqs_ = _update_sets(gS, gG, idx)
-                r, w = self._fit(N, gS, gG, rank)
-                if (gS['index'][-1] == 0) or (N%2 == 0 and gS['index'][-1] == N//2):
-                    n_freqs += 1
-                else:
-                    n_freqs += 2
-            step += 1
-        self.error_ = error
-
-        endsS = []
-        if gG['index'][0] != 0:
-            endsS.append(gS['index'].index(0))
-        if N%2 == 0 and (gG['index'][-1] != N//2):
-            endsS.append(gS['index'].index(N//2))
-        endsS = np.sort(np.array(endsS, dtype=np.int64))
-        barycentric = (gS, endsS, w)
-        p, res = self._normal_form(N, barycentric)
-        self.poles_ = p
-        self.residues_ = res
 
     @staticmethod
     def _fit(N, gS, gG, rank):
@@ -576,13 +444,26 @@ class RatAppSym:
         b[0, 0] = 0
 
         poles = scipy.linalg.eigvals(a, b, overwrite_a=True)
-        # Keep stable poles.
         poles = poles[2:]
-        poles = poles[np.imag(poles) > -1e-10]
-        id_real_p = np.nonzero(np.abs(np.imag(poles)) <= 1e-10)[0]
-        id_complex_p = np.setdiff1d(np.arange(len(poles)), id_real_p, assume_unique=True)
-        poles = (np.real(poles[id_real_p]), poles[id_complex_p])
+        # Separate real and complex conjugated poles.
+        poles_u = list(poles[np.imag(poles) >= 0])
+        poles_l = list(poles[np.imag(poles) < 0])
+        poles_r, poles_c = [], []
+        while (len(poles_u) > 0) and (len(poles_l) > 0):
+            distances = np.abs([p - np.conj(poles_u[-1]) for p in poles_l])
+            idx = np.argmin(distances)
+            if distances[idx] < 1e-8:
+                poles_c.append(poles_u.pop())
+                poles_l.pop(idx)
+            else:
+                poles_r.append(poles_u.pop())
+        poles_r.extend(poles_u)
+        poles_r.extend(poles_l)
+        poles_r = np.real(poles_r)
+        poles_c = np.array(poles_c)
+        poles = (poles_r, poles_c)
         dim = 2*len(poles[1]) + len(poles[0])
+        # Check that the number of poles is correct.
         if dim != M:
             msg = f'Expected {M} poles, got {dim} instead.'
             raise ValueError(msg)
@@ -610,11 +491,120 @@ class RatAppSym:
         residues = [residues[:lr], residues[lr:lr+lc]+1j*residues[lr+lc:]]
 
         return poles, tuple(residues)
+    
+    def fit(self, x, tol=1e-3, max_order=None, rank_tol=0.01):
+        x[1:] = 0.5 * (x[1:] + np.conj(x[-1:0:-1]))
+        if x.ndim == 1:
+            x = np.atleast_2d(x).T
+        N, m = x.shape
+        if m > 1:
+            y = np.concatenate(
+                (np.real(x[:N//2+1]), np.imag(x)[1:(N+1)//2]), axis=0)
+            # Check for rank deficiency.
+            s = scipy.linalg.svdvals(y, overwrite_a=True)
+            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
+            test = np.nonzero(test >= 1-rank_tol)[0]
+            if len(test) > 1:
+                logger.info(f'Rank deficient data.')
+            rank = test[0]+1
+            del y
+        else:
+            rank = 1
+
+        max_order_ = _get_max_order(max_order, x.shape[0])
+
+        gS, gG = self._initialize_sets(x, rank)
+        n_freqs = 0
+        if gG['index'][0] != 0:
+            n_freqs += 1
+        if N%2 == 0 and (gG['index'][-1] != N//2):
+            n_freqs += 1
+        n_freqs = 2*len(gS['index']) - n_freqs
+        r, w = self._fit(N, gS, gG, rank)
+
+        logger.debug(f'==== step: 0 ====')
+        succeed = False
+        step = 1
+        while not succeed:
+            idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
+            error = np.linalg.norm(gG['data'] - r, axis=1)[idx]
+            logger.debug(f'error: {error}')
+
+            if error < tol:
+                succeed = True
+            elif n_freqs >= max_order_ + 1:
+                msg = 'Convergence failed after the maximum number of poles is reached.\n'
+                msg += f'The error is {error}'
+                logger.warning(msg, stacklevel=2)
+                break
+            else:
+                logger.debug(f'==== step: {step} ====')
+                _update_sets(gS, gG, idx)
+                r, w = self._fit(N, gS, gG, rank)
+                if (gS['index'][-1] == 0) or (N%2 == 0 and gS['index'][-1] == N//2):
+                    n_freqs += 1
+                else:
+                    n_freqs += 2
+            step += 1
+
+        endsS = []
+        if gG['index'][0] != 0:
+            endsS.append(gS['index'].index(0))
+        if N%2 == 0 and (gG['index'][-1] != N//2):
+            endsS.append(gS['index'].index(N//2))
+        endsS = np.sort(np.array(endsS, dtype=np.int64))
+        barycentric = (gS, endsS, w)
+        p, res = self._normal_form(N, barycentric)
+
+        return p, res, error
 
 
 # ===============================
 # Exponential Sums Decomposition
 # ===============================
+
+
+def exp_sum(poles, amplitudes, t, fs=1):
+    '''
+    Parameters
+    ----------
+    poles : (M,) array_like
+    amplitudes : (M, L) array_like
+    t : scalar or (N, ) array_like
+    fs : scalar, default=1
+        Sampling frequency.
+
+    Return
+    ------
+    out : (N, L) complex ndarray
+        The values of the rational function at the points z.
+        If z is scalar, N = 1.
+    '''
+    poles = np.asarray(poles)
+    if poles.ndim != 1:
+        msg = f'Expected a 1D array for poles, got an array of dimension {poles.ndim}.'
+        raise ValueError(msg)
+
+    t = np.asarray(t)
+    if t.ndim == 0:
+        t = np.expand_dims(t, axis=0)
+    elif t.ndim > 1:
+        msg = f'Expected a 1D array for t, got an array of dimension {t.ndim}.'
+        raise ValueError(msg)
+    
+    amplitudes = np.asarray(amplitudes)
+    if amplitudes.ndim == 1:
+        amplitudes = np.expand_dims(amplitudes, axis=1)
+    elif amplitudes.ndim > 2:
+        msg = f'Expected a 1D or 2D array for amplitudes, got an array of dimension {amplitudes.ndim}.'
+        raise ValueError(msg)
+
+    return (poles[np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amplitudes
+
+def exp_sum_R(poles, amps, t, fs=1):
+    r = (poles[0][np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amps[0]
+    r += 2 * np.real((poles[1][np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amps[1])
+    return r
 
 class Espira:
     '''Approximate signal as a sum of exponentials using ESPIRA algorithm.
@@ -639,78 +629,69 @@ class Espira:
     rational_ : RationalApproximation
     '''
 
-    def __init__(
-            self,
-            tol=1e-3,
-            max_order=None,
-            fs=1,
-            mode='complex'
-        ):
-        mode_map = {
-            'complex': 'normal',
-            'real': 'symmetric'
-        }
-        if mode not in mode_map.keys():
-            msg = f'Expected mode either "complex" or "real", got {mode} instead.'
-            raise ValueError(msg)
-        if fs <= 0:
-            raise ValueError('Expected positive sampling frequency.')
-
-        self.tol = max(tol, 0)
-        self.max_order = max_order
+    def __init__(self, fs:float=1):
         self.fs = fs
-        self.mode = mode
+        self._rational = RatApp()
 
-        self.rational_ = RatApp(
-            tol=self.tol,
-            mode=mode_map[mode],
-            max_order=self.max_order
-        )
+    def fit(self, x, max_order=None, RatApp_kwargs=None):
+        x = np.copy(x)
+        RatApp_kwargs = {} if RatApp_kwargs is None else RatApp_kwargs            
+        RatApp_kwargs['max_order'] = max_order
+        N = x.shape[0]
 
-    def fit(self, X):
-        X = _validate_data(X)
-        X = np.copy(X)
-        N = X.shape[0]
         # Add a small damping to stabilize the algorithm.
         false_damping = np.power(2, -2 / N)
-        X *= (false_damping**np.arange(N))[:, np.newaxis]
-        X = np.fft.fft(X, axis=0, norm='forward')
+        x *= (false_damping**np.arange(N))[:, np.newaxis]
+        x = np.fft.fft(x, axis=0, norm='forward')
         ωN = np.exp(-2j * np.pi / N)
-        X = (ωN**np.arange(N))[:, np.newaxis] * X
-        self.rational_.fit(X)
+        x = (ωN**np.arange(N))[:, np.newaxis] * x
+        poles, residues = self._rational.fit(
+            x, **RatApp_kwargs)[:2]
+        amps = N * residues / (1 - (poles[:, np.newaxis])**N)
+        self.amps_ = amps
+
         # Remove false damping.
-        self.rational_.poles_ *= np.power(2, 2 / N)
-        self._N = N
+        poles *= np.power(2, 2 / N)
+        self.poles_ = poles
 
-        return self
-
-    def remove_spurious(self, rtol=1e-6):
-        self.rational_.remove_spurious(rtol=rtol)
-    
-    @property
-    def poles_(self):
-        return self.rational_.poles_
+        return amps, self.freqs_
 
     @property
-    def Z_(self):
-        return np.log(self.rational_.poles_) * self.fs
+    def freqs_(self):
+        return np.log(self.poles_) * self.fs
+
+
+class EspiraR:
+
+    def __init__(self, fs:float=1):
+        self.fs = fs
+        self._rational = RatAppSym()
+
+    def fit(self, x, max_order=None, RatApp_kwargs=None):
+        x = np.copy(x)
+        RatApp_kwargs = {} if RatApp_kwargs is None else RatApp_kwargs            
+        RatApp_kwargs['max_order'] = max_order
+        N = x.shape[0]
+
+        # Add a small damping to stabilize the algorithm.
+        false_damping = np.power(2, -2 / N)
+        x *= (false_damping**np.arange(N))[:, np.newaxis]
+        x = np.fft.fft(x, axis=0, norm='forward')
+        ωN = np.exp(-2j * np.pi / N)
+        x = (ωN**np.arange(N))[:, np.newaxis] * x
+        poles, residues = self._rational.fit(
+            x, **RatApp_kwargs)[:2]
+        amps = 2*[None]
+        poles = list(poles)
+        for i in [0, 1]:
+            amps[i] = N * residues[i] / (1 - (poles[i][:, np.newaxis])**N)
+            # Remove false damping.
+            poles[i] *= np.power(2, 2 / N)
+        self.amps_ = tuple(amps)
+        self.poles_ = tuple(poles)
+
+        return self.amps_, self.freqs_
 
     @property
-    def amplitudes_(self):
-        '''
-        Shape (n_poles, n_signal_components).
-        '''
-        N = self._N
-        poles = self.rational_.poles_
-        residues = self.rational_.residues_
-        return N * residues / (1 - (np.power(2, -2 / N) * poles[:, np.newaxis])**N)
-
-    def eval(self, t, freq_idxs=None):
-        M = len(self.rational_.poles_)
-        freq_idxs = np.arange(M) if freq_idxs is None else freq_idxs
-        return exp_sum(
-            self.rational_.poles_[freq_idxs],
-            self.amplitudes_[freq_idxs],
-            t,
-            fs=self.fs
-        )
+    def freqs_(self):
+        return tuple([np.log(p) * self.fs for p in self.poles_])

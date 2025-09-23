@@ -105,17 +105,7 @@ if __name__ == '__main__':
     logger = logging.getLogger(espira.__name__)
     logging.basicConfig()
     logger.setLevel(logging.DEBUG)
-
-# # %%
-# # ==== Test ESPIRA complex ====
-#     M = 5
-#     L = 2
-#     N = 2 * (M + 1) + 10 # N >= 2 * (M + 1)
-#     kwargs = {'max_order': None, 'tol': 1e-6}
-#     test = Test_ESPIRA(N, M, n_comps=L, seed=None)
-#     test.exp_sum_fit(espira_kwargs=kwargs)
-#     plt.show()
-
+    
 # # %%
 # # ==== Test ESPIRA real ====
 #     M = 10
