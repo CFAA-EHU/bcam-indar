@@ -9,6 +9,10 @@ import matplotlib.pyplot as plt
 
 from bcam.resonance import mechanical, espira
 
+logger = logging.getLogger(espira.__name__)
+logging.basicConfig()
+logger.setLevel(logging.DEBUG)
+
 # %%
 def kernel(ns, fs, a, freqs):
     dof = len(freqs)
