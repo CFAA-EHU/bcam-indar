@@ -230,12 +230,12 @@ class RatAppSym:
         max_order_ = _get_max_order(self.max_order, x.shape[0])
 
         gS, gG = self._initialize_sets(x, rank)
-        n_poles = 0
-        for p in gS['index']:
-            if (p == 0) or (N%2 == 0 and p == N//2):
-                n_poles += 1
-            else:
-                n_poles += 2
+        n_freqs = 0
+        if gG['index'][0] != 0:
+            n_freqs += 1
+        if N%2 == 0 and (gG['index'][-1] != N//2):
+            n_freqs += 1
+        n_freqs = 2*len(gS['index']) - n_freqs
         self.freqs_ = np.array(gS['index'])
         r, w = self._fit(N, gS, gG, rank)
 
@@ -249,7 +249,7 @@ class RatAppSym:
 
             if error < self.tol:
                 succeed = True
-            elif n_poles >= max_order_ + 1:
+            elif n_freqs >= max_order_ + 1:
                 msg = 'Convergence failed after the maximum number of poles is reached.\n'
                 msg += f'The error is {error}'
                 logger.warning(msg, stacklevel=2)
@@ -259,15 +259,20 @@ class RatAppSym:
                 self.freqs_ = _update_sets(gS, gG, idx)
                 r, w = self._fit(N, gS, gG, rank)
                 if (gS['index'][-1] == 0) or (N%2 == 0 and gS['index'][-1] == N//2):
-                    n_poles += 1
+                    n_freqs += 1
                 else:
-                    n_poles += 2
+                    n_freqs += 2
             step += 1
         self.error_ = error
 
-        # TODO: correct this representation.
-        barycentric = (gS, w)
-        p, res = _normal_form(N, barycentric)
+        endsS = []
+        if gG['index'][0] != 0:
+            endsS.append(gS['index'].index(0))
+        if N%2 == 0 and (gG['index'][-1] != N//2):
+            endsS.append(gS['index'].index(N//2))
+        endsS = np.sort(np.array(endsS, dtype=np.int64))
+        barycentric = (gS, endsS, w)
+        p, res = self._normal_form(N, barycentric)
         self.poles_ = p
         self.residues_ = res
 
@@ -342,28 +347,57 @@ class RatAppSym:
 
         return p/(q[:, np.newaxis]), w
 
-    def remove_spurious(self, rtol=1e-6):
-        if not self._removed:
-            r = np.linalg.norm(self.residues_, ord=2, axis=1)**2
-            r = r / np.sum(r)
-            idxs = np.argsort(r)
-            stop = np.nonzero(np.sqrt(np.cumsum(r[idxs])) < rtol)[0]
-            if len(stop) == 0:
-                return
-            else:
-                stop = stop[-1]
-                idxs = idxs[:stop+1]
-                self.poles_ = np.delete(self.poles_, idxs)
-                self.residues_ = np.delete(self.residues_, idxs, axis=0)
-            self._removed = True
+    def _normal_form(self, N, barycentric):
+        gS, endsS, w = barycentric
+        S = np.array(gS['index'])
+        gS = np.array(gS['data'])
+        inners = np.setdiff1d(np.arange(len(S)), endsS, assume_unique=True)
+        w = np.concatenate((w, np.conj(w[inners])))
+        M = 2*len(S) - len(endsS) - 1
+        ωN = np.exp(-2j * np.pi / N)
 
-    def eval(self, z, pole_idxs=None):
-        M = len(self.poles_)
-        pole_idxs = np.arange(M) if pole_idxs is None else pole_idxs
-        return rational_function(
-            self.poles_[pole_idxs],
-            self.residues_[pole_idxs],
-            z)
+        a = np.zeros((M+2, M+2), dtype=np.complex128)
+        a[1:, 0] = 1
+        a[0, 1:] = w
+        a[1:, 1:] = np.diag(ωN**(np.concatenate((-S, S[inners]))))
+
+        b = np.eye(M+2, dtype=np.complex128)
+        b[0, 0] = 0
+
+        poles = scipy.linalg.eigvals(a, b, overwrite_a=True)
+        # Keep stable poles.
+        poles = poles[2:]
+        poles_C = poles[np.imag(poles) > -1e-10]
+        id_real_p = np.nonzero(np.abs(np.imag(poles)) <= 1e-10)[0]
+        poles = (np.real(poles[id_real_p]), poles_C)
+        dim = 2*len(poles[1]) - len(poles[0])
+        if dim != M:
+            msg = f'Expected {M} poles, got {dim} instead.'
+            raise ValueError(msg)
+
+        C = np.zeros((len(S), M+1), dtype=np.complex128)
+        lr, lc = len(poles[0]), len(poles[1])
+        if lr > 0:
+            C[:, lr] = 1/(ωN**(-S)[:, np.newaxis] - poles[0][np.newaxis, :])
+        if lc > 0:
+            C[:, lr:lr+lc] = 1/(ωN**(-S)[:, np.newaxis] - poles[1][np.newaxis, :])
+            C[:, lr:lr+lc] += 1/(ωN**(-S)[:, np.newaxis] - np.conj(poles[1])[np.newaxis, :])
+            C[:, lr+lc:-1] = 1j/(ωN**(-S)[:, np.newaxis] - poles[1][np.newaxis, :])
+            C[:, lr+lc:-1] -= 1j/(ωN**(-S)[:, np.newaxis] - np.conj(poles[1])[np.newaxis, :])
+        C[:, -1] = 1
+        C = np.concatenate((np.real(C), np.imag(C[inners])), axis=0)
+        residues = scipy.linalg.solve(
+            C,
+            np.concatenate((np.real(gS), np.imag(gS[inners])), axis=0)
+        )
+
+        if np.abs(residues[-1]) > 1e-8:
+            msg = 'The last residue is not close to zero.'
+            logger.warning(msg, stacklevel=2)
+        residues = residues[:-1]
+        residues = [residues[:lr], residues[lr:lr+lc]+1j*residues[lr+lc:]]
+
+        return poles, tuple(residues)
 
 def _get_max_order(max_order, N):
     if max_order is None:

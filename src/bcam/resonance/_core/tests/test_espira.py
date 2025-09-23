@@ -84,7 +84,7 @@ class Test_RationalApproximation:
     def test_symmetric_fit(self):
         M = 6
         N = 2 * (2*M + 1) + 10
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(52112)
 
         # Create complex frequencies and residues.
         r = rng.uniform(0.7, 0.9, M)
