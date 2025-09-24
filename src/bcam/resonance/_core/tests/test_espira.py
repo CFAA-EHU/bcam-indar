@@ -28,8 +28,8 @@ class Test_RatApp:
         x = espira.rational_function(poles, residues, ωN**(-np.arange(N)))
 
         # Fit the signal.
-        res = espira.RatApp()
-        poles_fit, residues_fit = res.fit(x, tol=1e-6)[:2]
+        res = espira.RatApp(x, rank_tol=1e-6)
+        poles_fit, residues_fit = res.fit(tol=1e-6)[:2]
         x_fit = espira.rational_function(poles_fit, residues_fit, ωN**(-np.arange(N)))
 
         assert len(poles_fit) == M
@@ -53,8 +53,8 @@ class Test_RatApp:
         x = espira.rational_function(poles, residues, ωN**(-np.arange(N)))
 
         # Fit the signal.
-        res = espira.RatApp()
-        poles_fit, residues_fit = res.fit(x, tol=1e-6)[:2]
+        res = espira.RatApp(x, rank_tol=1e-6)
+        poles_fit, residues_fit = res.fit(tol=1e-6)[:2]
         x_fit = espira.rational_function(poles_fit, residues_fit, ωN**(-np.arange(N)))
 
         assert len(poles_fit) == M
@@ -80,8 +80,8 @@ class Test_RatApp:
         x = espira.rational_function(poles, residues, ωN**(-np.arange(N)))
 
         # Fit the signal.
-        res = espira.RatApp()
-        poles_fit, residues_fit = res.fit(x, tol=1e-6)[:2]
+        res = espira.RatApp(x, rank_tol=1e-6)
+        poles_fit, residues_fit = res.fit(tol=1e-6)[:2]
         x_fit = espira.rational_function(poles_fit, residues_fit, ωN**(-np.arange(N)))
 
         assert len(poles_fit) == M

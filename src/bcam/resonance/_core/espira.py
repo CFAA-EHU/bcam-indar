@@ -115,7 +115,6 @@ def _update_sets(gS, gG, idx):
     gS['data'].append(gG['data'][idx])
     gG['index'].pop(idx)
     gG['data'].pop(idx)
-    return np.array(gS['index'])
 
 class RatApp:
     '''Rational Approximation using AAA algorithm.
@@ -139,53 +138,78 @@ class RatApp:
     residues_ : array_like
     '''
 
-    def __init__(self):
-        pass
+    def __init__(self, x, rank_tol=0.01):
+        if x.ndim == 1:
+            x = np.atleast_2d(x).T
+        self.x = x
+        if x.shape[1] > 1:
+            # Check for rank deficiency.
+            s = scipy.linalg.svdvals(x, overwrite_a=False)
+            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
+            test = np.nonzero(test >= 1-rank_tol)[0]
+            if len(test) > 1:
+                logger.info(f'Rank deficient data.')
+            rank = test[0]+1
+        else:
+            rank = 1
+        self._rank = rank
+    
+    def set_seed_freqs(self, freqs=None):
+        '''Set initial frequencies for the algorithm.
+        
+        Parameters
+        ----------
+        freqs : 1darray
+            They must be ordered in decreasing order of importance,
+            and the indices must be unique.
+        '''
+        N = self.x.shape[0]
+        if freqs is None:
+            # Choose peaks as default initial frequencies.
+            abs_v = np.linalg.norm(self.x, axis=1)
+            abs_v = np.concatenate((abs_v, abs_v))
+            peaks, h = scipy.signal.find_peaks(
+                abs_v,
+                height=np.max(abs_v)/5,
+                distance=np.max((N/(4*(self._rank+1)), 2))
+            )
+            idxs = np.argsort(h['peak_heights'])[::-1]
+            peaks = peaks[idxs]%N
+            _, idxs = np.unique(peaks, return_index=True)
+            freqs = peaks[np.sort(idxs)]
+        
+        assert freqs.ndim == 1, 'freqs must be a 1D array.'
+        assert np.all(freqs >= 0) and np.all(freqs < N), 'freqs must be in the range [0, N).'
+        assert len(freqs) == len(np.unique(freqs)), 'freqs must be unique.'
 
-    @staticmethod
-    def _initialize_sets(x, rank):
-        N = x.shape[0]
-        gG = {'index': list(range(N)), 'data': list(x)}
-        gS = {'index': [], 'data': []}
-
-        # Choose rank + 1 peaks as initial frequencies.
-        abs_v = np.linalg.norm(x, axis=1)
-        abs_v = np.concatenate((abs_v, abs_v))
-        peaks, h = scipy.signal.find_peaks(
-            abs_v,
-            height=np.max(abs_v)/5,
-            distance=np.max((N//(4*(rank+1)), 2))
-        )
-        idxs = np.argsort(h['peak_heights'])
-        peaks = peaks[idxs]
-        peaks = np.unique(peaks%N)
-        peaks_ = list(peaks)
-        peaks = []
-        c = 0
-        while c < rank+1:
-            try:
-                p = peaks_.pop()
-            except IndexError:
-                break
-            peaks.append(p)
-            c += 1
-        # Generate additional random indices if c < rank + 1.
-        if c < rank + 1:
+        if len(freqs) >= self._rank+1:
+            freqs = freqs[:self._rank+1]
+        else:
+            # Generate additional random indices if c < rank + 1.
             logger.warning(
                 'Not enough peaks found. Adding random indices.', stacklevel=2)
-            diff = np.setdiff1d(np.arange(N), peaks, assume_unique=True)
+            diff = np.setdiff1d(np.arange(N), freqs, assume_unique=True)
             rng = np.random.default_rng()
             rng.shuffle(diff)
             diff = list(diff)
-            while c < rank+1:
-                p = diff.pop()
-                peaks.append(p)
+            c = len(freqs)
+            freqs_ = []
+            while c < self._rank+1:
+                freqs_.append(diff.pop())
                 c += 1
+            freqs = np.concatenate((freqs, freqs_))
 
-        gS['index'].extend(gG['index'][p] for p in peaks)
-        gS['data'].extend(gG['data'][p] for p in peaks)
-        for p in peaks:
-            idx = bisect.bisect_left(gG['index'], p)
+        self._freqs = freqs
+
+    def _initialize_sets(self, seed_freqs):
+        N = self.x.shape[0]
+        gG = {'index': list(range(N)), 'data': list(self.x)}
+        gS = {}
+
+        gS['index'] = [gG['index'][f] for f in seed_freqs]
+        gS['data'] = [gG['data'][f] for f in seed_freqs]
+        for f in seed_freqs:
+            idx = bisect.bisect_left(gG['index'], f)
             gG['index'].pop(idx)
             gG['data'].pop(idx)
         return gS, gG
@@ -211,7 +235,7 @@ class RatApp:
             full_matrices=False)[1:]
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
         w = In @ np.conj(w[-1])
-        r = np.array([w[i] * gS['data'][i] for i in range(n_freqs)])
+        r = w[:, np.newaxis] * np.array(gS['data'])
         r = ((1/C.T) @ r) / ((1/C.T) @ w)[:, np.newaxis]
 
         return r, w
@@ -246,26 +270,16 @@ class RatApp:
 
         return poles, residues
     
-    def fit(self, x, tol=1e-3, max_order=None, rank_tol=0.01):
-        if x.ndim == 1:
-            x = np.atleast_2d(x).T
-        N, m = x.shape
-        if m > 1:
-            # Check for rank deficiency.
-            s = scipy.linalg.svdvals(x, overwrite_a=False)
-            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
-            test = np.nonzero(test >= 1-rank_tol)[0]
-            if len(test) > 1:
-                logger.info(f'Rank deficient data.')
-            rank = test[0]+1
-        else:
-            rank = 1
+    def fit(self, tol=1e-3, max_order=None):
+        N = self.x.shape[0]
+        max_order_ = _get_max_order(max_order, N)
 
-        max_order_ = _get_max_order(max_order, x.shape[0])
-
-        gS, gG = self._initialize_sets(x, rank)
-        self.freqs_ = np.array(gS['index'])
-        r, w = self._fit(N, gS, gG, rank)
+        if not hasattr(self, '_freqs'):
+            self.set_seed_freqs()
+            gS, gG = self._initialize_sets(self._freqs)
+        elif len(self._freqs) > max_order_ + 1:
+            gS, gG = self._initialize_sets(self._freqs[:max_order_+1])
+        r, w = self._fit(N, gS, gG, self._rank)
 
         logger.debug(f'==== step: 0 ====')
         succeed = False
@@ -284,10 +298,11 @@ class RatApp:
                 break
             else:
                 logger.debug(f'==== step: {step} ====')
-                self.freqs_ = _update_sets(gS, gG, idx)
-                r, w = self._fit(N, gS, gG, rank)
+                _update_sets(gS, gG, idx)
+                r, w = self._fit(N, gS, gG, self._rank)
             step += 1
         
+        self._freqs = np.array(gS['index'])
         barycentric = (gS, w)
         p, res = self._normal_form(N, barycentric)
 
