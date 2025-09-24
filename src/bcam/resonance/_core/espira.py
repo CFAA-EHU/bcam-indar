@@ -310,61 +310,95 @@ class RatApp:
 
 class RatAppSym:
 
-    def __init__(self):
-        pass
+    def __init__(self, x, rank_tol=0.01):
+        if x.ndim == 1:
+            x = np.atleast_2d(x).T
+        x[1:] = 0.5 * (x[1:] + np.conj(x[-1:0:-1]))
+        self.x = x
+        N, m = x.shape
+        if m > 1:
+            y = np.concatenate(
+                (np.real(x[:N//2+1]), np.imag(x)[1:(N+1)//2]), axis=0)
+            # Check for rank deficiency.
+            s = scipy.linalg.svdvals(y, overwrite_a=True)
+            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
+            test = np.nonzero(test >= 1-rank_tol)[0]
+            if len(test) > 1:
+                logger.info(f'Rank deficient data.')
+            rank = test[0]+1
+        else:
+            rank = 1
+        self._rank = rank
 
-    @staticmethod
-    def _initialize_sets(x, rank):
-        N = x.shape[0]
+    def set_seed_freqs(self, freqs=None):
+        '''Set initial frequencies for the algorithm.
+        
+        Parameters
+        ----------
+        freqs : 1darray
+            They must be ordered in decreasing order of importance,
+            and the indices must be unique.
+        '''
+        N = self.x.shape[0]
         m = N // 2 + 1
-        gG = {'index': list(range(m)), 'data': list(x[:m])}
-        gS = {'index': [], 'data': []}
+        if freqs is None:
+            # Choose rank + 1 peaks as initial frequencies.
+            abs_v = np.linalg.norm(self.x, axis=1)
+            abs_v = np.concatenate((abs_v, abs_v))
+            peaks, h = scipy.signal.find_peaks(
+                abs_v,
+                height=np.max(abs_v)/5,
+                distance=np.max((N/(8*(self._rank+1)), 2))
+            )
+            idxs = np.argsort(h['peak_heights'])[::-1]
+            peaks = peaks[idxs]%N
+            _, idxs = np.unique(peaks, return_index=True)
+            peaks = peaks[np.sort(idxs)]
+            freqs = peaks[peaks < m]
 
-        # Choose rank + 1 peaks as initial frequencies.
-        abs_v = np.linalg.norm(x, axis=1)
-        abs_v = np.concatenate((abs_v, abs_v))
-        peaks, h = scipy.signal.find_peaks(
-            abs_v,
-            height=np.max(abs_v)/5,
-            distance=np.max((N//(8*(rank+1)), 2))
-        )
-        idxs = np.argsort(h['peak_heights'])
-        peaks = peaks[idxs]
-        peaks = np.unique(peaks%N)
-        peaks = peaks[peaks < m]
-        peaks_ = list(peaks)
-        peaks = []
+        assert freqs.ndim == 1, 'freqs must be a 1D array.'
+        assert np.all(freqs >= 0) and np.all(freqs < m), 'freqs must be in the range [0, N//2+1).'
+        assert len(freqs) == len(np.unique(freqs)), 'freqs must be unique.'
+
+        freqs = list(freqs)
+        freqs.reverse()
+        freqs_ = []
         c = 0
-        while c < rank+1:
-            try:
-                p = peaks_.pop()
-            except IndexError:
-                break
-            peaks.append(p)
+        while (c < self._rank+1) and (len(freqs) > 0):
+            p = freqs.pop()
+            freqs_.append(p)
             if (p == 0) or (N%2 == 0 and p == N//2):
                 c += 1
             else:
                 c += 2
         # Generate additional random indices if c < rank + 1.
-        if c < rank + 1:
+        if c < self._rank + 1:
             logger.warning(
-                'Not enough peaks found. Adding random indices.', stacklevel=2)
-            diff = np.setdiff1d(np.arange(m), peaks, assume_unique=True)
+                'Not enough freqs found. Adding random indices.', stacklevel=2)
+            diff = np.setdiff1d(np.arange(m), freqs_, assume_unique=True)
             rng = np.random.default_rng()
             rng.shuffle(diff)
             diff = list(diff)
-            while c < rank+1:
+            while c < self._rank+1:
                 p = diff.pop()
-                peaks.append(p)
+                freqs_.append(p)
                 if (p == 0) or (N%2 == 0 and p == N//2):
                     c += 1
                 else:
                     c += 2
 
-        gS['index'].extend(gG['index'][p] for p in peaks)
-        gS['data'].extend(gG['data'][p] for p in peaks)
-        for p in peaks:
-            idx = bisect.bisect_left(gG['index'], p)
+        self._freqs = np.array(freqs_)
+
+    def _initialize_sets(self, seed_freqs):
+        N = self.x.shape[0]
+        m = N // 2 + 1
+        gG = {'index': list(range(m)), 'data': list(self.x[:m])}
+        gS = {}
+
+        gS['index'] = [gG['index'][f] for f in seed_freqs]
+        gS['data'] = [gG['data'][f] for f in seed_freqs]
+        for f in seed_freqs:
+            idx = bisect.bisect_left(gG['index'], f)
             gG['index'].pop(idx)
             gG['data'].pop(idx)
         return gS, gG
@@ -507,35 +541,23 @@ class RatAppSym:
 
         return poles, tuple(residues)
     
-    def fit(self, x, tol=1e-3, max_order=None, rank_tol=0.01):
-        x[1:] = 0.5 * (x[1:] + np.conj(x[-1:0:-1]))
-        if x.ndim == 1:
-            x = np.atleast_2d(x).T
-        N, m = x.shape
-        if m > 1:
-            y = np.concatenate(
-                (np.real(x[:N//2+1]), np.imag(x)[1:(N+1)//2]), axis=0)
-            # Check for rank deficiency.
-            s = scipy.linalg.svdvals(y, overwrite_a=True)
-            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
-            test = np.nonzero(test >= 1-rank_tol)[0]
-            if len(test) > 1:
-                logger.info(f'Rank deficient data.')
-            rank = test[0]+1
-            del y
-        else:
-            rank = 1
+    def fit(self, tol=1e-3, max_order=None):
+        N = self.x.shape[0]
+        max_order_ = _get_max_order(max_order, N)
 
-        max_order_ = _get_max_order(max_order, x.shape[0])
+        if not hasattr(self, '_freqs'):
+            self.set_seed_freqs()
+            gS, gG = self._initialize_sets(self._freqs)
+        elif len(self._freqs) > max_order_ + 1:
+            gS, gG = self._initialize_sets(self._freqs[:max_order_+1])
+        r, w = self._fit(N, gS, gG, self._rank)
 
-        gS, gG = self._initialize_sets(x, rank)
         n_freqs = 0
         if gG['index'][0] != 0:
             n_freqs += 1
         if N%2 == 0 and (gG['index'][-1] != N//2):
             n_freqs += 1
         n_freqs = 2*len(gS['index']) - n_freqs
-        r, w = self._fit(N, gS, gG, rank)
 
         logger.debug(f'==== step: 0 ====')
         succeed = False
@@ -555,13 +577,14 @@ class RatAppSym:
             else:
                 logger.debug(f'==== step: {step} ====')
                 _update_sets(gS, gG, idx)
-                r, w = self._fit(N, gS, gG, rank)
+                r, w = self._fit(N, gS, gG, self._rank)
                 if (gS['index'][-1] == 0) or (N%2 == 0 and gS['index'][-1] == N//2):
                     n_freqs += 1
                 else:
                     n_freqs += 2
             step += 1
 
+        self._freqs = np.array(gS['index'])
         endsS = []
         if gG['index'][0] != 0:
             endsS.append(gS['index'].index(0))
@@ -644,69 +667,58 @@ class Espira:
     rational_ : RationalApproximation
     '''
 
-    def __init__(self, fs:float=1):
-        self.fs = fs
-        self._rational = RatApp()
-
-    def fit(self, x, max_order=None, RatApp_kwargs=None):
-        x = np.copy(x)
-        RatApp_kwargs = {} if RatApp_kwargs is None else RatApp_kwargs            
-        RatApp_kwargs['max_order'] = max_order
-        N = x.shape[0]
-
+    def __init__(self, x, rank_tol=0.01):
+        if x.ndim == 1:
+            x = np.atleast_2d(x).T
+        y = np.copy(x)
+        N = y.shape[0]
         # Add a small damping to stabilize the algorithm.
         false_damping = np.power(2, -2 / N)
-        x *= (false_damping**np.arange(N))[:, np.newaxis]
-        x = np.fft.fft(x, axis=0, norm='forward')
+        y *= (false_damping**np.arange(N))[:, np.newaxis]
+        y = np.fft.fft(y, axis=0, norm='forward')
         ωN = np.exp(-2j * np.pi / N)
-        x = (ωN**np.arange(N))[:, np.newaxis] * x
-        poles, residues = self._rational.fit(
-            x, **RatApp_kwargs)[:2]
-        amps = N * residues / (1 - (poles[:, np.newaxis])**N)
-        self.amps_ = amps
+        y = (ωN**np.arange(N))[:, np.newaxis] * y
+        self._rational = RatApp(y, rank_tol=rank_tol)
 
+    def fit(self, tol=1e-3, max_order=None):
+        N = self._rational.x.shape[0]
+
+        poles, residues = self._rational.fit(
+            tol=tol, max_order=max_order)[:2]
+        amps = N * residues / (1 - (poles[:, np.newaxis])**N)
         # Remove false damping.
         poles *= np.power(2, 2 / N)
-        self.poles_ = poles
 
-        return amps, self.freqs_
-
-    @property
-    def freqs_(self):
-        return np.log(self.poles_) * self.fs
+        return amps, poles
 
 
 class EspiraR:
 
-    def __init__(self, fs:float=1):
-        self.fs = fs
-        self._rational = RatAppSym()
-
-    def fit(self, x, max_order=None, RatApp_kwargs=None):
-        x = np.copy(x)
-        RatApp_kwargs = {} if RatApp_kwargs is None else RatApp_kwargs            
-        RatApp_kwargs['max_order'] = max_order
-        N = x.shape[0]
-
+    def __init__(self, x, rank_tol=0.01):
+        if x.ndim == 1:
+            x = np.atleast_2d(x).T
+        y = np.copy(x)
+        N = y.shape[0]
         # Add a small damping to stabilize the algorithm.
         false_damping = np.power(2, -2 / N)
-        x *= (false_damping**np.arange(N))[:, np.newaxis]
-        x = np.fft.fft(x, axis=0, norm='forward')
+        y *= (false_damping**np.arange(N))[:, np.newaxis]
+        y = np.fft.fft(y, axis=0, norm='forward')
         ωN = np.exp(-2j * np.pi / N)
-        x = (ωN**np.arange(N))[:, np.newaxis] * x
+        y = (ωN**np.arange(N))[:, np.newaxis] * y
+        self._rational = RatAppSym(y, rank_tol=rank_tol)
+
+    def fit(self, tol=1e-3, max_order=None):
+        N = self._rational.x.shape[0]
+
         poles, residues = self._rational.fit(
-            x, **RatApp_kwargs)[:2]
+            tol=tol, max_order=max_order)[:2]
         amps = 2*[None]
         poles = list(poles)
         for i in [0, 1]:
             amps[i] = N * residues[i] / (1 - (poles[i][:, np.newaxis])**N)
             # Remove false damping.
             poles[i] *= np.power(2, 2 / N)
-        self.amps_ = tuple(amps)
-        self.poles_ = tuple(poles)
+        amps = tuple(amps)
+        poles = tuple(poles)
 
-        return self.amps_, self.freqs_
-
-    @property
-    def freqs_(self):
-        return tuple([np.log(p) * self.fs for p in self.poles_])
+        return amps, poles

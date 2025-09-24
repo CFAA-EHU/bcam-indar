@@ -98,8 +98,8 @@ class Test_RatAppSym:
         x = espira.rational_function_sym(poles, residues, ωN**(-np.arange(N)))
 
         # Fit the signal.
-        res = espira.RatAppSym()
-        poles_fit, residues_fit = res.fit(x, tol=1e-6)[:2]
+        res = espira.RatAppSym(x, rank_tol=1e-6)
+        poles_fit, residues_fit = res.fit(tol=1e-6)[:2]
         rr, rc = residues_fit
         # Remove spurious poles with very small residues.
         idx_r = np.nonzero(np.linalg.norm(rr, axis=1) > 1e-5)[0]
@@ -131,7 +131,7 @@ class Test_RatAppSym:
         assert (len(poles_fit[0]) == 0) and (len(poles_fit[1]) == M)
         assert np.allclose(np.sort_complex(poles_fit[1]), np.sort_complex(poles[1]))
         assert np.allclose(x_fit, x)
-        
+
         # Test with real and complex poles.
         # ------------------------
         MR, MC = 2, 4
@@ -199,13 +199,12 @@ class Test_ESPIRA:
         poles = r * np.exp(2j * np.pi * phase)
         amps = rng.normal(0, 2, (M, L)) + 1j * rng.normal(0, 2, (M, L))
 
-        x = espira.exp_sum(poles, amps, np.arange(N), fs=1)
+        x = espira.exp_sum(poles, amps, np.arange(N))
         self.x = np.array(x)
 
         # ==== Fit exponential sum ====
-        res = espira.Espira()
-        amps_fit = res.fit(x, RatApp_kwargs={'tol': 1e-6})[0]
-        poles_fit = res.poles_
+        res = espira.Espira(x, rank_tol=1e-6)
+        amps_fit, poles_fit = res.fit(tol=1e-6)
         x_fit = espira.exp_sum(poles_fit, amps_fit, np.arange(N), fs=1)
 
         assert len(poles_fit) == M
@@ -228,9 +227,16 @@ class Test_ESPIRA:
         self.x = np.array(x)
 
         # ==== Fit exponential sum ====
-        res = espira.EspiraR()
-        amps_fit = res.fit(x, RatApp_kwargs={'tol': 1e-6})[0]
-        poles_fit = res.poles_
+        res = espira.EspiraR(x, rank_tol=1e-6)
+        amps_fit, poles_fit = res.fit(tol=1e-6)
+
+        # Remove spurious poles with very small amplitude.
+        ar, ac = amps_fit
+        idx_r = np.nonzero(np.linalg.norm(ar, axis=1) > 1e-5)[0]
+        idx_c = np.nonzero(np.linalg.norm(ac, axis=1) > 1e-5)[0]
+        poles_fit = (poles_fit[0][idx_r], poles_fit[1][idx_c])
+        amps_fit = (ar[idx_r], ac[idx_c])
+
         x_fit = espira.exp_sum_R(poles_fit, amps_fit, np.arange(N), fs=1)
 
         assert (len(poles_fit[0]) == 0) and (len(poles_fit[1]) == M//2)
