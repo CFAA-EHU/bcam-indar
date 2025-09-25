@@ -75,13 +75,13 @@ class _DPenalty(scipy.sparse.linalg.LinearOperator):
 class LTI_Kernel:
     r'''
     Derivative of the loss function to find the kernel of best linear fit.
-    
+
     Parameters
     ----------
     x : ndarrays
         Input data of shape `(N, K)`, where `N` is the length of the time series and `K` is the number of repetitions.
     y : ndarray
-        Response data of shape `(N, K)`, with the same shape as `x`.
+        Response data with the same shape of `x`.
     '''
 
     def __init__(self, x, y):

@@ -138,18 +138,19 @@ class RatApp:
     residues_ : array_like
     '''
 
-    def __init__(self, x, rank_tol=0.01):
+    def __init__(self, x, rank_tol=1e-2):
         if x.ndim == 1:
             x = np.atleast_2d(x).T
         self.x = x
         if x.shape[1] > 1:
             # Check for rank deficiency.
             s = scipy.linalg.svdvals(x, overwrite_a=False)
-            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
-            test = np.nonzero(test >= 1-rank_tol)[0]
-            if len(test) > 1:
+            rank = np.nonzero(s/s[0] < rank_tol)[0]
+            if len(rank) > 0:
                 logger.info(f'Rank deficient data.')
-            rank = test[0]+1
+                rank = rank[0]
+            else:
+                rank = len(s)
         else:
             rank = 1
         self._rank = rank
@@ -276,9 +277,11 @@ class RatApp:
 
         if not hasattr(self, '_freqs'):
             self.set_seed_freqs()
-            gS, gG = self._initialize_sets(self._freqs)
-        elif len(self._freqs) > max_order_ + 1:
+
+        if len(self._freqs) > max_order_ + 1:
             gS, gG = self._initialize_sets(self._freqs[:max_order_+1])
+        else:
+            gS, gG = self._initialize_sets(self._freqs)
         r, w = self._fit(N, gS, gG, self._rank)
 
         logger.debug(f'==== step: 0 ====')
@@ -310,7 +313,7 @@ class RatApp:
 
 class RatAppSym:
 
-    def __init__(self, x, rank_tol=0.01):
+    def __init__(self, x, rank_tol=1e-2):
         if x.ndim == 1:
             x = np.atleast_2d(x).T
         x[1:] = 0.5 * (x[1:] + np.conj(x[-1:0:-1]))
@@ -321,11 +324,12 @@ class RatAppSym:
                 (np.real(x[:N//2+1]), np.imag(x)[1:(N+1)//2]), axis=0)
             # Check for rank deficiency.
             s = scipy.linalg.svdvals(y, overwrite_a=True)
-            test = np.sqrt(np.cumsum(s**2) / np.sum(s**2))
-            test = np.nonzero(test >= 1-rank_tol)[0]
-            if len(test) > 1:
+            rank = np.nonzero(s/s[0] < rank_tol)[0]
+            if len(rank) > 0:
                 logger.info(f'Rank deficient data.')
-            rank = test[0]+1
+                rank = rank[0]
+            else:
+                rank = m
         else:
             rank = 1
         self._rank = rank
@@ -547,9 +551,11 @@ class RatAppSym:
 
         if not hasattr(self, '_freqs'):
             self.set_seed_freqs()
-            gS, gG = self._initialize_sets(self._freqs)
-        elif len(self._freqs) > max_order_ + 1:
+
+        if len(self._freqs) > max_order_ + 1:
             gS, gG = self._initialize_sets(self._freqs[:max_order_+1])
+        else:
+            gS, gG = self._initialize_sets(self._freqs)
         r, w = self._fit(N, gS, gG, self._rank)
 
         n_freqs = 0
@@ -584,7 +590,9 @@ class RatAppSym:
                     n_freqs += 2
             step += 1
 
-        self._freqs = np.array(gS['index'])
+        if len(gS['index']) > len(self._freqs):
+            self._freqs = np.array(gS['index'])
+
         endsS = []
         if gG['index'][0] != 0:
             endsS.append(gS['index'].index(0))
@@ -667,7 +675,7 @@ class Espira:
     rational_ : RationalApproximation
     '''
 
-    def __init__(self, x, rank_tol=0.01):
+    def __init__(self, x, rank_tol=1e-2):
         if x.ndim == 1:
             x = np.atleast_2d(x).T
         y = np.copy(x)
@@ -694,7 +702,7 @@ class Espira:
 
 class EspiraR:
 
-    def __init__(self, x, rank_tol=0.01):
+    def __init__(self, x, rank_tol=1e-2):
         if x.ndim == 1:
             x = np.atleast_2d(x).T
         y = np.copy(x)

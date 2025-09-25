@@ -724,10 +724,14 @@ class RealModes:
             options['gtol'] = 1e-2
 
         x0 = np.real(amps_to_modes(self.amps))
+        idx = np.nonzero(x0[0] < 0)[0]
+        x0[:, idx] = -x0[:, idx]
         x0 = x0.flatten()
+        lb = -2*np.ones_like(x0)
+        lb[:dof] = 0
+        ub = 2*np.ones_like(x0)
         bounds = scipy.optimize.Bounds(
-            lb=-2*np.ones(n_out * dof),
-            ub=2*np.ones(n_out * dof))
+            lb=lb, ub=ub)
         res = scipy.optimize.dual_annealing(
             self._fun,
             x0=x0,
@@ -736,8 +740,9 @@ class RealModes:
                 'method': 'trust-ncg',
                 'jac': self._jac,
                 'hessp': self._hessp,
-                'options': options
-            })
+                'options': options},
+            callback=None
+            )
         self.modes_fit_ = res.x.reshape(n_out, dof)
         self.success_ = res.success
         self.message_ = res.message
@@ -993,7 +998,7 @@ class ComplexModes:
         )
         return r
 
-    def fit(self, x0, options:dict=None):
+    def fit(self, x0, options:dict=None, maxiter:int=1e3):
         options = {} if options is None else options
         if 'gtol' not in options.keys():
             options['gtol'] = 1e-2
@@ -1002,6 +1007,10 @@ class ComplexModes:
 
         self._ref_constr = self._modes_map.constraints(*x0)
 
+        def callback(intermediate_result:scipy.optimize.OptimizeResult):
+            if intermediate_result.nit >= maxiter:
+                raise StopIteration
+        
         res = scipy.optimize.minimize(
             self._fun,
             x0=reshape_modes_output(*x0),
@@ -1009,12 +1018,12 @@ class ComplexModes:
             jac=self._jac,
             hessp=self._hessp,
             constraints=self._get_constraints(),
-            options=options
+            options=options,
+            callback=callback
         )
         n_out, _, dof = self.amps.shape
         self._raw_modes_fit = reshape_modes_input(res.x, dof, n_out)
-        self.success_ = res.success
-        self.message_ = res.message
+        self.optRes_ = res
         return self.modes_fit_
 
 
