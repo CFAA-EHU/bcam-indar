@@ -10,42 +10,6 @@ import scipy
 logger = logging.getLogger(__name__)
 
 
-def fit_amplitudes(data, poles):
-    # Validate input data.
-    data = np.array(data)
-    if data.ndim != 3:
-        msg = f'Expected a 3D array for data, got an array of dimension {data.ndim}.'
-        raise ValueError(msg)
-
-    poles = np.array(poles)
-    if poles.ndim != 1:
-        msg = f'Expected a 1D array for poles, got an array of dimension {poles.ndim}.'
-        raise ValueError(msg)
-
-    # Adjust data using lstsq.
-    n_responses, n_exitations, N_acc = data.shape
-    ωN = np.exp(-2j * np.pi / N_acc)
-    z = ωN**(-np.arange(N_acc))
-    data = np.fft.fft(data, norm='forward', axis=-1)
-    data = np.reshape(data, (-1, N_acc)).T
-    norms = np.linalg.norm(data, axis=0)
-    residues, errors, _, _ = np.linalg.lstsq(
-            1 / (z[:, np.newaxis] - poles[np.newaxis, :]),
-            ωN**(np.arange(N_acc))[:, np.newaxis] * data,
-            rcond=None
-            )
-    errors = np.sqrt(errors) / norms
-    errors = np.reshape(errors.T, (n_responses, n_exitations))
-
-    # Compute amplitudes.
-    amplitudes = N_acc * residues / (1 - (poles[:, np.newaxis])**N_acc)
-
-    # Go back to original shape.
-    residues = np.reshape(residues.T, (n_responses, n_exitations, len(poles)))
-    amplitudes = np.reshape(amplitudes.T, (n_responses, n_exitations, len(poles)))
-
-    return residues, amplitudes, errors
-
 # ========================
 # Rational Approximation
 # ========================

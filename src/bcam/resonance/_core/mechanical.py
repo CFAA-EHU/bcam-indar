@@ -1010,7 +1010,7 @@ class ComplexModes:
         def callback(intermediate_result:scipy.optimize.OptimizeResult):
             if intermediate_result.nit >= maxiter:
                 raise StopIteration
-        
+
         res = scipy.optimize.minimize(
             self._fun,
             x0=reshape_modes_output(*x0),
