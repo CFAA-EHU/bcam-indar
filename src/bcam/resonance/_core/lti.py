@@ -1,5 +1,5 @@
 '''
-This is ...
+Functions for Linear Time Invariant (LTI) models.
 '''
 
 import logging
@@ -72,45 +72,154 @@ class _DPenalty(scipy.sparse.linalg.LinearOperator):
     def _adjoint(self):
         return self
 
-class LTI_Kernel:
+class LTIKernel:
     r'''
-    Derivative of the loss function to find the kernel of best linear fit.
+    Fit Linear Time Invariant kernel.
+
+    A Linear Time Invariant (LTI) model assumes that
+    the response `y` to an input `x` is given by
+    .. math::
+        y_t = \sum_{s\le t} K_{t-s} x_s + \epsilon_t,
+    where `K` is the kernel to be estimated, and :math:`\epsilon` is a noise term.
 
     Parameters
     ----------
-    x : ndarrays
-        Input data of shape `(N, K)`, where `N` is the length of the time series and `K` is the number of repetitions.
-    y : ndarray
-        Response data with the same shape of `x`.
+    penalty : float, optional
+        Penalty parameter for the :math:`H^{1/2}` norm. Default is 0 (no penalty).
+    rtol : float, optional
+        Relative tolerance for the conjugate gradient (CG) solver. Default is 1e-5.
+    atol : float, optional
+        Absolute tolerance for the CG solver. Default is 0.
+    maxiter : int, optional
+        Maximum number of iterations for the CG solver. Default is None (no limit).
+    callback : callable, optional
+        Callback function to be passed to the CG solver.
+        Check `scipy.sparse.linalg.cg` for more details.
+
+    Attributes
+    ----------
+    kernel_ : ndarray
+        The estimated kernel after fitting the model.
     '''
 
-    def __init__(self, x, y):
-        x = np.asarray(x).squeeze()
-        y = np.asarray(y).squeeze()
-        if (x.ndim == 0) or (x.ndim > 2):
-            raise ValueError("Input x must be a 1D or 2D array.")
-        if x.shape != y.shape:
-            raise ValueError("Input x and y must have the same shape.")
-        
-        if x.ndim == 1:
-            x = x.reshape(-1, 1)
-            y = y.reshape(-1, 1)
-        
-        self._x = x
-        self._y = y
+    def __init__(
+        self,
+        *,
+        penalty:float=0.,
+        rtol:float=1e-5,
+        atol:float=0.,
+        maxiter:int=None,
+        callback=None
+    ):
+        self.penalty = penalty
+        self.rtol = rtol
+        self.atol = atol
+        self.maxiter = maxiter
+        self.callback = callback
 
-    def fit(self, alpha=0, cg_kwargs=None):
-        rhs = _conv(self._x, self._y)
+    def fit(self, X, y):
+        r'''
+        Fit LTI model.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_repetitions) or (n_samples,)
+            Input data.
+
+        y : array-like of shape (n_samples, n_repetitions) or (n_samples,)
+            Response data with the same shape of `X`.
+
+        Returns
+        -------
+        self : object
+            Fitted estimator.
+        '''
+        # Validate inputs.
+        X = np.asarray(X)
+        y = np.asarray(y)
+        if (X.ndim == 0) or (X.ndim > 2):
+            raise ValueError("Input X must be a 1D or 2D array.")
+        if X.shape != y.shape:
+            raise ValueError("Input X and y must have the same shape.")
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+            y = y.reshape(-1, 1)
+
+        # Set up minimization problem.
+        rhs = _conv(X, y)
         rhs = np.sum(rhs, axis=1)
 
-        lhs = _Dloss(self._x)
-        if alpha > 0:
-            N = self._x.shape[0]
-            lhs += alpha * _DPenalty(N, dtype=self._x.dtype)
+        lhs = _Dloss(X)
+        if self.penalty > 0:
+            N = X.shape[0]
+            lhs += self.penalty * _DPenalty(N, dtype=X.dtype)
 
-        cg_kwargs = {} if cg_kwargs is None else cg_kwargs
-        r, info = scipy.sparse.linalg.cg(lhs, rhs, **cg_kwargs)
+        x, info = scipy.sparse.linalg.cg(
+            lhs, rhs,
+            x0=None,
+            rtol=self.rtol,
+            atol=self.atol,
+            maxiter=self.maxiter,
+            callback=self.callback
+        )
         if info != 0:
             logger.warning(f'Conjugate gradient did not converge, info={info}')
+        self.kernel_ = x
 
-        return r
+        return self
+    
+    def predict(self, X):
+        r'''
+        Predict response using the fitted LTI model.
+        '''
+        # Check if fitted.
+        if not hasattr(self, 'kernel_'):
+            raise ValueError("The model is not fitted yet. Call 'fit' first.")
+        
+        # Validate inputs.
+        X = np.asarray(X)
+        if (X.ndim == 0) or (X.ndim > 2):
+            raise ValueError("Input X must be a 1D or 2D array.")
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+        if X.shape[0] > self.kernel_.shape[0]:
+            raise ValueError("Input X is longer than the fitted kernel.")
+
+        return scipy.signal.fftconvolve(
+            X, self.kernel_[:, np.newaxis], mode='full', axes=0)[:X.shape[0]]
+
+    def score(self, X, y):
+        r'''
+        Compute the coefficient of determination R^2 of the prediction.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_samples, n_repetitions) or (n_samples,)
+            Input data.
+
+        y : array-like of shape (n_samples, n_repetitions) or (n_samples,)
+            True response data with the same shape of `X`.
+
+        Returns
+        -------
+        score : float
+            R^2 score.
+        '''
+        # Validate inputs.
+        X = np.asarray(X)
+        y = np.asarray(y)
+        if (X.ndim == 0) or (X.ndim > 2):
+            raise ValueError("Input X must be a 1D or 2D array.")
+        if X.shape != y.shape:
+            raise ValueError("Input X and y must have the same shape.")
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+            y = y.reshape(-1, 1)
+
+        # Predict response.
+        y_pred = self.predict(X)
+
+        # Compute R^2 score.
+        ss_res = np.sum((y - y_pred)**2)
+        ss_tot = np.sum((y - np.mean(y))**2)
+        return 1 - ss_res / ss_tot

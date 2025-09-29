@@ -1,6 +1,6 @@
 '''
-This is ...
+Resonance
+=========
 '''
 
-from . import _core
 from ._core import *
