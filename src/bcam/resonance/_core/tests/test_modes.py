@@ -359,7 +359,7 @@ class TestAmplitudes:
             ns=ns,
             n_out=n_out,
             n_in=n_in,
-            a_type='mechanical')
+            mode='mechanical')
         amps_fit = model.fit(data, penalty=0.)
         data_pred = self.kernel(ns, fs, amps_fit, freqs)
         assert np.allclose(data, data_pred, atol=0.)

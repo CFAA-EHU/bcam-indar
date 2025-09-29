@@ -171,19 +171,23 @@ def reshape_projection(x):
 class Amplitudes():
 
     def __init__(
-            self,
-            freqs, fs: float, ns: int,
-            n_out:int=None, n_in:int=None,
-            a_type:str='normal'):
+        self,
+        freqs,
+        fs: float,
+        ns: int,
+        n_out:int=None,
+        n_in:int=None,
+        mode:str='normal'
+    ):
         self.freqs = np.atleast_1d(freqs)
         self.fs = fs
         self.ns = ns
         self.n_out = len(freqs) if n_out is None else n_out
         self.n_in = n_out if n_in is None else n_in
-        if a_type in ['normal', 'mechanical']:
-            self.a_type = a_type
+        if mode in ['normal', 'mechanical']:
+            self.mode = mode
         else:
-            raise ValueError(f"Unknown amplitude type: {a_type}")
+            raise ValueError(f"Unknown amplitude type: {mode}")
 
     @property
     def values_(self):
@@ -192,9 +196,9 @@ class Amplitudes():
             raise ValueError(msg)
         dof = len(self.freqs)
         x = self.raw_coeff_
-        if self.a_type == 'normal':
+        if self.mode == 'normal':
             return x[..., :dof] + 1j*x[..., dof:]
-        elif self.a_type == 'mechanical':
+        elif self.mode == 'mechanical':
             r = np.concatenate(
                 [np.zeros((*x.shape[:2], 1)), x[..., dof:]], axis=-1)
             r = trig_ifft(r).astype(np.complex128)
@@ -202,8 +206,8 @@ class Amplitudes():
 
     def _matrix(self, penalty: float):
         dof = len(self.freqs)
-        L = 2*dof if self.a_type == 'normal' else 2*dof-1
-        m = metric_amps(self.freqs, self.fs, self.ns, self.a_type)
+        L = 2*dof if self.mode == 'normal' else 2*dof-1
+        m = metric_amps(self.freqs, self.fs, self.ns, self.mode)
         m += penalty * np.eye(L)
         return m
 
@@ -224,11 +228,11 @@ class Amplitudes():
             y,
             prod(np.arange(ns)/fs))
         r = r / fs
-        if self.a_type == 'normal':
+        if self.mode == 'normal':
             r = np.concatenate(
                 [np.imag(r), np.real(r)],
                 axis=-1)
-        elif self.a_type == 'mechanical':
+        elif self.mode == 'mechanical':
             r = np.concatenate(
                 [np.imag(r), trig_fft(np.real(r))[..., 1:]],
                 axis=-1)
@@ -1110,8 +1114,6 @@ def system_to_modal(M, C, K):
     mode_shapes = mode_shapes @ np.diag(mu)
     
     return mode_shapes, Z
-
-
 
 # =================================
 # Systems
