@@ -655,7 +655,7 @@ class Espira:
         # Add a small damping to stabilize the algorithm.
         false_damping = np.power(2, -2 / N)
         y *= (false_damping**np.arange(N))[:, np.newaxis]
-        y = np.fft.fft(y, axis=0, norm='forward')
+        y = np.fft.fft(y, axis=0)
         ωN = np.exp(-2j * np.pi / N)
         y = (ωN**np.arange(N))[:, np.newaxis] * y
         self._rational = RatApp(y, rank_tol=rank_tol)
@@ -665,7 +665,7 @@ class Espira:
 
         poles, residues = self._rational.fit(
             tol=tol, max_order=max_order)[:2]
-        amps = N * residues / (1 - (poles[:, np.newaxis])**N)
+        amps = residues / (1 - (poles[:, np.newaxis])**N)
         # Remove false damping.
         poles *= np.power(2, 2 / N)
 
@@ -682,7 +682,7 @@ class EspiraR:
         # Add a small damping to stabilize the algorithm.
         false_damping = np.power(2, -2 / N)
         y *= (false_damping**np.arange(N))[:, np.newaxis]
-        y = np.fft.fft(y, axis=0, norm='forward')
+        y = np.fft.fft(y, axis=0)
         ωN = np.exp(-2j * np.pi / N)
         y = (ωN**np.arange(N))[:, np.newaxis] * y
         self._rational = RatAppSym(y, rank_tol=rank_tol)
@@ -695,7 +695,7 @@ class EspiraR:
         amps = 2*[None]
         poles = list(poles)
         for i in [0, 1]:
-            amps[i] = N * residues[i] / (1 - (poles[i][:, np.newaxis])**N)
+            amps[i] = residues[i] / (1 - (poles[i][:, np.newaxis])**N)
             # Remove false damping.
             poles[i] *= np.power(2, 2 / N)
         amps = tuple(amps)
@@ -703,169 +703,21 @@ class EspiraR:
 
         return amps, poles
 
-# ======================
-# EMA (Exponential Sums)
-# ======================
 
-class EMASuperResolution:
-
-    def __init__(
-        self,
-        *,
-        fs:float=1,
-        tol:float=1e-3,
-        max_order:int=None,
-        rank_tol:float=1e-2,
-        penalty:float=0.0
-    ):
-        self.fs = fs
-        self.tol = tol
-        self.max_order = max_order
-        self.rank_tol = rank_tol
-        self.penalty = penalty
-
-    @classmethod
-    def _get_param_names(cls):
-        """Get parameter names for the estimator"""
-        # Taken from sklearn.base.py.
-        # introspect the constructor arguments to find the model parameters
-        # to represent
-        init_signature = inspect.signature(cls.__init__)
-        # Consider the constructor parameters excluding 'self'
-        parameters = [
-            p
-            for p in init_signature.parameters.values()
-            if p.name != "self" and p.kind != p.VAR_KEYWORD
-        ]
-        # Extract and sort argument names excluding 'self'
-        return sorted([p.name for p in parameters])
-
-    def get_params(self):
-        """
-        Get parameters for this estimator.
-
-        Returns
-        -------
-        params : dict
-            Parameter names mapped to their values.
-        """
-        out = dict()
-        for key in self._get_param_names():
-            value = getattr(self, key)
-            out[key] = value
-        return out
-
-    def set_params(self, **params):
-        valid_params = self.get_params()
-
-        for key, value in params.items():
-            if key not in valid_params:
-                local_valid_params = self._get_param_names()
-                raise ValueError(
-                    f"Invalid parameter {key!r} for {self}. "
-                    f"Valid parameters are: {local_valid_params!r}."
-                )
-            else:
-                setattr(self, key, value)
-                valid_params[key] = value
-
-        return self
-
-    def _basic_cleaning(self, amps, poles):
+def pole_pruning(amps, poles, stol=1e-5, mode='ema'):
+    amps, poles = list(amps), list(poles)
+    for i in [0, 1]:
         # Remove unstable poles.
-        for i in [0, 1]:
-            idxs = np.nonzero(np.abs(poles[i]) <= 1)[0]
-            poles[i] = poles[i][idxs]
-            amps[i] = amps[i][idxs]
-        # Remove real, positive poles.
-        idxs = np.nonzero(poles[0].real < 0)[0]
-        poles[0] = poles[0][idxs]
-        amps[0] = amps[0][idxs]
+        idxs = np.nonzero(np.abs(poles[i]) <= 1)[0]
+        poles[i] = poles[i][idxs]
+        amps[i] = amps[i][idxs]
+        # Remove spurious poles.
+        idxs = np.nonzero(np.linalg.norm(amps[i], axis=1) >= stol)[0]
+        poles[i] = poles[i][idxs]
+        amps[i] = amps[i][idxs]
 
-        return tuple(amps), tuple(poles)
+    if mode == 'ema':
+        amps = [np.real(amps[1][np.array([], dtype=int)]), amps[1]]
+        poles = [np.array([]), poles[1]]
 
-    @property
-    def amps_(self):
-        if hasattr(self, '_amps'):
-            return self._amps
-        else:
-            msg = 'No fitted model found. Please run fit method first.'
-            raise ValueError(msg)
-    
-    @property
-    def poles_(self):
-        if hasattr(self, '_poles'):
-            return np.concatenate(self._poles, dtype=np.complex128)
-        else:
-            msg = 'No fitted model found. Please run fit method first.'
-            raise ValueError(msg)
-    
-    @property
-    def freqs_(self):
-        if hasattr(self, '_poles'):
-            return np.log(self.poles_) * self.fs
-        else:
-            msg = 'No fitted model found. Please run fit method first.'
-            raise ValueError(msg)
-
-    def remove_spurious_poles(self, tol:float=1e-5):
-        if hasattr(self, '_poles') and hasattr(self, '_amps'):
-            amps, poles = list(self._amps), list(self._poles)
-        else:
-            msg = 'No fitted model found. Please run fit method first.'
-            raise ValueError(msg)
-
-        for i in [0, 1]:
-            idxs = np.nonzero(np.abs(poles[i]) > tol)[0]
-            poles[i] = poles[i][idxs]
-            amps[i] = amps[i][idxs]
-        self._poles = tuple(poles)
-        self._amps = tuple(amps)
-
-        n_out, n_in, ns = self._X.shape
-        # Refine amplitudes.
-        fit_amps = mechanical.Amplitudes(
-            freqs=self.freqs_,
-            fs=self.fs,
-            ns=ns,
-            n_out=n_out,
-            n_in=n_in,
-            mode='mechanical'
-        )
-        self._amps = fit_amps.fit(self._X, penalty=self.penalty)
-        lr = len(self.poles_[0])
-        self._amps[:lr] = np.real(self._amps[:lr]).astype(np.complex128)
-
-        return self
-
-    def fit(self, X, seed_freqs=None):
-        X = np.asarray(X)
-        if X.ndim != 3:
-            msg = f'Expected a 3d array for X, got an array of dimension {X.ndim}.'
-            raise ValueError(msg)
-
-        N = X.shape[-1]
-        if not hasattr(self, '_espira'):
-            self._espira = EspiraR(X.reshape(-1, N).T, rank_tol=self.rank_tol)
-            self._espira._rational.set_seed_freqs(seed_freqs)
-        amps, poles = self._espira.fit(tol=self.tol, max_order=self.max_order)
-        poles, amps = list(poles), list(amps)
-        amps, poles = self._basic_cleaning(amps, poles)
-        self._poles = tuple(poles)
-
-        n_out, n_in, ns = X.shape
-        # Refine amplitudes.
-        fit_amps = mechanical.Amplitudes(
-            freqs=self.freqs_,
-            fs=self.fs,
-            ns=ns,
-            n_out=n_out,
-            n_in=n_in,
-            mode='mechanical'
-        )
-        self._amps = fit_amps.fit(X, penalty=self.penalty)
-        lr = len(self.poles_[0])
-        self._amps[:lr] = np.real(self._amps[:lr]).astype(np.complex128)
-        self._X = X
-
-        return self
+    return tuple(amps), tuple(poles)

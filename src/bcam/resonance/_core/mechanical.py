@@ -641,6 +641,7 @@ class RealModes:
         self.fs = fs
         self.ns = ns
 
+        self._rescale = np.max(np.abs(amps))
         self.modes_fit_ = None
         self.success_ = None
         self.message_ = None
@@ -656,7 +657,7 @@ class RealModes:
         x = x.reshape(n_out, dof)
         amps = mode_to_amps(x, n_out, n_in)
 
-        dif = amps - self.amps
+        dif = amps - self.amps/self._rescale
         dif = np.concatenate(
             [np.real(dif), np.imag(dif)], axis=-1)
         trans = np.einsum('ijk,kl->ijl', dif, self._metric)
@@ -670,7 +671,7 @@ class RealModes:
         x = x.reshape(n_out, dof)
         amps = mode_to_amps(x, n_out, n_in)
 
-        dif = amps - self.amps
+        dif = amps - self.amps/self._rescale
         dif = np.concatenate(
             [np.real(dif), np.imag(dif)], axis=-1)
         trans = np.einsum('ijk,kl->ijl', dif, self._metric)
@@ -693,7 +694,7 @@ class RealModes:
         p = p.reshape(n_out, dof)
 
         amps = mode_to_amps(x, n_out, n_in)
-        A = amps - self.amps
+        A = amps - self.amps/self._rescale
         A = np.concatenate(
             [np.real(A), np.imag(A)], axis=-1)
 
@@ -721,13 +722,13 @@ class RealModes:
             [2*t1[:n_in] + t2, t1[n_in:]], axis=0)
         return (Ap + Bx).flatten()
 
-    def fit(self, options:dict=None):
+    def fit(self, options_ncg:dict=None):
         n_out, _, dof = self.amps.shape
-        options = {} if options is None else options
-        if 'gtol' not in options.keys():
-            options['gtol'] = 1e-2
+        options_ncg = {} if options_ncg is None else options_ncg
+        if 'gtol' not in options_ncg.keys():
+            options_ncg['gtol'] = 1e-2
 
-        x0 = np.real(amps_to_modes(self.amps))
+        x0 = np.real(amps_to_modes(self.amps/self._rescale))
         idx = np.nonzero(x0[0] < 0)[0]
         x0[:, idx] = -x0[:, idx]
         x0 = x0.flatten()
@@ -744,10 +745,9 @@ class RealModes:
                 'method': 'trust-ncg',
                 'jac': self._jac,
                 'hessp': self._hessp,
-                'options': options},
-            callback=None
-            )
-        self.modes_fit_ = res.x.reshape(n_out, dof)
+                'options': options_ncg},
+            callback=None)
+        self.modes_fit_ = np.sqrt(self._rescale) * res.x.reshape(n_out, dof)
         self.success_ = res.success
         self.message_ = res.message
         return self.modes_fit_
@@ -865,6 +865,7 @@ class ComplexModes:
         PartialModesMap.rtol = 1e-8
         self._modes_map = PartialModesMap(freqs, coords)
 
+        self._rescale = np.max(np.abs(amps))
         self._get_metric()
 
         self._raw_modes_fit = None
@@ -876,7 +877,7 @@ class ComplexModes:
         if self._raw_modes_fit is None:
             msg = 'Call fit() before accessing modes_fit_.'
             raise ValueError(msg)
-        return self._modes_map(*self._raw_modes_fit)
+        return np.sqrt(self._rescale) * self._modes_map(*self._raw_modes_fit)
 
     def _get_metric(self):
         self._metric = metric_amps(
@@ -890,7 +891,7 @@ class ComplexModes:
         if isinstance(modes, float):
             return np.inf
         amps = mode_to_amps(modes, n_out, n_in)
-        diff = amps - self.amps
+        diff = amps - self.amps/self._rescale
         diff = np.concatenate(
                 [np.real(diff), np.imag(diff)], axis=-1)
         dist = np.einsum('ijk,kl,ijl->', diff, self._metric, diff)
@@ -913,7 +914,7 @@ class ComplexModes:
 
         amps = mode_to_amps(modes, n_out, n_in)
         diff = np.concatenate(
-            [np.real(amps - self.amps), np.imag(amps - self.amps)], axis=-1)
+            [np.real(amps - self.amps/self._rescale), np.imag(amps - self.amps/self._rescale)], axis=-1)
         del amps
         diff = 2*np.einsum('ijk,kl->ijl', diff, self._metric)
 
@@ -941,7 +942,7 @@ class ComplexModes:
         modes = self._modes_map(x_, z_)
         amps = mode_to_amps(modes, n_out, n_in)
         diff = np.concatenate(
-            [np.real(amps - self.amps), np.imag(amps - self.amps)], axis=-1)
+            [np.real(amps - self.amps/self._rescale), np.imag(amps - self.amps/self._rescale)], axis=-1)
 
         jac_modes = self._modes_map.jac(x_, z_)
         hessp_modes = self._modes_map.hessp(x_, z_, px, pz)
@@ -1008,6 +1009,8 @@ class ComplexModes:
             options['gtol'] = 1e-2
         if 'xtol' not in options.keys():
             options['xtol'] = 1e-5
+
+        x0 = tuple(e/np.sqrt(self._rescale) for e in x0)
 
         self._ref_constr = self._modes_map.constraints(*x0)
 

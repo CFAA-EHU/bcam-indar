@@ -231,11 +231,7 @@ class Test_ESPIRA:
         amps_fit, poles_fit = res.fit(tol=1e-6)
 
         # Remove spurious poles with very small amplitude.
-        ar, ac = amps_fit
-        idx_r = np.nonzero(np.linalg.norm(ar, axis=1) > 1e-5)[0]
-        idx_c = np.nonzero(np.linalg.norm(ac, axis=1) > 1e-5)[0]
-        poles_fit = (poles_fit[0][idx_r], poles_fit[1][idx_c])
-        amps_fit = (ar[idx_r], ac[idx_c])
+        amps_fit, poles_fit = espira.pole_pruning(amps_fit, poles_fit, stol=1e-5)
 
         x_fit = espira.exp_sum_R(poles_fit, amps_fit, np.arange(N), fs=1)
 

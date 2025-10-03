@@ -36,8 +36,7 @@ class _Dloss(scipy.sparse.linalg.LinearOperator):
     
     Parameters
     ----------
-    x : ndarray
-        Input data of shape `(N, K)`, where `N` is the length of the time series and `K` is the number of repetitions.
+    x : 1d or 2d array-like of shape (n_samples, n_repetitions) or (n_samples,)
     '''
     
     def __init__(self, x):
@@ -63,9 +62,11 @@ class _DPenalty(scipy.sparse.linalg.LinearOperator):
 
     def _matmat(self, r):
         N = self._N
+        # Multiply by a linear ramp to mitigate edge effects,
+        # assuming r tends to zero at the right edge.
         r_ = r * np.arange(N)[:, np.newaxis] / N
         r_ = np.fft.rfft(r_, axis=0)
-        r_ = r_ * np.arange(N//2+1)[:, np.newaxis] / N
+        r_ = 2*np.pi * r_ * np.arange(N//2+1)[:, np.newaxis]
         r_ = np.fft.irfft(r_, axis=0)
         return r_
     
