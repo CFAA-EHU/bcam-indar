@@ -60,16 +60,33 @@ class _DPenalty(scipy.sparse.linalg.LinearOperator):
         self._N = N
         super().__init__(shape=(N, N), dtype=dtype)
 
+    @staticmethod
+    def _half_der(r):
+        N = r.shape[0]
+        r = np.fft.rfft(r, axis=0)
+        r = np.sqrt(2*np.pi*np.arange(N//2+1))[:, np.newaxis] * r
+        r = np.fft.irfft(r, axis=0)
+        return r
+
     def _matmat(self, r):
         N = self._N
-        # Multiply by a linear ramp to mitigate edge effects,
-        # assuming r tends to zero at the right edge.
-        r_ = r * np.arange(N)[:, np.newaxis] / N
-        r_ = np.fft.rfft(r_, axis=0)
-        r_ = 2*np.pi * r_ * np.arange(N//2+1)[:, np.newaxis]
-        r_ = np.fft.irfft(r_, axis=0)
-        return r_
-    
+        # To mitigate boundary effects, extend linearly.
+        r_ = np.zeros((N + 2*(N//4), r.shape[1]), dtype=r.dtype)
+        r_[N//4:N//4+N] = r
+        r_[:N//4] = (r[0]/(N//4)) * np.arange(N//4)[:, np.newaxis]
+        r_[N//4+N:] = (r[-1]/(N//4)) * np.arange(N//4-1, -1, -1)[:, np.newaxis]
+        # Compute D^(1/2) in Fourier domain.
+        r_ = self._half_der(r_)
+        # Multiply by box window.
+        r_[:N//4] = 0
+        r_[N//4+N:] = 0
+        # Compute D^(1/2) in Fourier domain again.
+        r_ = self._half_der(r_)
+        # Operate adjoint of linear extension.
+        r_[N//4] = np.sum(r_[:(N//4)+1] * np.arange(N//4+1)[:, np.newaxis], axis=0) / (N//4)
+        r_[N//4+N-1] = np.sum(r_[N//4+N-1:] * np.arange(N//4, -1, -1)[:, np.newaxis], axis=0) / (N//4)
+        return r_[N//4:N//4+N]
+
     def _adjoint(self):
         return self
 
