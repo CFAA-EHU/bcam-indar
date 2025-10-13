@@ -171,19 +171,23 @@ def reshape_projection(x):
 class Amplitudes():
 
     def __init__(
-            self,
-            freqs, fs: float, ns: int,
-            n_out:int=None, n_in:int=None,
-            a_type:str='normal'):
+        self,
+        freqs,
+        fs: float,
+        ns: int,
+        n_out:int=None,
+        n_in:int=None,
+        mode:str='normal'
+    ):
         self.freqs = np.atleast_1d(freqs)
         self.fs = fs
         self.ns = ns
         self.n_out = len(freqs) if n_out is None else n_out
         self.n_in = n_out if n_in is None else n_in
-        if a_type in ['normal', 'mechanical']:
-            self.a_type = a_type
+        if mode in ['normal', 'mechanical']:
+            self.mode = mode
         else:
-            raise ValueError(f"Unknown amplitude type: {a_type}")
+            raise ValueError(f"Unknown amplitude type: {mode}")
 
     @property
     def values_(self):
@@ -192,9 +196,9 @@ class Amplitudes():
             raise ValueError(msg)
         dof = len(self.freqs)
         x = self.raw_coeff_
-        if self.a_type == 'normal':
+        if self.mode == 'normal':
             return x[..., :dof] + 1j*x[..., dof:]
-        elif self.a_type == 'mechanical':
+        elif self.mode == 'mechanical':
             r = np.concatenate(
                 [np.zeros((*x.shape[:2], 1)), x[..., dof:]], axis=-1)
             r = trig_ifft(r).astype(np.complex128)
@@ -202,8 +206,8 @@ class Amplitudes():
 
     def _matrix(self, penalty: float):
         dof = len(self.freqs)
-        L = 2*dof if self.a_type == 'normal' else 2*dof-1
-        m = metric_amps(self.freqs, self.fs, self.ns, self.a_type)
+        L = 2*dof if self.mode == 'normal' else 2*dof-1
+        m = metric_amps(self.freqs, self.fs, self.ns, self.mode)
         m += penalty * np.eye(L)
         return m
 
@@ -224,11 +228,11 @@ class Amplitudes():
             y,
             prod(np.arange(ns)/fs))
         r = r / fs
-        if self.a_type == 'normal':
+        if self.mode == 'normal':
             r = np.concatenate(
                 [np.imag(r), np.real(r)],
                 axis=-1)
-        elif self.a_type == 'mechanical':
+        elif self.mode == 'mechanical':
             r = np.concatenate(
                 [np.imag(r), trig_fft(np.real(r))[..., 1:]],
                 axis=-1)
@@ -637,6 +641,7 @@ class RealModes:
         self.fs = fs
         self.ns = ns
 
+        self._rescale = np.max(np.abs(amps))
         self.modes_fit_ = None
         self.success_ = None
         self.message_ = None
@@ -652,7 +657,7 @@ class RealModes:
         x = x.reshape(n_out, dof)
         amps = mode_to_amps(x, n_out, n_in)
 
-        dif = amps - self.amps
+        dif = amps - self.amps/self._rescale
         dif = np.concatenate(
             [np.real(dif), np.imag(dif)], axis=-1)
         trans = np.einsum('ijk,kl->ijl', dif, self._metric)
@@ -666,7 +671,7 @@ class RealModes:
         x = x.reshape(n_out, dof)
         amps = mode_to_amps(x, n_out, n_in)
 
-        dif = amps - self.amps
+        dif = amps - self.amps/self._rescale
         dif = np.concatenate(
             [np.real(dif), np.imag(dif)], axis=-1)
         trans = np.einsum('ijk,kl->ijl', dif, self._metric)
@@ -689,7 +694,7 @@ class RealModes:
         p = p.reshape(n_out, dof)
 
         amps = mode_to_amps(x, n_out, n_in)
-        A = amps - self.amps
+        A = amps - self.amps/self._rescale
         A = np.concatenate(
             [np.real(A), np.imag(A)], axis=-1)
 
@@ -717,13 +722,13 @@ class RealModes:
             [2*t1[:n_in] + t2, t1[n_in:]], axis=0)
         return (Ap + Bx).flatten()
 
-    def fit(self, options:dict=None):
+    def fit(self, options_ncg:dict=None):
         n_out, _, dof = self.amps.shape
-        options = {} if options is None else options
-        if 'gtol' not in options.keys():
-            options['gtol'] = 1e-2
+        options_ncg = {} if options_ncg is None else options_ncg
+        if 'gtol' not in options_ncg.keys():
+            options_ncg['gtol'] = 1e-2
 
-        x0 = np.real(amps_to_modes(self.amps))
+        x0 = np.real(amps_to_modes(self.amps/self._rescale))
         idx = np.nonzero(x0[0] < 0)[0]
         x0[:, idx] = -x0[:, idx]
         x0 = x0.flatten()
@@ -740,10 +745,9 @@ class RealModes:
                 'method': 'trust-ncg',
                 'jac': self._jac,
                 'hessp': self._hessp,
-                'options': options},
-            callback=None
-            )
-        self.modes_fit_ = res.x.reshape(n_out, dof)
+                'options': options_ncg},
+            callback=None)
+        self.modes_fit_ = np.sqrt(self._rescale) * res.x.reshape(n_out, dof)
         self.success_ = res.success
         self.message_ = res.message
         return self.modes_fit_
@@ -861,6 +865,7 @@ class ComplexModes:
         PartialModesMap.rtol = 1e-8
         self._modes_map = PartialModesMap(freqs, coords)
 
+        self._rescale = np.max(np.abs(amps))
         self._get_metric()
 
         self._raw_modes_fit = None
@@ -872,7 +877,7 @@ class ComplexModes:
         if self._raw_modes_fit is None:
             msg = 'Call fit() before accessing modes_fit_.'
             raise ValueError(msg)
-        return self._modes_map(*self._raw_modes_fit)
+        return np.sqrt(self._rescale) * self._modes_map(*self._raw_modes_fit)
 
     def _get_metric(self):
         self._metric = metric_amps(
@@ -886,7 +891,7 @@ class ComplexModes:
         if isinstance(modes, float):
             return np.inf
         amps = mode_to_amps(modes, n_out, n_in)
-        diff = amps - self.amps
+        diff = amps - self.amps/self._rescale
         diff = np.concatenate(
                 [np.real(diff), np.imag(diff)], axis=-1)
         dist = np.einsum('ijk,kl,ijl->', diff, self._metric, diff)
@@ -909,7 +914,7 @@ class ComplexModes:
 
         amps = mode_to_amps(modes, n_out, n_in)
         diff = np.concatenate(
-            [np.real(amps - self.amps), np.imag(amps - self.amps)], axis=-1)
+            [np.real(amps - self.amps/self._rescale), np.imag(amps - self.amps/self._rescale)], axis=-1)
         del amps
         diff = 2*np.einsum('ijk,kl->ijl', diff, self._metric)
 
@@ -937,7 +942,7 @@ class ComplexModes:
         modes = self._modes_map(x_, z_)
         amps = mode_to_amps(modes, n_out, n_in)
         diff = np.concatenate(
-            [np.real(amps - self.amps), np.imag(amps - self.amps)], axis=-1)
+            [np.real(amps - self.amps/self._rescale), np.imag(amps - self.amps/self._rescale)], axis=-1)
 
         jac_modes = self._modes_map.jac(x_, z_)
         hessp_modes = self._modes_map.hessp(x_, z_, px, pz)
@@ -1004,6 +1009,8 @@ class ComplexModes:
             options['gtol'] = 1e-2
         if 'xtol' not in options.keys():
             options['xtol'] = 1e-5
+
+        x0 = tuple(e/np.sqrt(self._rescale) for e in x0)
 
         self._ref_constr = self._modes_map.constraints(*x0)
 
@@ -1110,8 +1117,6 @@ def system_to_modal(M, C, K):
     mode_shapes = mode_shapes @ np.diag(mu)
     
     return mode_shapes, Z
-
-
 
 # =================================
 # Systems

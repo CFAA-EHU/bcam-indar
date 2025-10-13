@@ -1,11 +1,14 @@
 #!/usr/bin/env python
 
+import inspect
 import logging
 from itertools import product
 import bisect
 
 import numpy as np
 import scipy
+
+from . import mechanical
 
 logger = logging.getLogger(__name__)
 
@@ -62,15 +65,17 @@ def rational_function_sym(poles, residues, z):
     return r
 
 
-def _get_max_order(max_order, N):
+def _get_max_order(max_order, shape):
+    N, m = shape
+    max_val = m*N//(m+1)
     if max_order is None:
-        max_order_ = N // 2 - 1
+        max_order_ = max_val
     else:
-        if max_order > N // 2 - 1:
+        if max_order > max_val:
             msg = f'The number of poles must be less than half of the number of samples. \
-            max_order readjusted to {N // 2 - 1}'
+            max_order readjusted to {max_val}'
             logger.warning(msg, stacklevel=2)
-        max_order_ = min(max_order, N // 2 - 1)
+        max_order_ = min(max_order, max_val)
 
     return max_order_
 
@@ -236,8 +241,8 @@ class RatApp:
         return poles, residues
     
     def fit(self, tol=1e-3, max_order=None):
-        N = self.x.shape[0]
-        max_order_ = _get_max_order(max_order, N)
+        N, m = self.x.shape
+        max_order_ = _get_max_order(max_order, (N, m))
 
         if not hasattr(self, '_freqs'):
             self.set_seed_freqs()
@@ -323,10 +328,15 @@ class RatAppSym:
             _, idxs = np.unique(peaks, return_index=True)
             peaks = peaks[np.sort(idxs)]
             freqs = peaks[peaks < m]
+        else:
+            freqs = np.asarray(freqs)
 
-        assert freqs.ndim == 1, 'freqs must be a 1D array.'
-        assert np.all(freqs >= 0) and np.all(freqs < m), 'freqs must be in the range [0, N//2+1).'
-        assert len(freqs) == len(np.unique(freqs)), 'freqs must be unique.'
+        if freqs.ndim != 1:
+            raise ValueError('freqs must be a 1D array.')
+        if not (np.all(freqs >= 0) and np.all(freqs < m)):
+            raise ValueError('freqs must be in the range [0, N//2+1).')
+        if len(freqs) != len(np.unique(freqs)):
+            raise ValueError('freqs must be unique.')
 
         freqs = list(freqs)
         freqs.reverse()
@@ -478,7 +488,7 @@ class RatAppSym:
         poles_r.extend(poles_l)
         poles_r = np.real(poles_r)
         poles_c = np.array(poles_c)
-        poles = (poles_r, poles_c)
+        poles = [poles_r, poles_c]
         dim = 2*len(poles[1]) + len(poles[0])
         # Check that the number of poles is correct.
         if dim != M:
@@ -507,11 +517,16 @@ class RatAppSym:
         residues = residues[:-1]
         residues = [residues[:lr], residues[lr:lr+lc]+1j*residues[lr+lc:]]
 
-        return poles, tuple(residues)
+        for i in range(2):
+            idxs = np.argsort(np.linalg.norm(residues[i], axis=1))[::-1]
+            residues[i] = residues[i][idxs]
+            poles[i] = poles[i][idxs]
+
+        return tuple(poles), tuple(residues)
     
     def fit(self, tol=1e-3, max_order=None):
-        N = self.x.shape[0]
-        max_order_ = _get_max_order(max_order, N)
+        N, m = self.x.shape
+        max_order_ = _get_max_order(max_order, (N, m))
 
         if not hasattr(self, '_freqs'):
             self.set_seed_freqs()
@@ -539,7 +554,7 @@ class RatAppSym:
 
             if error < tol:
                 succeed = True
-            elif n_freqs >= max_order_ + 1:
+            elif n_freqs >= max_order_:
                 msg = 'Convergence failed after the maximum number of poles is reached.\n'
                 msg += f'The error is {error}'
                 logger.warning(msg, stacklevel=2)
@@ -612,8 +627,11 @@ def exp_sum(poles, amplitudes, t, fs=1):
     return (poles[np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amplitudes
 
 def exp_sum_R(poles, amps, t, fs=1):
-    r = (poles[0][np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amps[0]
-    r += 2 * np.real((poles[1][np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amps[1])
+    r = 0
+    if poles[0] is not None:
+        r += (poles[0][np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amps[0]
+    if poles[1] is not None:
+        r += 2 * np.real((poles[1][np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amps[1])
     return r
 
 class Espira:
@@ -647,7 +665,7 @@ class Espira:
         # Add a small damping to stabilize the algorithm.
         false_damping = np.power(2, -2 / N)
         y *= (false_damping**np.arange(N))[:, np.newaxis]
-        y = np.fft.fft(y, axis=0, norm='forward')
+        y = np.fft.fft(y, axis=0)
         ωN = np.exp(-2j * np.pi / N)
         y = (ωN**np.arange(N))[:, np.newaxis] * y
         self._rational = RatApp(y, rank_tol=rank_tol)
@@ -657,7 +675,7 @@ class Espira:
 
         poles, residues = self._rational.fit(
             tol=tol, max_order=max_order)[:2]
-        amps = N * residues / (1 - (poles[:, np.newaxis])**N)
+        amps = residues / (1 - (poles[:, np.newaxis])**N)
         # Remove false damping.
         poles *= np.power(2, 2 / N)
 
@@ -674,7 +692,7 @@ class EspiraR:
         # Add a small damping to stabilize the algorithm.
         false_damping = np.power(2, -2 / N)
         y *= (false_damping**np.arange(N))[:, np.newaxis]
-        y = np.fft.fft(y, axis=0, norm='forward')
+        y = np.fft.fft(y, axis=0)
         ωN = np.exp(-2j * np.pi / N)
         y = (ωN**np.arange(N))[:, np.newaxis] * y
         self._rational = RatAppSym(y, rank_tol=rank_tol)
@@ -687,10 +705,29 @@ class EspiraR:
         amps = 2*[None]
         poles = list(poles)
         for i in [0, 1]:
-            amps[i] = N * residues[i] / (1 - (poles[i][:, np.newaxis])**N)
+            amps[i] = residues[i] / (1 - (poles[i][:, np.newaxis])**N)
             # Remove false damping.
             poles[i] *= np.power(2, 2 / N)
-        amps = tuple(amps)
-        poles = tuple(poles)
+        
+        amps, poles = list(amps), list(poles)
+        for i in range(2):
+            idxs = np.argsort(np.linalg.norm(amps[i], axis=1))[::-1]
+            amps[i] = amps[i][idxs]
+            poles[i] = poles[i][idxs]
 
-        return amps, poles
+        return tuple(amps), tuple(poles)
+
+
+def pole_pruning(amps, poles, stol=1e-5):
+    amps, poles = list(amps), list(poles)
+    for i in [0, 1]:
+        # Remove unstable poles.
+        idxs = np.nonzero(np.abs(poles[i]) <= 1)[0]
+        poles[i] = poles[i][idxs]
+        amps[i] = amps[i][idxs]
+        # Remove spurious poles.
+        idxs = np.nonzero(np.linalg.norm(amps[i], axis=1) >= stol)[0]
+        poles[i] = poles[i][idxs]
+        amps[i] = amps[i][idxs]
+
+    return tuple(amps), tuple(poles)

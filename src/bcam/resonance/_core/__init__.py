@@ -1,12 +1,12 @@
 '''
-This is ...
+Essential functions for the resonance package.
 '''
 
-from . import (
-    diagrams,
-    matrices,
-    lti,
-    mechanical,
-    derivatives,
-    espira,
+from .lti import *
+from .espira import *
+from .mechanical import (
+    Amplitudes,
+    RealModes,
+    ComplexModes,
+    mode_to_amps
 )
