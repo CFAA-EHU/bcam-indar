@@ -64,7 +64,7 @@ class _DPenalty(scipy.sparse.linalg.LinearOperator):
     def _half_der(r):
         N = r.shape[0]
         r = np.fft.rfft(r, axis=0)
-        r = np.sqrt(2*np.pi*np.arange(N//2+1))[:, np.newaxis] * r
+        r = (1 + np.sqrt(2*np.pi*np.arange(N//2+1))[:, np.newaxis]) * r
         r = np.fft.irfft(r, axis=0)
         return r
 
