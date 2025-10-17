@@ -247,7 +247,7 @@ class RatApp:
         if not hasattr(self, '_freqs'):
             self.set_seed_freqs()
 
-        if len(self._freqs) > max_order_ + 1:
+        if len(self._freqs) >= max_order_ + 1:
             gS, gG = self._initialize_sets(self._freqs[:max_order_+1])
         else:
             gS, gG = self._initialize_sets(self._freqs)
@@ -524,6 +524,18 @@ class RatAppSym:
 
         return tuple(poles), tuple(residues)
     
+    def count_freqs(self, idxs):
+        N = self.x.shape[0]
+        idxs = np.array(idxs)
+        idxs = np.sort(idxs)
+        n_freqs = 0
+        if idxs[0] == 0:
+            n_freqs += 1
+        if N%2 == 0 and (idxs[-1] == N//2):
+            n_freqs += 1
+        n_freqs = 2*len(idxs) - n_freqs
+        return n_freqs
+
     def fit(self, tol=1e-3, max_order=None):
         N, m = self.x.shape
         max_order_ = _get_max_order(max_order, (N, m))
@@ -531,34 +543,31 @@ class RatAppSym:
         if not hasattr(self, '_freqs'):
             self.set_seed_freqs()
 
-        if len(self._freqs) > max_order_ + 1:
-            gS, gG = self._initialize_sets(self._freqs[:max_order_+1])
+        n_freqs = self.count_freqs(self._freqs)
+        if n_freqs >= max_order_ + 1:
+            count = max_order_//2
+            n_freqs = self.count_freqs(self._freqs[:count])
+            while n_freqs < max_order_ + 1:
+                count += 1
+                n_freqs = self.count_freqs(self._freqs[:count])
+            gS, gG = self._initialize_sets(self._freqs[:count])
         else:
             gS, gG = self._initialize_sets(self._freqs)
         r, w = self._fit(N, gS, gG, self._rank)
-
-        n_freqs = 0
-        if gG['index'][0] != 0:
-            n_freqs += 1
-        if N%2 == 0 and (gG['index'][-1] != N//2):
-            n_freqs += 1
-        n_freqs = 2*len(gS['index']) - n_freqs
+        n_freqs = self.count_freqs(gS['index'])
 
         logger.debug(f'==== step: 0 ====')
-        succeed = False
+        status = 0
         step = 1
-        while not succeed:
+        while status == 0:
             idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
-            error = np.linalg.norm(gG['data'] - r, axis=1)[idx]
+            error = np.linalg.norm(gG['data'] - r)/np.sqrt(N)
             logger.debug(f'error: {error}')
 
             if error < tol:
-                succeed = True
-            elif n_freqs >= max_order_:
-                msg = 'Convergence failed after the maximum number of poles is reached.\n'
-                msg += f'The error is {error}'
-                logger.warning(msg, stacklevel=2)
-                break
+                status = 1
+            elif n_freqs >= max_order_ + 1:
+                status = 2
             else:
                 logger.debug(f'==== step: {step} ====')
                 _update_sets(gS, gG, idx)
@@ -708,7 +717,7 @@ class EspiraR:
             amps[i] = residues[i] / (1 - (poles[i][:, np.newaxis])**N)
             # Remove false damping.
             poles[i] *= np.power(2, 2 / N)
-        
+
         amps, poles = list(amps), list(poles)
         for i in range(2):
             idxs = np.argsort(np.linalg.norm(amps[i], axis=1))[::-1]
