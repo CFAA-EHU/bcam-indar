@@ -1,14 +1,11 @@
 #!/usr/bin/env python
 
-import inspect
 import logging
-from itertools import product
 import bisect
 
 import numpy as np
 import scipy
-
-from . import mechanical
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
@@ -542,6 +539,9 @@ class RatAppSym:
 
         if not hasattr(self, '_freqs'):
             self.set_seed_freqs()
+        if self._rank > max_order_:
+            msg = f'The minimum order is {self._rank}, which is greater than max_order {max_order_}.'
+            raise ValueError(msg)
 
         n_freqs = self.count_freqs(self._freqs)
         if n_freqs >= max_order_ + 1:
@@ -726,16 +726,259 @@ class EspiraR:
 
         return tuple(amps), tuple(poles)
 
+# Stabilization algorithm
 
-def pole_pruning(amps, poles, stol=1e-5):
+def _inner_prod(ns:int, x, y=None):
+    if y is None:
+        r = np.abs(x)**2
+    else:
+        r = x*np.conj(y)
+    idxs = np.nonzero(np.abs(1-r) > 0.1)
+    r[idxs] = (1 - r[idxs]**ns) / (ns*(1 - r[idxs]))
+    idxs = np.nonzero((np.abs(1-r) > 1e-10) & (np.abs(1-r) <= 0.1))
+    eta = np.log(r[idxs])
+    r[idxs] = np.sqrt(r[idxs]**(ns-1))
+    r[idxs] *= np.sinh(ns*eta/2) / (ns*np.sinh(eta/2))
+    idxs = np.nonzero(np.abs(1-r) <= 1e-10)
+    r[idxs] = 1.
+    return r
+
+def dist(x, y, ns:int):
+    floats = isinstance(x, float) and isinstance(y, float)
+    x = np.atleast_1d(x)
+    y = np.atleast_1d(y)
+    abs_x = np.sqrt(np.real(_inner_prod(ns, x)))
+    abs_y = np.sqrt(np.real(_inner_prod(ns, y)))
+    t1 = (abs_x - abs_y)**2
+    t2 = 2*abs_x*abs_y
+    t2 *= (1 - np.real(_inner_prod(ns, x, y)) / (abs_x*abs_y))
+
+    if floats:
+        return (t1 + t2)[0]
+    else:
+        return t1 + t2
+
+def _std_new(x, ns):
+    x = np.asarray(x)
+    mean = np.mean(x)
+    return np.sqrt(np.mean(dist(x, mean, ns)**2))
+
+class StablePoles:
+
+    def __init__(
+        self, model, ns:int,
+    ):
+        self.model = model
+        self.ns = ns
+
+    def _add_poles(
+        self,clusters, new_set, order, ns, q, radius
+    ):
+        mean_clusters = [np.mean(list(c.values())) for c in clusters]
+        mean_clusters = np.array(mean_clusters)
+        std_clusters = [
+            _std_new(list(c.values()), ns) if len(c) > 1 else radius
+            for c in clusters]
+        std_clusters = np.array(std_clusters)
+        # Compute distance matrix.
+        Pa, Pb = np.meshgrid(mean_clusters, new_set, indexing='ij')
+        D = dist(Pa, Pb, ns)
+        del Pa, Pb
+
+        pop_idxs = []
+        while np.min(D) < np.inf:
+            # Get index of minimum distance without flattening.
+            idx = np.unravel_index(np.argmin(D), D.shape)
+            if D[idx] < np.min([radius, np.power(std_clusters[idx[0]], q)]):
+                clusters[idx[0]].update({order: new_set[idx[1]]})
+                pop_idxs.append(idx[1])
+                D[idx[0], :] = np.inf
+                D[:, idx[1]] = np.inf
+            else:
+                D[idx[0], :] = np.inf
+        pop_idxs = np.array(pop_idxs)
+        add_idxs = np.setdiff1d(
+            np.arange(len(new_set)), pop_idxs,
+            assume_unique=True)
+
+        clusters.extend([{order: p} for p in new_set[add_idxs]])
+        return clusters
+
+    def _level_clustering(
+        self, poles, amps, level, ns, q=0.5, radius=None
+    ):
+        radius = dist(0., 0.6, ns) if radius is None else radius
+        n_orders = len(amps)
+
+        # For each order, find poles within the level.
+        poles_scale, idxs_scale = {}, {}
+        for order, set_ in amps.items():
+            idxs_scale[order] = np.nonzero((set_ > level/8) & (set_ <= level))[0]
+            if len(idxs_scale[order]) == 0:
+                continue
+            poles_scale[order] = poles[order][idxs_scale[order]]
+
+        clusters = []
+        if len(poles_scale) == 0:
+            return clusters, poles, amps
+
+        # Add all the poles in the maximum order to clusters.
+        initial_order = np.max(list(poles_scale.keys()))
+        clusters = [{initial_order: p} for p in poles_scale[initial_order]]
+
+        # Detect and add clusters.
+        for order, poles_ in poles_scale.items():
+            if (order == initial_order) or (len(poles_) == 0):
+                continue
+            clusters = self._add_poles(
+                clusters, poles_, order, ns, q, radius)
+        clusters = [c for c in clusters if len(c) > n_orders//2]
+
+        # Reorder clustered poles by order.
+        clusters_ = {order: [] for order in amps.keys()}
+        for c in clusters:
+            for order, p in c.items():
+                clusters_[order].append(p)
+
+        # Remove clustered poles from original sets.
+        for order, set_ in poles_scale.items():
+            idxs_p = [np.argmin(np.abs(p - set_)) for p in clusters_[order]]
+            poles[order] = np.delete(poles[order], idxs_scale[order][idxs_p])
+            amps[order] = np.delete(amps[order], idxs_scale[order][idxs_p])
+
+        return clusters, poles, amps
+
+    def _clustering(
+        self, poles, amps, ns,
+        q=0.5, radius=None, min_scale=None
+    ):
+        radius = dist(0., 0.6, ns) if radius is None else radius
+        poles = {k: v.copy() for k, v in poles.items()}
+        amps = {k: v.copy() for k, v in amps.items()}
+        n_orders = len(poles)
+
+        # Compute the largest amplitude for each order.
+        grand_max = np.max([e[0] for e in amps.values()])
+        scale = 0
+        level = grand_max
+
+        # Find clusters.
+        min_scale = -np.inf if min_scale is None else min_scale
+        clusters = []
+        while (scale > min_scale) and (len(poles) > n_orders//2):
+            clusters_, poles, amps = self._level_clustering(
+                poles, amps, level, ns, q=q, radius=radius)
+            clusters.extend(clusters_)
+
+            # Remove empty orders.
+            to_delete = []
+            for order, poles_ in poles.items():
+                if len(poles_) == 0:
+                    to_delete.append(order)
+            for order in to_delete:
+                del poles[order], amps[order]
+
+            level /= 2
+            scale -= 1
+
+        # Get intersection of orders.
+        orders_clusters = [list(c.keys()) for c in clusters]
+        common_orders = orders_clusters[0]
+        for oc in orders_clusters[1:]:
+            common_orders = np.intersect1d(
+                common_orders, oc, assume_unique=True)
+        if len(common_orders) > 0:
+            min_order = np.min(common_orders)
+        else:
+            min_order = None
+
+        return clusters, min_order
+
+    def find_clusters(
+            self, max_order,
+            q:float=0.5, radius:float=None, min_scale:float=None):
+        amps_set, poles_set = {}, {}
+        min_order = self.model._rational._rank
+        real_order = -1
+        for order in range(min_order, max_order+1):
+            if order <= real_order:
+                continue
+            amps_fit, poles_fit = self.model.fit(max_order=order, tol=0.)
+            real_order = len(poles_fit[0]) + 2*len(poles_fit[1])
+
+            amps_ = np.concatenate((amps_fit[0], amps_fit[1]), dtype=complex)
+            amps_ = np.linalg.norm(amps_, axis=1)
+            poles_ = np.concatenate((poles_fit[0], poles_fit[1]), dtype=complex)
+            idxs = np.argsort(amps_)[::-1]
+            amps_ = amps_[idxs]
+            poles_ = poles_[idxs]
+            amps_set[real_order] = amps_
+            poles_set[real_order] = poles_
+        # Reverse order of keys.
+        amps_set = {order: amps_set[order] for order in sorted(amps_set.keys(), reverse=True)}
+        poles_set = {order: poles_set[order] for order in sorted(poles_set.keys(), reverse=True)}
+        self.amps_set_ = amps_set
+        self.poles_set_ = poles_set
+
+        clusters, min_order = self._clustering(
+            poles_set, amps_set, ns=self.ns,
+            q=q, radius=radius, min_scale=min_scale)
+        self.min_order_ = min_order
+        self.clusters_ = clusters
+        return clusters
+
+    def plot(self, scale, ax=None):
+        if not hasattr(self, 'amps_set_'):
+            raise ValueError('You must run find_clusters() first.')
+
+        # Compute maximum amplitude across all orders.
+        grand_max = np.max([e[0] for e in self.amps_set_.values()])
+        level = grand_max / (2**scale)
+
+        poles_scale = {}
+        for order, set_ in self.amps_set_.items():
+            idxs_scale = np.nonzero((set_ > level/8) & (set_ <= level))[0]
+            poles_scale[order] = self.poles_set_[order][idxs_scale]
+
+        if ax is None:
+            _, ax = plt.subplots(nrows=1)
+        else:
+            ax = ax
+
+        ax.set_title(f'Level [{level/8:.2f}, {level:.2f}]')
+        for i, poles_ in poles_scale.items():
+            ax.plot(poles_.real, poles_.imag, 'o', label=f'order {i}')
+
+        # Plot a unit circle.
+        theta = np.linspace(0, 2*np.pi, 100)
+        ax.plot(np.cos(theta), np.sin(theta), color='k')
+        ax.set_xlim([-1.1, 1.1])
+        ax.set_ylim([-1.1, 1.1])
+
+        ax.set_aspect('equal')
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+
+        return ax
+
+def pole_pruning(amps, poles, ns, stol=1e-5):
     amps, poles = list(amps), list(poles)
+    
+    # Remove unstable poles.
     for i in [0, 1]:
-        # Remove unstable poles.
         idxs = np.nonzero(np.abs(poles[i]) <= 1)[0]
         poles[i] = poles[i][idxs]
         amps[i] = amps[i][idxs]
-        # Remove spurious poles.
-        idxs = np.nonzero(np.linalg.norm(amps[i], axis=1) >= stol)[0]
+    
+    # Remove spurious poles.
+    avg_norm = 0
+    if len(poles[0]) > 0:
+        avg_norm += np.sum((amps[0]**2)*(_inner_prod(ns, poles[0])[:, np.newaxis]))
+    if len(poles[1]) > 0:
+        avg_norm += np.sum(
+            amps[1]*np.conj(amps[1])*_inner_prod(ns, poles[1])[:, np.newaxis])
+    avg_norm = np.sqrt(np.real(avg_norm))
+    for i in [0, 1]:
+        idxs = np.nonzero(np.linalg.norm(amps[i], axis=1) >= stol*avg_norm)[0]
         poles[i] = poles[i][idxs]
         amps[i] = amps[i][idxs]
 
