@@ -56,8 +56,16 @@ class _Dloss(scipy.sparse.linalg.LinearOperator):
     
 class _DPenalty(scipy.sparse.linalg.LinearOperator):
 
-    def __init__(self, N, dtype=np.float64):
+    def __init__(self, N, mode='g', dtype=np.float64):
         self._N = N
+        self.mode = mode
+        if mode == 'g':
+            self._matmat = self._matmat_g
+        elif mode == 'a':
+            self._matmat = self._matmat_a
+        else:
+            raise ValueError('Mode must be `g` or `a`.')
+
         super().__init__(shape=(N, N), dtype=dtype)
 
     @staticmethod
@@ -68,24 +76,48 @@ class _DPenalty(scipy.sparse.linalg.LinearOperator):
         r = np.fft.irfft(r, axis=0)
         return r
 
-    def _matmat(self, r):
-        N = self._N
-        # To mitigate boundary effects, extend linearly.
-        r_ = np.zeros((N + 2*(N//4), r.shape[1]), dtype=r.dtype)
-        r_[N//4:N//4+N] = r
-        r_[:N//4] = (r[0]/(N//4)) * np.arange(N//4)[:, np.newaxis]
-        r_[N//4+N:] = (r[-1]/(N//4)) * np.arange(N//4-1, -1, -1)[:, np.newaxis]
-        # Compute D^(1/2) in Fourier domain.
-        r_ = self._half_der(r_)
-        # Multiply by box window.
-        r_[:N//4] = 0
-        r_[N//4+N:] = 0
-        # Compute D^(1/2) in Fourier domain again.
-        r_ = self._half_der(r_)
-        # Operate adjoint of linear extension.
-        r_[N//4] = np.sum(r_[:(N//4)+1] * np.arange(N//4+1)[:, np.newaxis], axis=0) / (N//4)
-        r_[N//4+N-1] = np.sum(r_[N//4+N-1:] * np.arange(N//4, -1, -1)[:, np.newaxis], axis=0) / (N//4)
-        return r_[N//4:N//4+N]
+    @staticmethod
+    def _laplace(r):
+        r_ = np.zeros_like(r)
+        # Derivative term.
+        r_[1:-1] = 2*r[1:-1]-(r[2:]+r[:-2])
+        r_[0] = -(r[1]-r[0])
+        r_[-1] = r[-1] - r[-2]
+        return r_
+
+    def _matmat_g(self, r):
+        # Derivative term.
+        r_ = self._laplace(r)
+        # L2 norm.
+        r_ += r
+
+        # TODO: Organize this code in a different option for penalty.
+        # # To mitigate boundary effects, extend linearly.
+        # r_ = np.zeros((N + 2*(N//4), r.shape[1]), dtype=r.dtype)
+        # r_[N//4:N//4+N] = r
+        # r_[:N//4] = (r[0]/(N//4)) * np.arange(N//4)[:, np.newaxis]
+        # r_[N//4+N:] = (r[-1]/(N//4)) * np.arange(N//4-1, -1, -1)[:, np.newaxis]
+        # # Compute D^(1/2) in Fourier domain.
+        # r_ = self._half_der(r_)
+        # # Multiply by box window.
+        # r_[:N//4] = 0
+        # r_[N//4+N:] = 0
+        # # Compute D^(1/2) in Fourier domain again.
+        # r_ = self._half_der(r_)
+        # # Operate adjoint of linear extension.
+        # r_[N//4] = np.sum(r_[:(N//4)+1] * np.arange(N//4+1)[:, np.newaxis], axis=0) / (N//4)
+        # r_[N//4+N-1] = np.sum(r_[N//4+N-1:] * np.arange(N//4, -1, -1)[:, np.newaxis], axis=0) / (N//4)
+        # return r_[N//4:N//4+N]
+
+        return r_
+    
+    def _matmat_a(self, r):
+        r_ = np.zeros_like(r)
+        # Difference and projection.
+        r_[1:] = self._laplace(r[1:])
+        # L2 norm.
+        r_ += r
+        return r_
 
     def _adjoint(self):
         return self
@@ -124,12 +156,14 @@ class LTIKernel:
         self,
         *,
         penalty:float=0.,
+        mode:str='g',
         rtol:float=1e-5,
         atol:float=0.,
         maxiter:int=None,
         callback=None
     ):
         self.penalty = penalty
+        self.mode = mode
         self.rtol = rtol
         self.atol = atol
         self.maxiter = maxiter
@@ -170,7 +204,8 @@ class LTIKernel:
         lhs = _Dloss(X)
         if self.penalty > 0:
             N = X.shape[0]
-            lhs += self.penalty * _DPenalty(N, dtype=X.dtype)
+            lhs += self.penalty * _DPenalty(
+                N, mode=self.mode, dtype=X.dtype)
 
         x, info = scipy.sparse.linalg.cg(
             lhs, rhs,
