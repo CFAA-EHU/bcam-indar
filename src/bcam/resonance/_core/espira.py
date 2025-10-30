@@ -279,11 +279,13 @@ class RatApp:
 
 class RatAppSym:
 
-    def __init__(self, x, rank_tol=1e-2):
+    def __init__(self, x, rank_tol=1e-2, mode='(n,n)'):
         if x.ndim == 1:
             x = np.atleast_2d(x).T
         x[1:] = 0.5 * (x[1:] + np.conj(x[-1:0:-1]))
         self.x = x
+        self.rank_tol = rank_tol
+        self.mode = mode
         N, m = x.shape
         if m > 1:
             y = np.concatenate(
@@ -378,8 +380,9 @@ class RatAppSym:
             gG['data'].pop(idx)
         return gS, gG
 
-    @staticmethod
-    def _fit(N, gS, gG, rank):
+    def _fit(self, gS, gG):
+        N = self.x.shape[0]
+        rank = self._rank
         n_freqs = len(gS['data'])
         n_comps = len(gS['data'][0])
         ωN = np.exp(-2j * np.pi / N)
@@ -421,22 +424,24 @@ class RatAppSym:
         LR = LR.reshape(mr, -1).T
         del Lp, Lm
 
-        # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
-        gS_ = np.zeros((mr, n_comps), dtype=np.float64)
-        gS_[ends_, :] = np.real(np.array(gS['data'])[endsS])
-        gS_[inners_[::2], :] = 2*np.real(np.array(gS['data'])[inners])
-        gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
-        In = scipy.linalg.qr(gS_, pivoting=True)[0]
-        In = In[:, rank:]
+        if self.mode == '(n-1,n)':
+            # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
+            gS_ = np.zeros((mr, n_comps), dtype=np.float64)
+            gS_[ends_, :] = np.real(np.array(gS['data'])[endsS])
+            gS_[inners_[::2], :] = 2*np.real(np.array(gS['data'])[inners])
+            gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
+            In = scipy.linalg.qr(gS_, pivoting=True)[0]
+            In = In[:, rank:]
+            # Compute weights to find best rational approximation.
+            LR = LR @ In
 
-        # Compute weights to find best rational approximation.
-        LR = LR @ In
         eigval, w = scipy.linalg.svd(
             LR,
             overwrite_a=True,
             full_matrices=False)[1:]
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
-        w = In @ w[-1]
+        if self.mode == '(n-1,n)':
+            w = In @ w[-1]
         w_ = np.zeros((n_freqs,), dtype=np.complex128)
         w_[endsS] = w[ends_]
         w_[inners] = w[inners_[::2]] + 1j * w[inners_[1::2]]
@@ -449,8 +454,8 @@ class RatAppSym:
 
         return p/(q[:, np.newaxis]), w
 
-    @staticmethod
-    def _normal_form(N, barycentric):
+    def _normal_form(self, barycentric):
+        N = self.x.shape[0]
         gS, endsS, w = barycentric
         S = np.array(gS['index'])
         gS = np.array(gS['data'])
@@ -508,9 +513,13 @@ class RatAppSym:
             np.concatenate((np.real(gS), np.imag(gS[inners])), axis=0)
         )
 
-        if np.linalg.norm(residues[-1]) > 1e-8:
-            msg = 'The constant term of rational function is not close to zero.'
-            logger.error(msg, stacklevel=2)
+        if self.mode == '(n-1,n)':
+            if np.linalg.norm(residues[-1]) > 1e-8:
+                msg = 'The constant term of rational function is not close to zero.'
+                logger.error(msg, stacklevel=2)
+            poly = (0.,)
+        elif self.mode == '(n,n)':
+            poly = (residues[-1],)
         residues = residues[:-1]
         residues = [residues[:lr], residues[lr:lr+lc]+1j*residues[lr+lc:]]
 
@@ -519,8 +528,8 @@ class RatAppSym:
             residues[i] = residues[i][idxs]
             poles[i] = poles[i][idxs]
 
-        return tuple(poles), tuple(residues)
-    
+        return tuple(poles), tuple(residues), poly
+
     def count_freqs(self, idxs):
         N = self.x.shape[0]
         idxs = np.array(idxs)
@@ -553,7 +562,7 @@ class RatAppSym:
             gS, gG = self._initialize_sets(self._freqs[:count])
         else:
             gS, gG = self._initialize_sets(self._freqs)
-        r, w = self._fit(N, gS, gG, self._rank)
+        r, w = self._fit(gS, gG)
         n_freqs = self.count_freqs(gS['index'])
 
         logger.debug(f'==== step: 0 ====')
@@ -571,7 +580,7 @@ class RatAppSym:
             else:
                 logger.debug(f'==== step: {step} ====')
                 _update_sets(gS, gG, idx)
-                r, w = self._fit(N, gS, gG, self._rank)
+                r, w = self._fit(gS, gG)
                 if (gS['index'][-1] == 0) or (N%2 == 0 and gS['index'][-1] == N//2):
                     n_freqs += 1
                 else:
@@ -588,9 +597,9 @@ class RatAppSym:
             endsS.append(gS['index'].index(N//2))
         endsS = np.sort(np.array(endsS, dtype=np.int64))
         barycentric = (gS, endsS, w)
-        p, res = self._normal_form(N, barycentric)
+        p, res, poly = self._normal_form(barycentric)
 
-        return p, res, error
+        return p, res, poly, error
 
 
 # ===============================
@@ -693,7 +702,7 @@ class Espira:
 
 class EspiraR:
 
-    def __init__(self, x, rank_tol=1e-2):
+    def __init__(self, x, rank_tol=1e-2, mode='(n,n)'):
         if x.ndim == 1:
             x = np.atleast_2d(x).T
         y = np.copy(x)
@@ -704,13 +713,13 @@ class EspiraR:
         y = np.fft.fft(y, axis=0)
         ωN = np.exp(-2j * np.pi / N)
         y = (ωN**np.arange(N))[:, np.newaxis] * y
-        self._rational = RatAppSym(y, rank_tol=rank_tol)
+        self._rational = RatAppSym(y, rank_tol=rank_tol, mode=mode)
 
     def fit(self, tol=1e-3, max_order=None):
         N = self._rational.x.shape[0]
 
-        poles, residues = self._rational.fit(
-            tol=tol, max_order=max_order)[:2]
+        poles, residues, poly = self._rational.fit(
+            tol=tol, max_order=max_order)[:3]
         amps = 2*[None]
         poles = list(poles)
         for i in [0, 1]:
@@ -724,7 +733,7 @@ class EspiraR:
             amps[i] = amps[i][idxs]
             poles[i] = poles[i][idxs]
 
-        return tuple(amps), tuple(poles)
+        return tuple(amps), tuple(poles), poly
 
 # Stabilization algorithm
 

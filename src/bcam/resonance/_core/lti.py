@@ -60,13 +60,15 @@ class _DPenalty(scipy.sparse.linalg.LinearOperator):
         self._N = N
         self.mode = mode
         if mode == 'g':
-            self._matmat = self._matmat_g
+            self.my_matmat = self._matmat_g
         elif mode == 'a':
-            self._matmat = self._matmat_a
+            self.my_matmat = self._matmat_a
         else:
             raise ValueError('Mode must be `g` or `a`.')
-
         super().__init__(shape=(N, N), dtype=dtype)
+
+    def _matmat(self, r):
+        return self.my_matmat(r)
 
     @staticmethod
     def _half_der(r):
