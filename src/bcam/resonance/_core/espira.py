@@ -912,7 +912,7 @@ class StablePoles:
         for order in range(min_order, max_order+1):
             if order <= real_order:
                 continue
-            amps_fit, poles_fit = self.model.fit(max_order=order, tol=0.)
+            amps_fit, poles_fit = self.model.fit(max_order=order, tol=0.)[:2]
             real_order = len(poles_fit[0]) + 2*len(poles_fit[1])
 
             amps_ = np.concatenate((amps_fit[0], amps_fit[1]), dtype=complex)
