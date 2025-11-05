@@ -6,6 +6,7 @@ This is ...
 import logging
 
 import numpy as np
+import jitcode
 import scipy
 
 from . import derivatives
@@ -1123,23 +1124,44 @@ def system_to_modal(M, C, K):
 # =================================
 
 def randomSystem(
-        dofs,
-        mass_range=(1, 2),
-        damping_range=(0.125, 0.25),
-        freqs_range=(4, 8),
-        damping_type='prop',
-        seed=None
-    ):
-    parent_rng = np.random.default_rng(seed)
-    child = parent_rng.spawn(4)
+    masses, dampings, resonances,
+    damping_type='prop', seed=None):
+    '''Generate a random linear vibrating system.
 
-    m = child[0].uniform(*mass_range, dofs)
-    zeta = child[1].uniform(*damping_range, dofs)
-    freqs = child[2].uniform(*freqs_range, dofs)
+    Parameters
+    ----------
+    dofs : int
+        Number of degrees of freedom.
+    masses : tuple, optional
+        Range for mass values.
+    dampings : tuple, optional
+        Range for damping ratios.
+    resonances : tuple, optional
+        Range for natural frequencies.
+    damping_type : str, optional
+        Type of damping ('prop' for proportional, 'nop' for non-proportional).
+    seed : int, optional
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    mechanical : dict
+        Dictionary containing mass, damping, and stiffness matrices.
+    modal : dict
+        Dictionary containing mode shapes (mass normalized) and resonances.
+    '''
+    m = np.asarray(masses)
+    zeta = np.asarray(dampings)
+    freqs = np.asarray(resonances)
+    dofs = len(freqs)
+    # Raise an exception if the lengths are different.
+    if (len(m) != dofs) or (len(zeta) != dofs):
+        msg = 'Incompatible lengths for masses, dampings, and resonances.'
+        raise ValueError(msg)
 
     # Generate rotation matrices.
     if dofs > 1:
-        U = scipy.stats.ortho_group(dim=dofs, seed=child[3])
+        U = scipy.stats.ortho_group(dim=dofs, seed=seed)
         Um = U.rvs()
         Uk = U.rvs()
         if damping_type == 'prop':
@@ -1147,7 +1169,7 @@ def randomSystem(
         elif damping_type == 'nop':
             Uc = U.rvs()
         else:
-            msg = 'Invalid damping type. Choose between "prop" and "nop".'
+            msg = 'Invalid damping type. Choose between `prop` and `nop`.'
             raise ValueError(msg)
     else:
         Um = np.array([[1]])
@@ -1156,13 +1178,13 @@ def randomSystem(
     modes_ = Um @ np.diag(1 / np.sqrt(m))
     invModes_ = np.diag(np.sqrt(m)) @ Um.T
     M = Um @ np.diag(m) @ Um.T
-    C = invModes_.T @ Uc @ np.diag(2 * zeta * freqs) @ Uc.T @ invModes_
+    C = invModes_.T @ Uc @ np.diag(2*zeta*freqs) @ Uc.T @ invModes_
     K = invModes_.T @ Uk @ np.diag(freqs**2) @ Uk.T @ invModes_
     normal_modes = modes_ @ Uk
 
     if damping_type == 'prop':
         mode_shapes = normal_modes
-        Z = freqs * (-zeta + 1j * np.sqrt(1 - zeta**2))
+        Z = freqs*(-zeta + 1j*np.sqrt(1-zeta**2))
     else:
         A = normal_modes.T @ C @ normal_modes
         B = np.diag(freqs**2)
@@ -1207,6 +1229,7 @@ class Spring:
         self._force = Minv @ self.force
 
     def __iter__(self):
+        y = jitcode.y
         dofs = self.M.shape[0]
         q = [y(i) for i in range(dofs)]
         p = [y(i + dofs) for i in range(dofs)]

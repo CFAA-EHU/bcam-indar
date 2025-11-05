@@ -60,23 +60,15 @@ class _DPenalty(scipy.sparse.linalg.LinearOperator):
         self._N = N
         self.mode = mode
         if mode == 'g':
-            self.my_matmat = self._matmat_g
+            self._my_matmat = self._matmat_g
         elif mode == 'a':
-            self.my_matmat = self._matmat_a
+            self._my_matmat = self._matmat_a
         else:
             raise ValueError('Mode must be `g` or `a`.')
         super().__init__(shape=(N, N), dtype=dtype)
 
     def _matmat(self, r):
-        return self.my_matmat(r)
-
-    @staticmethod
-    def _half_der(r):
-        N = r.shape[0]
-        r = np.fft.rfft(r, axis=0)
-        r = (1 + np.sqrt(2*np.pi*np.arange(N//2+1))[:, np.newaxis]) * r
-        r = np.fft.irfft(r, axis=0)
-        return r
+        return self._my_matmat(r)
 
     @staticmethod
     def _laplace(r):
@@ -92,27 +84,8 @@ class _DPenalty(scipy.sparse.linalg.LinearOperator):
         r_ = self._laplace(r)
         # L2 norm.
         r_ += r
-
-        # TODO: Organize this code in a different option for penalty.
-        # # To mitigate boundary effects, extend linearly.
-        # r_ = np.zeros((N + 2*(N//4), r.shape[1]), dtype=r.dtype)
-        # r_[N//4:N//4+N] = r
-        # r_[:N//4] = (r[0]/(N//4)) * np.arange(N//4)[:, np.newaxis]
-        # r_[N//4+N:] = (r[-1]/(N//4)) * np.arange(N//4-1, -1, -1)[:, np.newaxis]
-        # # Compute D^(1/2) in Fourier domain.
-        # r_ = self._half_der(r_)
-        # # Multiply by box window.
-        # r_[:N//4] = 0
-        # r_[N//4+N:] = 0
-        # # Compute D^(1/2) in Fourier domain again.
-        # r_ = self._half_der(r_)
-        # # Operate adjoint of linear extension.
-        # r_[N//4] = np.sum(r_[:(N//4)+1] * np.arange(N//4+1)[:, np.newaxis], axis=0) / (N//4)
-        # r_[N//4+N-1] = np.sum(r_[N//4+N-1:] * np.arange(N//4, -1, -1)[:, np.newaxis], axis=0) / (N//4)
-        # return r_[N//4:N//4+N]
-
         return r_
-    
+
     def _matmat_a(self, r):
         r_ = np.zeros_like(r)
         # Difference and projection.
@@ -137,7 +110,10 @@ class LTIKernel:
     Parameters
     ----------
     penalty : float, optional
-        Penalty parameter for the :math:`H^{1/2}` norm. Default is 0 (no penalty).
+        Penalty parameter for the :math:`H^1` norm. Default is 0 (no penalty).
+    mode : {'g', 'a'}, optional
+        The mode of the penalty. For the `general` case, all points are taken into accout.
+        For the `acceleration` case, the first point is not penalized.
     rtol : float, optional
         Relative tolerance for the conjugate gradient (CG) solver. Default is 1e-5.
     atol : float, optional
@@ -222,7 +198,27 @@ class LTIKernel:
         self.kernel_ = x
 
         return self
-    
+
+    def H1(self, X, y):
+        # Validate inputs.
+        X = np.asarray(X)
+        y = np.asarray(y)
+        if (X.ndim == 0) or (X.ndim > 2):
+            raise ValueError("Input X must be a 1D or 2D array.")
+        if X.shape != y.shape:
+            raise ValueError("Input X and y must have the same shape.")
+        if X.ndim == 1:
+            X = X.reshape(-1, 1)
+            y = y.reshape(-1, 1)
+
+        H1_num = sum(
+            np.fft.rfft(X[:, rep])*np.conj(np.fft.rfft(y[:, rep]))
+            for rep in range(X.shape[1]))
+        H1_den = sum(
+            np.abs(np.fft.rfft(X[:, rep]))**2
+            for rep in range(X.shape[1]))
+        return H1_num/H1_den
+
     def predict(self, X):
         r'''
         Predict response using the fitted LTI model.
@@ -243,38 +239,3 @@ class LTIKernel:
         return scipy.signal.fftconvolve(
             X, self.kernel_[:, np.newaxis], mode='full', axes=0)[:X.shape[0]]
 
-    def score(self, X, y):
-        r'''
-        Compute the coefficient of determination R^2 of the prediction.
-
-        Parameters
-        ----------
-        X : array-like of shape (n_samples, n_repetitions) or (n_samples,)
-            Input data.
-
-        y : array-like of shape (n_samples, n_repetitions) or (n_samples,)
-            True response data with the same shape of `X`.
-
-        Returns
-        -------
-        score : float
-            R^2 score.
-        '''
-        # Validate inputs.
-        X = np.asarray(X)
-        y = np.asarray(y)
-        if (X.ndim == 0) or (X.ndim > 2):
-            raise ValueError("Input X must be a 1D or 2D array.")
-        if X.shape != y.shape:
-            raise ValueError("Input X and y must have the same shape.")
-        if X.ndim == 1:
-            X = X.reshape(-1, 1)
-            y = y.reshape(-1, 1)
-
-        # Predict response.
-        y_pred = self.predict(X)
-
-        # Compute R^2 score.
-        ss_res = np.sum((y - y_pred)**2)
-        ss_tot = np.sum((y - np.mean(y))**2)
-        return 1 - ss_res / ss_tot
