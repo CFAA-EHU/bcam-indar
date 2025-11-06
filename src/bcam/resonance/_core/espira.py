@@ -4,6 +4,7 @@ import logging
 import bisect
 
 import numpy as np
+from sklearn.base import BaseEstimator
 import scipy
 import matplotlib.pyplot as plt
 
@@ -62,19 +63,13 @@ def rational_function_sym(poles, residues, z):
     return r
 
 
-def _get_max_order(max_order, shape):
+def _get_max_order(shape):
     N, m = shape
-    max_val = m*N//(m+1)
-    if max_order is None:
-        max_order_ = max_val
-    else:
-        if max_order > max_val:
-            msg = f'The number of poles must be less than half of the number of samples. \
-            max_order readjusted to {max_val}'
-            logger.warning(msg, stacklevel=2)
-        max_order_ = min(max_order, max_val)
+    # Counting complex paramaters in a complex time series
+    # and in a rational function, we have that:
+    max_order = m*N//(m+1)
 
-    return max_order_
+    return max_order
 
 def _update_sets(gS, gG, idx):
     gS['index'].append(gG['index'][idx])
@@ -277,63 +272,60 @@ class RatApp:
 
         return p, res, error
 
-class RatAppSym:
+class RatAppSym(BaseEstimator):
 
-    def __init__(self, x, rank_tol=1e-2, mode='(n,n)'):
-        if x.ndim == 1:
-            x = np.atleast_2d(x).T
-        x[1:] = 0.5 * (x[1:] + np.conj(x[-1:0:-1]))
-        self.x = x
-        self.rank_tol = rank_tol
-        self.mode = mode
-        N, m = x.shape
-        if m > 1:
-            y = np.concatenate(
-                (np.real(x[:N//2+1]), np.imag(x)[1:(N+1)//2]), axis=0)
-            # Check for rank deficiency.
-            s = scipy.linalg.svdvals(y, overwrite_a=True)
-            rank = np.nonzero(s/s[0] < rank_tol)[0]
-            if len(rank) > 0:
-                logger.info(f'Rank deficient data.')
-                rank = rank[0]
-            else:
-                rank = m
-        else:
-            rank = 1
-        self._rank = rank
+    def __init__(
+            self,
+            *,
+            order=None,
+            store_y=True):
+        self.order = order
+        self.store_y = store_y
 
-    def set_seed_freqs(self, freqs=None):
+    @staticmethod
+    def count_freqs(idxs, N, parity):
+        idxs = np.array(idxs)
+        idxs = np.sort(idxs)
+        n_freqs = 0
+        if idxs[0] == 0:
+            n_freqs += 1
+        if parity == 0 and (idxs[-1] == N):
+            n_freqs += 1
+        n_freqs = 2*len(idxs) - n_freqs
+        return n_freqs
+
+    def set_seed_freqs(self, y, parity, seed_freqs=None):
         '''Set initial frequencies for the algorithm.
-        
+
         Parameters
         ----------
         freqs : 1darray
             They must be ordered in decreasing order of importance,
             and the indices must be unique.
         '''
-        N = self.x.shape[0]
-        m = N // 2 + 1
-        if freqs is None:
+        N, rank = y.shape
+        if seed_freqs is None:
             # Choose rank + 1 peaks as initial frequencies.
-            abs_v = np.linalg.norm(self.x, axis=1)
+            abs_v = np.linalg.norm(y, axis=1)
+            abs_v = np.concatenate((abs_v, abs_v[-2+parity::-1]))
             abs_v = np.concatenate((abs_v, abs_v))
             peaks, h = scipy.signal.find_peaks(
                 abs_v,
                 height=np.max(abs_v)/5,
-                distance=np.max((N/(8*(self._rank+1)), 2))
+                distance=np.max((N/(4*(rank+1)), 2))
             )
             idxs = np.argsort(h['peak_heights'])[::-1]
-            peaks = peaks[idxs]%N
+            peaks = peaks[idxs]%(len(abs_v)//2)
             _, idxs = np.unique(peaks, return_index=True)
             peaks = peaks[np.sort(idxs)]
-            freqs = peaks[peaks < m]
+            freqs = peaks[peaks < N]
         else:
-            freqs = np.asarray(freqs)
+            freqs = self.seed_freqs
 
         if freqs.ndim != 1:
             raise ValueError('freqs must be a 1D array.')
-        if not (np.all(freqs >= 0) and np.all(freqs < m)):
-            raise ValueError('freqs must be in the range [0, N//2+1).')
+        if not (np.all(freqs >= 0) and np.all(freqs < N)):
+            raise ValueError('freqs must be in the range [0, N).')
         if len(freqs) != len(np.unique(freqs)):
             raise ValueError('freqs must be unique.')
 
@@ -341,7 +333,7 @@ class RatAppSym:
         freqs.reverse()
         freqs_ = []
         c = 0
-        while (c < self._rank+1) and (len(freqs) > 0):
+        while (c < rank+1) and (len(freqs) > 0):
             p = freqs.pop()
             freqs_.append(p)
             if (p == 0) or (N%2 == 0 and p == N//2):
@@ -349,14 +341,14 @@ class RatAppSym:
             else:
                 c += 2
         # Generate additional random indices if c < rank + 1.
-        if c < self._rank + 1:
+        if c < rank + 1:
             logger.warning(
                 'Not enough freqs found. Adding random indices.', stacklevel=2)
-            diff = np.setdiff1d(np.arange(m), freqs_, assume_unique=True)
+            diff = np.setdiff1d(np.arange(N), freqs_, assume_unique=True)
             rng = np.random.default_rng()
             rng.shuffle(diff)
             diff = list(diff)
-            while c < self._rank+1:
+            while c < rank+1:
                 p = diff.pop()
                 freqs_.append(p)
                 if (p == 0) or (N%2 == 0 and p == N//2):
@@ -364,23 +356,22 @@ class RatAppSym:
                 else:
                     c += 2
 
-        self._freqs = np.array(freqs_)
+        return np.array(freqs_)
 
-    def _initialize_sets(self, seed_freqs):
-        N = self.x.shape[0]
-        m = N // 2 + 1
-        gG = {'index': list(range(m)), 'data': list(self.x[:m])}
+    def _initialize_sets(self, y, freqs):
+        N = y.shape[0]
+        gG = {'index': list(range(N)), 'data': list(y)}
         gS = {}
 
-        gS['index'] = [gG['index'][f] for f in seed_freqs]
-        gS['data'] = [gG['data'][f] for f in seed_freqs]
-        for f in seed_freqs:
+        gS['index'] = [gG['index'][f] for f in freqs]
+        gS['data'] = [gG['data'][f] for f in freqs]
+        for f in freqs:
             idx = bisect.bisect_left(gG['index'], f)
             gG['index'].pop(idx)
             gG['data'].pop(idx)
         return gS, gG
 
-    def _fit(self, gS, gG):
+    def _get_weights(self, gS, gG):
         N = self.x.shape[0]
         rank = self._rank
         n_freqs = len(gS['data'])
@@ -424,24 +415,22 @@ class RatAppSym:
         LR = LR.reshape(mr, -1).T
         del Lp, Lm
 
-        if self.mode == '(n-1,n)':
-            # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
-            gS_ = np.zeros((mr, n_comps), dtype=np.float64)
-            gS_[ends_, :] = np.real(np.array(gS['data'])[endsS])
-            gS_[inners_[::2], :] = 2*np.real(np.array(gS['data'])[inners])
-            gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
-            In = scipy.linalg.qr(gS_, pivoting=True)[0]
-            In = In[:, rank:]
-            # Compute weights to find best rational approximation.
-            LR = LR @ In
+        # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
+        gS_ = np.zeros((mr, n_comps), dtype=np.float64)
+        gS_[ends_, :] = np.real(np.array(gS['data'])[endsS])
+        gS_[inners_[::2], :] = 2*np.real(np.array(gS['data'])[inners])
+        gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
+        In = scipy.linalg.qr(gS_, pivoting=True)[0]
+        In = In[:, rank:]
+        # Compute weights to find best rational approximation.
+        LR = LR @ In
 
         eigval, w = scipy.linalg.svd(
             LR,
             overwrite_a=True,
             full_matrices=False)[1:]
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
-        if self.mode == '(n-1,n)':
-            w = In @ w[-1]
+        w = In @ w[-1]
         w_ = np.zeros((n_freqs,), dtype=np.complex128)
         w_[endsS] = w[ends_]
         w_[inners] = w[inners_[::2]] + 1j * w[inners_[1::2]]
@@ -474,6 +463,7 @@ class RatAppSym:
 
         poles = scipy.linalg.eigvals(a, b, overwrite_a=True)
         poles = poles[2:]
+
         # Separate real and complex conjugated poles.
         poles_u = list(poles[np.imag(poles) >= 0])
         poles_l = list(poles[np.imag(poles) < 0])
@@ -513,13 +503,9 @@ class RatAppSym:
             np.concatenate((np.real(gS), np.imag(gS[inners])), axis=0)
         )
 
-        if self.mode == '(n-1,n)':
-            if np.linalg.norm(residues[-1]) > 1e-8:
-                msg = 'The constant term of rational function is not close to zero.'
-                logger.error(msg, stacklevel=2)
-            poly = (0.,)
-        elif self.mode == '(n,n)':
-            poly = (residues[-1],)
+        if np.linalg.norm(residues[-1]) > 1e-8:
+            msg = 'The constant term of rational function is not close to zero.'
+            logger.error(msg, stacklevel=2)
         residues = residues[:-1]
         residues = [residues[:lr], residues[lr:lr+lc]+1j*residues[lr+lc:]]
 
@@ -528,78 +514,109 @@ class RatAppSym:
             residues[i] = residues[i][idxs]
             poles[i] = poles[i][idxs]
 
-        return tuple(poles), tuple(residues), poly
+        return poles, residues
 
-    def count_freqs(self, idxs):
-        N = self.x.shape[0]
-        idxs = np.array(idxs)
-        idxs = np.sort(idxs)
-        n_freqs = 0
-        if idxs[0] == 0:
-            n_freqs += 1
-        if N%2 == 0 and (idxs[-1] == N//2):
-            n_freqs += 1
-        n_freqs = 2*len(idxs) - n_freqs
-        return n_freqs
-
-    def fit(self, tol=1e-3, max_order=None):
-        N, m = self.x.shape
-        max_order_ = _get_max_order(max_order, (N, m))
-
-        if not hasattr(self, '_freqs'):
-            self.set_seed_freqs()
-        if self._rank > max_order_:
-            msg = f'The minimum order is {self._rank}, which is greater than max_order {max_order_}.'
-            raise ValueError(msg)
-
-        n_freqs = self.count_freqs(self._freqs)
-        if n_freqs >= max_order_ + 1:
-            count = max_order_//2
-            n_freqs = self.count_freqs(self._freqs[:count])
-            while n_freqs < max_order_ + 1:
-                count += 1
-                n_freqs = self.count_freqs(self._freqs[:count])
-            gS, gG = self._initialize_sets(self._freqs[:count])
-        else:
-            gS, gG = self._initialize_sets(self._freqs)
-        r, w = self._fit(gS, gG)
-        n_freqs = self.count_freqs(gS['index'])
-
-        logger.debug(f'==== step: 0 ====')
-        status = 0
-        step = 1
-        while status == 0:
+    def _fit(self, y, parity, indices):
+        N = y.shape[0]
+        step = 0
+        gS, gG = self._initialize_sets(indices)
+        n_freqs = self.count_freqs(gS['index'], N, parity)
+        while n_freqs-2 <= self.order: # the 2 is to iterate at least once, because rank <= self.order.
+            logger.debug(f'==== step: {step} ====')
+            r, w = self._get_weights(gS, gG)
             idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
-            error = np.linalg.norm(gG['data'] - r)/np.sqrt(N)
-            logger.debug(f'error: {error}')
-
-            if error < tol:
-                status = 1
-            elif n_freqs >= max_order_ + 1:
-                status = 2
+            _update_sets(gS, gG, idx)
+            if (gS['index'][-1] == 0) or (parity == 0 and gS['index'][-1] == N):
+                n_freqs += 1
             else:
-                logger.debug(f'==== step: {step} ====')
-                _update_sets(gS, gG, idx)
-                r, w = self._fit(gS, gG)
-                if (gS['index'][-1] == 0) or (N%2 == 0 and gS['index'][-1] == N//2):
-                    n_freqs += 1
-                else:
-                    n_freqs += 2
+                n_freqs += 2
             step += 1
 
-        if len(gS['index']) > len(self._freqs):
-            self._freqs = np.array(gS['index'])
+        if self.store_y:
+            self._y = y
+            self._parity = parity
+            if not hasattr(self, '_freqs'):
+                self._freqs = np.array(gS['index'])
+            elif len(gS['index']) > len(self._freqs):
+                self._freqs = np.array(gS['index'])
 
+        # Find if S contains 0 and N.
         endsS = []
         if gG['index'][0] != 0:
             endsS.append(gS['index'].index(0))
-        if N%2 == 0 and (gG['index'][-1] != N//2):
-            endsS.append(gS['index'].index(N//2))
+        if parity == 0 and (gG['index'][-1] != N):
+            endsS.append(gS['index'].index(N))
         endsS = np.sort(np.array(endsS, dtype=np.int64))
-        barycentric = (gS, endsS, w)
-        p, res, poly = self._normal_form(barycentric)
 
-        return p, res, poly, error
+        # Find poles and residues.
+        barycentric = (gS, endsS, w)
+        poles, residues = self._normal_form(barycentric)
+
+        return poles, residues
+
+    @property
+    def poles_(self):
+        return np.concatenate([self.r_poles_, self.c_poles_])
+
+    @property
+    def residues_(self):
+        return np.concatenate([self.r_residues_, self.c_residues_])
+
+    def fit(self, y, parity, seed_freqs=None):
+        N, rank = y.shape
+        N_ = 2*(N-1)+parity
+        max_order = _get_max_order(self.order, (N_, rank))
+        if rank > self.order:
+            msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
+            raise ValueError(msg)
+
+        if self.order > max_order:
+            msg = f'The number of poles must be less than half the number of time samples. \
+            max_order readjusted to {max_order}'
+            raise ValueError(msg)
+
+        _freqs = self.set_seed_freqs(y, parity, seed_freqs=seed_freqs)
+        poles, residues = self._fit(y, parity, _freqs)
+
+        self.r_poles_ = np.array(poles[0])
+        self.c_poles_ = np.array(poles[1])
+        self.r_residues_ = np.array(residues[0])
+        self.c_residues_ = np.array(residues[1])
+
+        return self
+
+    def refit(self):
+        if not self.store_y:
+            msg = 'Refit option is disabled.'
+            logger.warning(msg, stacklevel=2)
+            return self
+
+        N, rank = self._y.shape
+        N_ = 2*(N-1)+self._parity
+        max_order = _get_max_order(self.order, (N_, rank))
+        if rank > self.order:
+            msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
+            raise ValueError(msg)
+
+        if self.order > max_order:
+            msg = f'The number of poles must be less than half the number of time samples. \
+            max_order readjusted to {max_order}'
+            raise ValueError(msg)
+
+        n_freqs = self.count_freqs(self._freqs)
+        if n_freqs-2 > self.order:
+            count = 1
+            n_freqs = self.count_freqs(self._freqs[:count])
+            while n_freqs-2 <= self.order:
+                n_freqs = self.count_freqs(self._freqs[:count])
+                count += 1
+
+        poles, residues = self._fit(self._y, self._parity, self._freqs[:count-1])
+
+        self.r_poles_ = np.array(poles[0])
+        self.c_poles_ = np.array(poles[1])
+        self.r_residues_ = np.array(residues[0])
+        self.c_residues_ = np.array(residues[1])
 
 
 # ===============================
