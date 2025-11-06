@@ -6,6 +6,8 @@ import logging
 
 import numpy as np
 import scipy
+from sklearn.base import BaseEstimator, RegressorMixin
+from sklearn.utils.validation import validate_data
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +99,7 @@ class _DPenalty(scipy.sparse.linalg.LinearOperator):
     def _adjoint(self):
         return self
 
-class LTIKernel:
+class LTIKernel(BaseEstimator, RegressorMixin):
     r'''
     Fit Linear Time Invariant kernel.
 
@@ -153,10 +155,10 @@ class LTIKernel:
 
         Parameters
         ----------
-        X : array-like of shape (n_samples, n_repetitions) or (n_samples,)
+        X : array-like of shape (n_repetitions, n_time_samples).
             Input data.
 
-        y : array-like of shape (n_samples, n_repetitions) or (n_samples,)
+        y : array-like of shape (n_repetitions, n_time_samples).
             Response data with the same shape of `X`.
 
         Returns
@@ -167,13 +169,16 @@ class LTIKernel:
         # Validate inputs.
         X = np.asarray(X)
         y = np.asarray(y)
-        if (X.ndim == 0) or (X.ndim > 2):
-            raise ValueError("Input X must be a 1D or 2D array.")
+
+        y = validate_data(self, X="no_validation", y=y, multi_output=True)
+
         if X.shape != y.shape:
-            raise ValueError("Input X and y must have the same shape.")
-        if X.ndim == 1:
-            X = X.reshape(-1, 1)
-            y = y.reshape(-1, 1)
+            raise ValueError(
+                "y must have the same shape as X."
+            )
+
+        X = X.T
+        y = y.T
 
         # Set up minimization problem.
         rhs = _conv(X, y)
@@ -199,26 +204,6 @@ class LTIKernel:
 
         return self
 
-    def H1(self, X, y):
-        # Validate inputs.
-        X = np.asarray(X)
-        y = np.asarray(y)
-        if (X.ndim == 0) or (X.ndim > 2):
-            raise ValueError("Input X must be a 1D or 2D array.")
-        if X.shape != y.shape:
-            raise ValueError("Input X and y must have the same shape.")
-        if X.ndim == 1:
-            X = X.reshape(-1, 1)
-            y = y.reshape(-1, 1)
-
-        H1_num = sum(
-            np.fft.rfft(X[:, rep])*np.conj(np.fft.rfft(y[:, rep]))
-            for rep in range(X.shape[1]))
-        H1_den = sum(
-            np.abs(np.fft.rfft(X[:, rep]))**2
-            for rep in range(X.shape[1]))
-        return H1_num/H1_den
-
     def predict(self, X):
         r'''
         Predict response using the fitted LTI model.
@@ -226,16 +211,70 @@ class LTIKernel:
         # Check if fitted.
         if not hasattr(self, 'kernel_'):
             raise ValueError("The model is not fitted yet. Call 'fit' first.")
-        
+
         # Validate inputs.
         X = np.asarray(X)
-        if (X.ndim == 0) or (X.ndim > 2):
-            raise ValueError("Input X must be a 1D or 2D array.")
-        if X.ndim == 1:
-            X = X.reshape(-1, 1)
+        if X.ndim != 2:
+            raise ValueError("Input X must be a 2D array.")
         if X.shape[0] > self.kernel_.shape[0]:
             raise ValueError("Input X is longer than the fitted kernel.")
 
         return scipy.signal.fftconvolve(
-            X, self.kernel_[:, np.newaxis], mode='full', axes=0)[:X.shape[0]]
+            X, self.kernel_[np.newaxis, :], mode='full', axes=1)[:, :X.shape[1]]
 
+    def score(self, X, y):
+        r'''
+        Compute the prediction RMS error.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_repetitions, n_time_samples).
+            Input data.
+
+        y : array-like of shape (n_repetitions, n_time_samples).
+            True response data.
+
+        Returns
+        -------
+        score : float
+            RMS error.
+        '''
+        # Validate inputs.
+        X = np.asarray(X)
+        y = np.asarray(y)
+
+        y = validate_data(self, X="no_validation", y=y, multi_output=True)
+
+        if X.shape != y.shape:
+            raise ValueError(
+                "y must have the same shape as X."
+            )
+
+        y_pred = self.predict(X)
+
+        # Compute R^2 score.
+        ss_res = np.sum((y - y_pred)**2)
+        ss_tot = np.sum((y - np.mean(y, axis=0, keepdims=True))**2)
+        if ss_tot == 0:
+            return 1.0 if ss_res == 0 else 0.0
+        return 1-ss_res/ss_tot
+
+def H1(X, y):
+    # Validate inputs.
+    X = np.asarray(X)
+    y = np.asarray(y)
+    if (X.ndim == 0) or (X.ndim > 2):
+        raise ValueError("Input X must be a 1D or 2D array.")
+    if X.shape != y.shape:
+        raise ValueError("Input X and y must have the same shape.")
+    if X.ndim == 1:
+        X = X.reshape(-1, 1)
+        y = y.reshape(-1, 1)
+
+    H1_num = sum(
+        np.fft.rfft(X[:, rep])*np.conj(np.fft.rfft(y[:, rep]))
+        for rep in range(X.shape[1]))
+    H1_den = sum(
+        np.abs(np.fft.rfft(X[:, rep]))**2
+        for rep in range(X.shape[1]))
+    return H1_num/H1_den
