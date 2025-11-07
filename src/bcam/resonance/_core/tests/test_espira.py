@@ -92,24 +92,22 @@ class Test_RatApp:
 class Test_RatAppSym:
 
     @staticmethod
-    def _fit_symmetric(poles, residues, N):
-        # Construct signal.
-        ωN = np.exp(-2j * np.pi / N)
-        x = espira.rational_function_sym(poles, residues, ωN**(-np.arange(N)))
-
+    def _fit_symmetric(y, parity, order):
         # Fit the signal.
-        res = espira.RatAppSym(x, rank_tol=1e-6)
-        poles_fit, residues_fit = res.fit(tol=1e-6)[:2]
-        rr, rc = residues_fit
+        model = espira.RatAppSym(order=order)
+        model.fit(y, parity)
+        rr = model.r_residues_
+        rc = model.c_residues_
+        poles_fit = [model.r_poles_, model.c_poles_]
         # Remove spurious poles with very small residues.
         idx_r = np.nonzero(np.linalg.norm(rr, axis=1) > 1e-5)[0]
         idx_c = np.nonzero(np.linalg.norm(rc, axis=1) > 1e-5)[0]
-        poles_fit = (poles_fit[0][idx_r], poles_fit[1][idx_c])
-        residues_fit = (rr[idx_r], rc[idx_c])
+        poles_fit = [poles_fit[0][idx_r], poles_fit[1][idx_c]]
+        residues_fit = [rr[idx_r], rc[idx_c]]
 
-        return x, poles_fit, residues_fit
+        return poles_fit, residues_fit
 
-    def test_symmetric_fit(self):
+    def test_symmetric_fit_complex(self):
         # Test only complex poles
         # ------------------------
         rng = np.random.default_rng()
@@ -122,18 +120,28 @@ class Test_RatAppSym:
         phase = rng.uniform(0.01, 0.49, M)
         poles = r * np.exp(2j * np.pi * phase)
         residues = rng.normal(0, 2, (M, 1)) + 1j * rng.normal(0, 2, (M, 1))
-        poles = (np.array([]), poles)
-        residues = (np.array([]), residues)
+        idxs = np.argsort(poles)
+        poles = poles[idxs]
+        residues = residues[idxs]
+        poles_ = np.concatenate((poles, np.conj(poles)))
+        residues_ = np.concatenate((residues, np.conj(residues)), axis=0)
 
-        x, poles_fit, residues_fit = self._fit_symmetric(poles, residues, N)
-        x_fit = espira.rational_function_sym(poles_fit, residues_fit, ωN**(-np.arange(N)))
+        # Construct signal.
+        y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
+
+        poles_fit, residues_fit = self._fit_symmetric(y, N%2, 2*M)
+        idxs = np.argsort(poles_fit[1])
+        poles_fit[1] = poles_fit[1][idxs]
+        residues_fit[1] = residues_fit[1][idxs]
 
         assert (len(poles_fit[0]) == 0) and (len(poles_fit[1]) == M)
-        assert np.allclose(np.sort_complex(poles_fit[1]), np.sort_complex(poles[1]))
-        assert np.allclose(x_fit, x)
+        assert np.allclose(poles_fit[1], poles)
+        assert np.allclose(residues_fit[1], residues)
 
+    def test_symmetric_fit_real_complex(self):
         # Test with real and complex poles.
         # ------------------------
+        rng = np.random.default_rng()
         MR, MC = 2, 4
         N = 2 * (2*MC + MR + 1) + 10
         ωN = np.exp(-2j * np.pi / N)
@@ -142,23 +150,33 @@ class Test_RatAppSym:
         r = rng.uniform(0.7, 0.9, MC)
         phase = rng.uniform(0.01, 0.49, MC)
         poles_C = r * np.exp(2j * np.pi * phase)
+        idxs = np.argsort(poles_C)
+        poles_C = poles_C[idxs]
         poles_R = np.zeros(MR, dtype=np.float64)
-        poles_R[0] = rng.uniform(0.7, 0.9)
-        poles_R[1] = -rng.uniform(0.7, 0.9)
+        poles_R[0] = -rng.uniform(0.7, 0.9)
+        poles_R[1] = rng.uniform(0.7, 0.9)
         poles = (poles_R, poles_C)
         residues_R = rng.normal(0, 2, (MR, 1))
         residues_C = rng.normal(0, 2, (MC, 1)) + 1j * rng.normal(0, 2, (MC, 1))
+        residues_C = residues_C[idxs]
         residues = (residues_R, residues_C)
+        poles_ = np.concatenate((poles_R, poles_C, np.conj(poles_C)))
+        residues_ = np.concatenate((residues_R, residues_C, np.conj(residues_C)), axis=0)
 
-        x, poles_fit, residues_fit = self._fit_symmetric(poles, residues, N)
-        x_fit = espira.rational_function_sym(poles_fit, residues_fit, ωN**(-np.arange(N)))
+        # Construct signal.
+        y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
+
+        poles_fit, residues_fit = self._fit_symmetric(y, N%2, 2*MC + MR)
+        for i in range(2):
+            idxs = np.argsort(poles_fit[i])
+            poles_fit[i] = poles_fit[i][idxs]
+            residues_fit[i] = residues_fit[i][idxs]
 
         assert (len(poles_fit[0]) == MR) and (len(poles_fit[1]) == MC)
         for i in [0, 1]:
-            assert np.allclose(
-                np.sort_complex(poles_fit[i]), np.sort_complex(poles[i]))
-        assert np.allclose(x_fit, x)
-        
+            assert np.allclose(poles_fit[i], poles[i])
+            assert np.allclose(residues_fit[i], residues[i])
+
     def test_vector_fit(self):
         # Test only complex poles
         # ------------------------
@@ -173,15 +191,23 @@ class Test_RatAppSym:
         phase = rng.uniform(0.01, 0.49, M)
         poles = r * np.exp(2j * np.pi * phase)
         residues = rng.normal(0, 2, (M, L)) + 1j * rng.normal(0, 2, (M, L))
-        poles = (np.array([]), poles)
-        residues = (np.array([]), residues)
+        idxs = np.argsort(poles)
+        poles = poles[idxs]
+        residues = residues[idxs]
+        poles_ = np.concatenate((poles, np.conj(poles)))
+        residues_ = np.concatenate((residues, np.conj(residues)), axis=0)
 
-        x, poles_fit, residues_fit = self._fit_symmetric(poles, residues, N)
+        # Construct signal.
+        y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
+
+        poles_fit, residues_fit = self._fit_symmetric(y, N%2, 2*M)
+        idxs = np.argsort(poles_fit[1])
+        poles_fit[1] = poles_fit[1][idxs]
+        residues_fit[1] = residues_fit[1][idxs]
 
         assert (len(poles_fit[0]) == 0) and (len(poles_fit[1]) == M)
-        assert np.allclose(np.sort_complex(poles_fit[1]), np.sort_complex(poles[1]))
-        assert np.allclose(
-            espira.rational_function_sym(poles_fit, residues_fit, ωN**(-np.arange(N))), x)
+        assert np.allclose(poles_fit[1], poles)
+        assert np.allclose(residues_fit[1], residues)
 
 # ============
 # Test ESPIRA

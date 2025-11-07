@@ -54,14 +54,6 @@ def rational_function(poles, residues, z):
     
     return (1 / (z[:, np.newaxis] - poles[np.newaxis, :])) @ residues
 
-def rational_function_sym(poles, residues, z):
-    if len(poles[1]) > 0:
-        r = (1 / (z[:, np.newaxis] - poles[1][np.newaxis, :])) @ residues[1]
-        r += (1 / (z[:, np.newaxis] - np.conj(poles[1])[np.newaxis, :])) @ np.conj(residues[1])
-    if len(poles[0]) > 0:
-        r += (1 / (z[:, np.newaxis] - poles[0][np.newaxis, :])) @ residues[0]
-    return r
-
 
 def _get_max_order(shape):
     N, m = shape
@@ -289,7 +281,7 @@ class RatAppSym(BaseEstimator):
         n_freqs = 0
         if idxs[0] == 0:
             n_freqs += 1
-        if parity == 0 and (idxs[-1] == N):
+        if parity == 0 and (idxs[-1] == N-1):
             n_freqs += 1
         n_freqs = 2*len(idxs) - n_freqs
         return n_freqs
@@ -336,7 +328,7 @@ class RatAppSym(BaseEstimator):
         while (c < rank+1) and (len(freqs) > 0):
             p = freqs.pop()
             freqs_.append(p)
-            if (p == 0) or (N%2 == 0 and p == N//2):
+            if (p == 0) or (parity == 0 and p == N-1):
                 c += 1
             else:
                 c += 2
@@ -351,7 +343,7 @@ class RatAppSym(BaseEstimator):
             while c < rank+1:
                 p = diff.pop()
                 freqs_.append(p)
-                if (p == 0) or (N%2 == 0 and p == N//2):
+                if (p == 0) or (parity == 0 and p == N-1):
                     c += 1
                 else:
                     c += 2
@@ -371,18 +363,18 @@ class RatAppSym(BaseEstimator):
             gG['data'].pop(idx)
         return gS, gG
 
-    def _get_weights(self, gS, gG):
-        N = self.x.shape[0]
-        rank = self._rank
+    def _get_weights(self, gS, gG, parity):
         n_freqs = len(gS['data'])
-        n_comps = len(gS['data'][0])
-        ωN = np.exp(-2j * np.pi / N)
-        # Locate zero and N/2.
+        N = n_freqs + len(gG['data'])
+        N_ = 2*(N-1) + parity
+        rank = len(gS['data'][0])
+        ωN = np.exp(-2j * np.pi / N_)
+        # Locate zero and N.
         endsS = []
         if gG['index'][0] != 0:
             endsS.append(gS['index'].index(0))
-        if N%2 == 0 and (gG['index'][-1] != N//2):
-            endsS.append(gS['index'].index(N//2))
+        if parity == 0 and (gG['index'][-1] != N-1):
+            endsS.append(gS['index'].index(N-1))
         endsS = np.sort(np.array(endsS, dtype=np.int64))
 
         Cp = ωN**(-np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
@@ -394,7 +386,7 @@ class RatAppSym(BaseEstimator):
         mr = 2*len(gS['index']) - len(endsS)
         # Adapt matrix L for real and imaginary parts.
         LR = np.zeros(
-            (mr, 2*len(gG['data']), n_comps),
+            (mr, 2*len(gG['data']), rank),
             dtype=np.float64)
         # Add frequencies 0 and N/2 if they are in gS.
         ends_ = 2*endsS - np.arange(len(endsS))
@@ -410,13 +402,13 @@ class RatAppSym(BaseEstimator):
         # Take into account that 0 and N/2 appear only once.
         if gG['index'][0] == 0:
             LR[:, :2] = LR[:, :2] / np.sqrt(2)
-        if N%2 == 0 and (gG['index'][-1] == N//2):
+        if parity == 0 and (gG['index'][-1] == N-1):
             LR[:, -2:] = LR[:, -2:] / np.sqrt(2)
         LR = LR.reshape(mr, -1).T
         del Lp, Lm
 
         # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
-        gS_ = np.zeros((mr, n_comps), dtype=np.float64)
+        gS_ = np.zeros((mr, rank), dtype=np.float64)
         gS_[ends_, :] = np.real(np.array(gS['data'])[endsS])
         gS_[inners_[::2], :] = 2*np.real(np.array(gS['data'])[inners])
         gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
@@ -443,15 +435,15 @@ class RatAppSym(BaseEstimator):
 
         return p/(q[:, np.newaxis]), w
 
-    def _normal_form(self, barycentric):
-        N = self.x.shape[0]
+    def _normal_form(self, barycentric, N, parity):
+        N_ = 2*(N-1) + parity
         gS, endsS, w = barycentric
         S = np.array(gS['index'])
         gS = np.array(gS['data'])
         inners = np.setdiff1d(np.arange(len(S)), endsS, assume_unique=True)
         w = np.concatenate((w, np.conj(w[inners])))
         M = 2*len(S) - len(endsS) - 1
-        ωN = np.exp(-2j * np.pi / N)
+        ωN = np.exp(-2j * np.pi / N_)
 
         a = np.zeros((M+2, M+2), dtype=np.complex128)
         a[1:, 0] = 1
@@ -518,19 +510,21 @@ class RatAppSym(BaseEstimator):
 
     def _fit(self, y, parity, indices):
         N = y.shape[0]
-        step = 0
-        gS, gG = self._initialize_sets(indices)
+        step = 1
+        gS, gG = self._initialize_sets(y, indices)
         n_freqs = self.count_freqs(gS['index'], N, parity)
-        while n_freqs-2 <= self.order: # the 2 is to iterate at least once, because rank <= self.order.
+        while n_freqs-1 < self.order:
             logger.debug(f'==== step: {step} ====')
-            r, w = self._get_weights(gS, gG)
+            r, w = self._get_weights(gS, gG, parity)
             idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
             _update_sets(gS, gG, idx)
-            if (gS['index'][-1] == 0) or (parity == 0 and gS['index'][-1] == N):
+            if (gS['index'][-1] == 0) or (parity == 0 and gS['index'][-1] == N-1):
                 n_freqs += 1
             else:
                 n_freqs += 2
             step += 1
+        logger.debug(f'==== step: {step} ====')
+        r, w = self._get_weights(gS, gG, parity)
 
         if self.store_y:
             self._y = y
@@ -544,28 +538,28 @@ class RatAppSym(BaseEstimator):
         endsS = []
         if gG['index'][0] != 0:
             endsS.append(gS['index'].index(0))
-        if parity == 0 and (gG['index'][-1] != N):
-            endsS.append(gS['index'].index(N))
+        if parity == 0 and (gG['index'][-1] != N-1):
+            endsS.append(gS['index'].index(N-1))
         endsS = np.sort(np.array(endsS, dtype=np.int64))
 
         # Find poles and residues.
         barycentric = (gS, endsS, w)
-        poles, residues = self._normal_form(barycentric)
+        poles, residues = self._normal_form(barycentric, N, parity)
 
         return poles, residues
 
     @property
     def poles_(self):
-        return np.concatenate([self.r_poles_, self.c_poles_])
+        return np.concatenate([self.r_poles_, self.c_poles_, np.conj(self.c_poles_)])
 
     @property
     def residues_(self):
-        return np.concatenate([self.r_residues_, self.c_residues_])
+        return np.concatenate([self.r_residues_, self.c_residues_, np.conj(self.c_residues_)])
 
     def fit(self, y, parity, seed_freqs=None):
         N, rank = y.shape
         N_ = 2*(N-1)+parity
-        max_order = _get_max_order(self.order, (N_, rank))
+        max_order = _get_max_order((N_, rank))
         if rank > self.order:
             msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
             raise ValueError(msg)
@@ -593,7 +587,7 @@ class RatAppSym(BaseEstimator):
 
         N, rank = self._y.shape
         N_ = 2*(N-1)+self._parity
-        max_order = _get_max_order(self.order, (N_, rank))
+        max_order = _get_max_order((N_, rank))
         if rank > self.order:
             msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
             raise ValueError(msg)
@@ -604,19 +598,31 @@ class RatAppSym(BaseEstimator):
             raise ValueError(msg)
 
         n_freqs = self.count_freqs(self._freqs)
-        if n_freqs-2 > self.order:
-            count = 1
-            n_freqs = self.count_freqs(self._freqs[:count])
-            while n_freqs-2 <= self.order:
-                n_freqs = self.count_freqs(self._freqs[:count])
+        if n_freqs-1 > self.order:
+            count = 0
+            n_freqs = 0
+            while n_freqs-1 < self.order:
                 count += 1
+                n_freqs = self.count_freqs(self._freqs[:count])
+            _freqs = self._freqs[:count]
+        else:
+            _freqs = self._freqs
 
-        poles, residues = self._fit(self._y, self._parity, self._freqs[:count-1])
+        poles, residues = self._fit(self._y, self._parity, _freqs)
 
         self.r_poles_ = np.array(poles[0])
         self.c_poles_ = np.array(poles[1])
         self.r_residues_ = np.array(residues[0])
         self.c_residues_ = np.array(residues[1])
+
+        return self
+
+    def predict(self, X):
+        return rational_function(
+            self.poles_,
+            self.residues_,
+            X
+        )
 
 
 # ===============================
