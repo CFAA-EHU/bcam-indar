@@ -312,7 +312,7 @@ class RatAppSym(BaseEstimator):
             peaks = peaks[np.sort(idxs)]
             freqs = peaks[peaks < N]
         else:
-            freqs = self.seed_freqs
+            freqs = np.asarray(seed_freqs)
 
         if freqs.ndim != 1:
             raise ValueError('freqs must be a 1D array.')
@@ -601,7 +601,7 @@ class RatAppSym(BaseEstimator):
             raise ValueError(msg)
 
         # Set frequencies.
-        n_freqs = self.count_freqs(self._freqs)
+        n_freqs = self.count_freqs(self._freqs, N, self._parity)
         if n_freqs-1 > self.order:
             count = 0
             n_freqs = 0
@@ -609,8 +609,14 @@ class RatAppSym(BaseEstimator):
                 count += 1
                 n_freqs = self.count_freqs(self._freqs[:count])
             _freqs = self._freqs[:count]
-        else:
+        elif n_freqs-1 == self.order:
             _freqs = self._freqs
+        else:
+            ωN = np.exp(-2j*np.pi/N_)
+            y_pred = self.predict(ωN**(-np.arange(N)))
+            idxs = np.argmax(np.linalg.norm(self._y - y_pred, axis=1))
+            del y_pred
+            _freqs = np.append(self._freqs, idxs)
 
         poles, residues = self._fit(self._y, self._parity, _freqs)
 
@@ -725,9 +731,11 @@ class EspiraR(BaseEstimator):
             self,
             *,
             order=None,
+            damping=0.,
             store_y=True,
             copy_y=True):
         self.order = order
+        self.damping = damping
         self.store_y = store_y
         self.copy_y = copy_y
 
@@ -739,6 +747,19 @@ class EspiraR(BaseEstimator):
     def c_resonances_(self):
         return np.log(self.c_poles_)
 
+    @property
+    def resonances_(self):
+        return np.concatenate(
+            [self.r_resonances_, self.c_resonances_, np.conj(self.c_resonances_)],
+            dtype=complex)
+
+    @property
+    def amps_(self):
+        return np.concatenate(
+            [self.r_amps, self.c_amps, np.conj(self.c_amps)],
+            axis=0,
+            dtype=complex)
+
     def fit(self, y, parity, seed_freqs=None):
         N = y.shape[0]
         N_ = 2*(N-1)+parity
@@ -746,15 +767,44 @@ class EspiraR(BaseEstimator):
         ωN = np.exp(-2j*np.pi/N_)
         if self.copy_y:
             y = np.copy(y)
+        if self.damping > 0.:
+            x = np.fft.irfft(y, n=N_, axis=0)
+            x *= np.pow(self.damping, np.arange(N_)/(N_-1))[:, np.newaxis]
+            np.fft.rfft(x, axis=0, out=y)
+        del x
         y *= (ωN**np.arange(N))[:, np.newaxis]
         rational.fit(y, parity, seed_freqs=seed_freqs)
         if self.store_y:
             self._rational = rational
 
-        self.r_poles_ = rational.r_poles_
-        self.c_poles_ = rational.c_poles_
-        self.r_amps = rational.r_residues_/(1-(rational.r_poles_[:, np.newaxis])**N_)
-        self.c_amps = rational.c_residues_/(1-(rational.c_poles_[:, np.newaxis])**N_)
+        self.r_poles_ = np.copy(rational.r_poles_)
+        self.c_poles_ = np.copy(rational.c_poles_)
+        self.r_amps_ = rational.r_residues_/(1-(rational.r_poles_[:, np.newaxis])**N_)
+        self.c_amps_ = rational.c_residues_/(1-(rational.c_poles_[:, np.newaxis])**N_)
+        if self.damping > 0.:
+            self.r_poles_ *= np.pow(self.damping, -1/(N_-1))
+            self.c_poles_ *= np.pow(self.damping, -1/(N_-1))
+
+        return self
+
+    def refit(self):
+        if not self.store_y:
+            msg = 'Refit option is disabled.'
+            logger.warning(msg, stacklevel=2)
+            return self
+
+        self._rational.set_params(order=self.order)
+        rational = self._rational.refit()
+
+        self.r_poles_ = np.copy(rational.r_poles_)
+        self.c_poles_ = np.copy(rational.c_poles_)
+        N = rational._y.shape[0]
+        N_ = 2*(N-1)+rational._parity
+        self.r_amps_ = rational.r_residues_/(1-(rational.r_poles_[:, np.newaxis])**N_)
+        self.c_amps_ = rational.c_residues_/(1-(rational.c_poles_[:, np.newaxis])**N_)
+        if self.damping > 0.:
+            self.r_poles_ *= np.pow(self.damping, -1/(N_-1))
+            self.c_poles_ *= np.pow(self.damping, -1/(N_-1))
 
         return self
 
@@ -805,14 +855,27 @@ def _std_new(x, ns):
 class StablePoles:
 
     def __init__(
-        self, model, ns:int,
+        self,
+        model,
+        orders,
+        *,
+        radius=None,
+        q:float=1/3,
+        min_scale:int=-10
     ):
         self.model = model
-        self.ns = ns
+        self.orders = orders
+        self.radius = radius
+        self.q = q
+        self.min_scale = min_scale
 
     def _add_poles(
-        self,clusters, new_set, order, ns, q, radius
+        self, clusters, new_set, order, ns
     ):
+        radius = self.radius
+        radius = dist(0., 0.6, ns) if radius is None else radius
+        q = self.q
+
         mean_clusters = [np.mean(list(c.values())) for c in clusters]
         mean_clusters = np.array(mean_clusters)
         std_clusters = [
@@ -844,9 +907,8 @@ class StablePoles:
         return clusters
 
     def _level_clustering(
-        self, poles, amps, level, ns, q=0.5, radius=None
+        self, poles, amps, level, ns
     ):
-        radius = dist(0., 0.6, ns) if radius is None else radius
         n_orders = len(amps)
 
         # For each order, find poles within the level.
@@ -870,7 +932,7 @@ class StablePoles:
             if (order == initial_order) or (len(poles_) == 0):
                 continue
             clusters = self._add_poles(
-                clusters, poles_, order, ns, q, radius)
+                clusters, poles_, order, ns)
         clusters = [c for c in clusters if len(c) > n_orders//2]
 
         # Reorder clustered poles by order.
@@ -887,11 +949,8 @@ class StablePoles:
 
         return clusters, poles, amps
 
-    def _clustering(
-        self, poles, amps, ns,
-        q=0.5, radius=None, min_scale=None
-    ):
-        radius = dist(0., 0.6, ns) if radius is None else radius
+    def _clustering(self, poles, amps, ns):
+        min_scale = self.min_scale
         poles = {k: v.copy() for k, v in poles.items()}
         amps = {k: v.copy() for k, v in amps.items()}
         n_orders = len(poles)
@@ -906,7 +965,7 @@ class StablePoles:
         clusters = []
         while (scale > min_scale) and (len(poles) > n_orders//2):
             clusters_, poles, amps = self._level_clustering(
-                poles, amps, level, ns, q=q, radius=radius)
+                poles, amps, level, ns)
             clusters.extend(clusters_)
 
             # Remove empty orders.
@@ -933,26 +992,43 @@ class StablePoles:
 
         return clusters, min_order
 
-    def find_clusters(
-            self, max_order,
-            q:float=0.5, radius:float=None, min_scale:float=None):
-        amps_set, poles_set = {}, {}
-        min_order = self.model._rational._rank
+    def fit(self, y, parity, seed_freqs=None):
+        N = y.shape[0]
+        ns = 2*(N-1) + parity
+
+        # Validate orders.
+        min_order, max_order = self.orders
+        if (min_order is None) or (min_order < y.shape[1]):
+            min_order = y.shape[1]
+        max_order_ = _get_max_order((ns, y.shape[1]))
+        if (max_order is None) or (max_order > max_order_):
+            max_order = max_order_
+
         real_order = -1
+        amps_set, poles_set = {}, {}
         for order in range(min_order, max_order+1):
             if order <= real_order:
                 continue
-            amps_fit, poles_fit = self.model.fit(max_order=order, tol=0.)[:2]
-            real_order = len(poles_fit[0]) + 2*len(poles_fit[1])
+            self.model.set_params(order=order)
+            if order == min_order:
+                self.model.fit(y, parity, seed_freqs=seed_freqs)
+            else:
+                self.model.refit()
+            real_order = len(self.model.r_poles_) + 2*len(self.model.c_poles_)
 
-            amps_ = np.concatenate((amps_fit[0], amps_fit[1]), dtype=complex)
+            amps_ = np.concatenate(
+                (self.model.r_amps_, self.model.c_amps_),
+                dtype=complex,
+                axis=0)
             amps_ = np.linalg.norm(amps_, axis=1)
-            poles_ = np.concatenate((poles_fit[0], poles_fit[1]), dtype=complex)
+            poles_ = np.concatenate(
+                (self.model.r_poles_, self.model.c_poles_), dtype=complex)
             idxs = np.argsort(amps_)[::-1]
             amps_ = amps_[idxs]
             poles_ = poles_[idxs]
             amps_set[real_order] = amps_
             poles_set[real_order] = poles_
+
         # Reverse order of keys.
         amps_set = {order: amps_set[order] for order in sorted(amps_set.keys(), reverse=True)}
         poles_set = {order: poles_set[order] for order in sorted(poles_set.keys(), reverse=True)}
@@ -960,8 +1036,7 @@ class StablePoles:
         self.poles_set_ = poles_set
 
         clusters, min_order = self._clustering(
-            poles_set, amps_set, ns=self.ns,
-            q=q, radius=radius, min_scale=min_scale)
+            poles_set, amps_set, ns=ns)
         self.min_order_ = min_order
         self.clusters_ = clusters
         return clusters
