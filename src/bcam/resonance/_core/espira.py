@@ -554,19 +554,22 @@ class RatAppSym(BaseEstimator):
 
     @property
     def residues_(self):
-        return np.concatenate([self.r_residues_, self.c_residues_, np.conj(self.c_residues_)])
+        return np.concatenate(
+            [self.r_residues_, self.c_residues_, np.conj(self.c_residues_)],
+            axis=0)
 
     def fit(self, y, parity, seed_freqs=None):
         N, rank = y.shape
         N_ = 2*(N-1)+parity
         max_order = _get_max_order((N_, rank))
-        if rank > self.order:
+        if self.order is None:
+            self.order = rank
+        elif rank > self.order:
             msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
             raise ValueError(msg)
 
         if self.order > max_order:
-            msg = f'The number of poles must be less than half the number of time samples. \
-            max_order readjusted to {max_order}'
+            msg = f'The order exceeds the maximum allowed order {max_order}.'
             raise ValueError(msg)
 
         _freqs = self.set_seed_freqs(y, parity, seed_freqs=seed_freqs)
@@ -597,6 +600,7 @@ class RatAppSym(BaseEstimator):
             max_order readjusted to {max_order}'
             raise ValueError(msg)
 
+        # Set frequencies.
         n_freqs = self.count_freqs(self._freqs)
         if n_freqs-1 > self.order:
             count = 0
@@ -628,7 +632,6 @@ class RatAppSym(BaseEstimator):
 # ===============================
 # Exponential Sums Decomposition
 # ===============================
-
 
 def exp_sum(poles, amplitudes, t, fs=1):
     '''
@@ -667,13 +670,6 @@ def exp_sum(poles, amplitudes, t, fs=1):
 
     return (poles[np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amplitudes
 
-def exp_sum_R(poles, amps, t, fs=1):
-    r = 0
-    if poles[0] is not None:
-        r += (poles[0][np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amps[0]
-    if poles[1] is not None:
-        r += 2 * np.real((poles[1][np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amps[1])
-    return r
 
 class Espira:
     '''Approximate signal as a sum of exponentials using ESPIRA algorithm.
@@ -723,40 +719,51 @@ class Espira:
         return amps, poles
 
 
-class EspiraR:
+class EspiraR(BaseEstimator):
 
-    def __init__(self, x, rank_tol=1e-2, mode='(n,n)'):
-        if x.ndim == 1:
-            x = np.atleast_2d(x).T
-        y = np.copy(x)
+    def __init__(
+            self,
+            *,
+            order=None,
+            store_y=True,
+            copy_y=True):
+        self.order = order
+        self.store_y = store_y
+        self.copy_y = copy_y
+
+    @property
+    def r_resonances_(self):
+        return np.log(self.r_poles_)
+
+    @property
+    def c_resonances_(self):
+        return np.log(self.c_poles_)
+
+    def fit(self, y, parity, seed_freqs=None):
         N = y.shape[0]
-        # Add a small damping to stabilize the algorithm.
-        false_damping = np.power(2, -2 / N)
-        y *= (false_damping**np.arange(N))[:, np.newaxis]
-        y = np.fft.fft(y, axis=0)
-        ωN = np.exp(-2j * np.pi / N)
-        y = (ωN**np.arange(N))[:, np.newaxis] * y
-        self._rational = RatAppSym(y, rank_tol=rank_tol, mode=mode)
+        N_ = 2*(N-1)+parity
+        rational = RatAppSym(order=self.order, store_y=self.store_y)
+        ωN = np.exp(-2j*np.pi/N_)
+        if self.copy_y:
+            y = np.copy(y)
+        y *= (ωN**np.arange(N))[:, np.newaxis]
+        rational.fit(y, parity, seed_freqs=seed_freqs)
+        if self.store_y:
+            self._rational = rational
 
-    def fit(self, tol=1e-3, max_order=None):
-        N = self._rational.x.shape[0]
+        self.r_poles_ = rational.r_poles_
+        self.c_poles_ = rational.c_poles_
+        self.r_amps = rational.r_residues_/(1-(rational.r_poles_[:, np.newaxis])**N_)
+        self.c_amps = rational.c_residues_/(1-(rational.c_poles_[:, np.newaxis])**N_)
 
-        poles, residues, poly = self._rational.fit(
-            tol=tol, max_order=max_order)[:3]
-        amps = 2*[None]
-        poles = list(poles)
-        for i in [0, 1]:
-            amps[i] = residues[i] / (1 - (poles[i][:, np.newaxis])**N)
-            # Remove false damping.
-            poles[i] *= np.power(2, 2 / N)
+        return self
 
-        amps, poles = list(amps), list(poles)
-        for i in range(2):
-            idxs = np.argsort(np.linalg.norm(amps[i], axis=1))[::-1]
-            amps[i] = amps[i][idxs]
-            poles[i] = poles[i][idxs]
-
-        return tuple(amps), tuple(poles), poly
+    def predict(self, X):
+        return np.real(exp_sum(
+            np.concatenate([self.r_poles_, self.c_poles_, np.conj(self.c_poles_)]),
+            np.concatenate([self.r_amps, self.c_amps, np.conj(self.c_amps)], axis=0),
+            X
+        ))
 
 # Stabilization algorithm
 

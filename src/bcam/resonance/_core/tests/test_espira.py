@@ -239,27 +239,36 @@ class Test_ESPIRA:
     def test_espira_real(self):
         # Create a random generator.
         M, L = 4, 2
-        N = 2 * (M + 1) + 10 # N >= 2 * (M + 1)
+        N = 2*(M+1) + 10 # N >= 2 * (M + 1)
         rng = np.random.default_rng()
 
         r = rng.uniform(0.7, 0.9, M//2)
         phase = rng.uniform(0.1, 0.4, M//2)
         poles = r * np.exp(2j * np.pi * phase)
-        poles = np.concatenate((poles, np.conj(poles)))
+        poles_ = np.concatenate((poles, np.conj(poles)))
         amps = rng.normal(0, 2, (M//2, L)) + 1j * rng.normal(0, 2, (M//2, L))
-        amps = np.concatenate((amps, np.conj(amps)), axis=0)
+        amps_ = np.concatenate((amps, np.conj(amps)), axis=0)
+        idxs = np.argsort(poles)
+        poles = poles[idxs]
+        amps = amps[idxs]
 
-        x = espira.exp_sum(poles, amps, np.arange(N), fs=1)
-        self.x = np.array(x)
+        x = espira.exp_sum(poles_, amps_, np.arange(N), fs=1)
+        x = np.real(x)
+        y = np.fft.rfft(x, axis=0)
 
         # ==== Fit exponential sum ====
-        res = espira.EspiraR(x, rank_tol=1e-6)
-        amps_fit, poles_fit = res.fit(tol=1e-6)
+        model = espira.EspiraR(order=2*M, store_y=False, copy_y=False)
+        model.fit(y, N%2)
+        poles_fit = [model.r_poles_, model.c_poles_]
+        amps_fit = [model.r_amps, model.c_amps]
+        idxs = np.argsort(poles_fit[1])
+        poles_fit[1] = poles_fit[1][idxs]
+        amps_fit[1] = amps_fit[1][idxs]
 
         # Remove spurious poles with very small amplitude.
-        amps_fit, poles_fit = espira.pole_pruning(amps_fit, poles_fit, stol=1e-5)
-
-        x_fit = espira.exp_sum_R(poles_fit, amps_fit, np.arange(N), fs=1)
+        amps_fit, poles_fit = espira.pole_pruning(
+            amps_fit, poles_fit, N, stol=1e-5)
 
         assert (len(poles_fit[0]) == 0) and (len(poles_fit[1]) == M//2)
-        assert np.allclose(x_fit, x)
+        assert np.allclose(poles_fit[1], poles)
+        assert np.allclose(amps_fit[1], amps)
