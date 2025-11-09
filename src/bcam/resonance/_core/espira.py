@@ -607,7 +607,7 @@ class RatAppSym(BaseEstimator):
             n_freqs = 0
             while n_freqs-1 < self.order:
                 count += 1
-                n_freqs = self.count_freqs(self._freqs[:count])
+                n_freqs = self.count_freqs(self._freqs[:count], N, self._parity)
             _freqs = self._freqs[:count]
         elif n_freqs-1 == self.order:
             _freqs = self._freqs
@@ -871,8 +871,7 @@ class StablePoles:
         self.min_scale = min_scale
 
     def _add_poles(
-        self, clusters, new_set, order, ns
-    ):
+        self, clusters, new_set, order, ns):
         radius = self.radius
         radius = dist(0., 0.6, ns) if radius is None else radius
         q = self.q
@@ -1040,7 +1039,8 @@ class StablePoles:
             poles_set, amps_set, ns=ns)
         self.min_order_ = min_order
         self.clusters_ = clusters
-        return clusters
+
+        return self
 
     def plot(self, scale, ax=None):
         if not hasattr(self, 'amps_set_'):
