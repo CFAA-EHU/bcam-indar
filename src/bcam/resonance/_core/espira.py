@@ -613,10 +613,11 @@ class RatAppSym(BaseEstimator):
             _freqs = self._freqs
         else:
             ωN = np.exp(-2j*np.pi/N_)
-            y_pred = self.predict(ωN**(-np.arange(N)))
-            idxs = np.argmax(np.linalg.norm(self._y - y_pred, axis=1))
+            c_freqs = np.setdiff1d(np.arange(N), self._freqs, assume_unique=True)
+            y_pred = self.predict(ωN**(-c_freqs))
+            idx = np.argmax(np.linalg.norm(self._y[c_freqs]-y_pred, axis=1))
             del y_pred
-            _freqs = np.append(self._freqs, idxs)
+            _freqs = np.append(self._freqs, c_freqs[idx])
 
         poles, residues = self._fit(self._y, self._parity, _freqs)
 
@@ -771,7 +772,7 @@ class EspiraR(BaseEstimator):
             x = np.fft.irfft(y, n=N_, axis=0)
             x *= np.pow(self.damping, np.arange(N_)/(N_-1))[:, np.newaxis]
             np.fft.rfft(x, axis=0, out=y)
-        del x
+            del x
         y *= (ωN**np.arange(N))[:, np.newaxis]
         rational.fit(y, parity, seed_freqs=seed_freqs)
         if self.store_y:
@@ -811,7 +812,7 @@ class EspiraR(BaseEstimator):
     def predict(self, X):
         return np.real(exp_sum(
             np.concatenate([self.r_poles_, self.c_poles_, np.conj(self.c_poles_)]),
-            np.concatenate([self.r_amps, self.c_amps, np.conj(self.c_amps)], axis=0),
+            np.concatenate([self.r_amps_, self.c_amps_, np.conj(self.c_amps_)], axis=0),
             X
         ))
 
