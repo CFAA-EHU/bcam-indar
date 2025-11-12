@@ -292,14 +292,20 @@ class TestAmplitudes:
 
     @staticmethod
     def kernel(ns, fs, a, freqs):
-        dof = len(freqs)
+        dof = len(freqs[0])
         t = np.arange(ns) / fs
-        K = 2*fs*np.exp(freqs/(2*fs)) * np.sinh(freqs/(2*fs))
-        K = a * K.reshape(1, 1, dof)
-        K = np.expand_dims(K, axis=2)
-        K = K * np.exp(freqs[np.newaxis, :] * t[:, np.newaxis]).reshape(1, 1, ns, dof)
-        K = np.imag(np.sum(K, axis=-1))
-        return K
+        
+        K1 = 2*fs*np.exp(freqs[0]/(2*fs)) * np.sinh(freqs[0]/(2*fs))
+        K1 = a[0] * K1.reshape(1, 1, dof)
+        K1 = np.expand_dims(K1, axis=2)
+        K1 = K1 * np.exp(freqs[0][np.newaxis, :] * t[:, np.newaxis]).reshape(1, 1, ns, dof)
+        K1 = np.imag(np.sum(K1, axis=-1))
+
+        K2 = np.expand_dims(a[1], axis=2)
+        K2 = K2 * np.exp(freqs[1][np.newaxis, :] * t[:, np.newaxis]).reshape(1, 1, ns, dof)
+        K2 = np.real(np.sum(K2, axis=-1))
+
+        return K1 + K2
     
     def test_reshape(self):
         rng = np.random.default_rng(1234345)

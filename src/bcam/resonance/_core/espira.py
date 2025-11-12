@@ -995,6 +995,7 @@ class StablePoles:
     def fit(self, y, parity, seed_freqs=None):
         N = y.shape[0]
         ns = 2*(N-1) + parity
+        self._ns = ns
 
         # Validate orders.
         min_order, max_order = self.orders
@@ -1041,6 +1042,20 @@ class StablePoles:
         self.clusters_ = clusters
 
         return self
+    
+    def clusters_stats(self):
+        if not hasattr(self, 'clusters_'):
+            raise ValueError('You must run find_clusters() first.')
+
+        stats = []
+        for c in self.clusters_:
+            mean = np.mean(list(c.values()))
+            std = _std_new(list(c.values()), self._ns)
+            stats.append({
+                'mean': mean,
+                'std': std,
+            })
+        return stats
 
     def plot(self, scale, ax=None):
         if not hasattr(self, 'amps_set_'):
@@ -1068,7 +1083,10 @@ class StablePoles:
         theta = np.linspace(0, 2*np.pi, 100)
         ax.plot(np.cos(theta), np.sin(theta), color='k')
         ax.set_xlim([-1.1, 1.1])
-        ax.set_ylim([-1.1, 1.1])
+        ax.set_ylim([-.05, 1.1])
+
+        # Draw the diameter at y=0 (only across the unit circle)
+        ax.plot([-1.0, 1.0], [0.0, 0.0], color='k', lw=0.5)
 
         ax.set_aspect('equal')
         ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
@@ -1076,8 +1094,6 @@ class StablePoles:
         return ax
 
 def pole_pruning(amps, poles, ns, stol=1e-5):
-    amps, poles = list(amps), list(poles)
-    
     # Remove unstable poles.
     for i in [0, 1]:
         idxs = np.nonzero(np.abs(poles[i]) <= 1)[0]
@@ -1087,7 +1103,8 @@ def pole_pruning(amps, poles, ns, stol=1e-5):
     # Remove spurious poles.
     avg_norm = 0
     if len(poles[0]) > 0:
-        avg_norm += np.sum((amps[0]**2)*(_inner_prod(ns, poles[0])[:, np.newaxis]))
+        avg_norm += np.sum(
+            (amps[0]**2)*(_inner_prod(ns, poles[0])[:, np.newaxis]))
     if len(poles[1]) > 0:
         avg_norm += np.sum(
             amps[1]*np.conj(amps[1])*_inner_prod(ns, poles[1])[:, np.newaxis])
@@ -1097,4 +1114,4 @@ def pole_pruning(amps, poles, ns, stol=1e-5):
         poles[i] = poles[i][idxs]
         amps[i] = amps[i][idxs]
 
-    return tuple(amps), tuple(poles)
+    return amps, poles

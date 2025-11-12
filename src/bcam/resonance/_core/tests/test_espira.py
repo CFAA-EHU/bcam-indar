@@ -257,10 +257,11 @@ class Test_ESPIRA:
         y = np.fft.rfft(x, axis=0)
 
         # ==== Fit exponential sum ====
-        model = espira.EspiraR(order=2*M, store_y=False, copy_y=False)
+        model = espira.EspiraR(
+            order=2*M, store_y=False, copy_y=False)
         model.fit(y, N%2)
         poles_fit = [model.r_poles_, model.c_poles_]
-        amps_fit = [model.r_amps, model.c_amps]
+        amps_fit = [model.r_amps_, model.c_amps_]
         idxs = np.argsort(poles_fit[1])
         poles_fit[1] = poles_fit[1][idxs]
         amps_fit[1] = amps_fit[1][idxs]
