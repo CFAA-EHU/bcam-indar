@@ -329,7 +329,7 @@ class TestAmplitudes:
     def test_amps(self):
         rng = np.random.default_rng()
         ns, fs = 200, 100
-        n_out, n_in = 3, 2
+        n_out, n_in = 1, 1
         _amps, _freqs = [], []
 
         dof = 0
@@ -349,7 +349,7 @@ class TestAmplitudes:
         _amps.append(amps)
         _freqs.append(m_freqs)
 
-        n_c, n_r = 3, 0
+        n_c, n_r = 0, 3
         c_freqs = -rng.uniform(0.1, 1, n_c) + 2j*np.pi*rng.uniform(1, 50, n_c)
         c_amps = rng.normal(scale=1, size=(n_out, n_in, n_c)).astype(np.complex128)
         c_amps += 1j * rng.normal(scale=.1, size=(n_out, n_in, n_c))
@@ -367,7 +367,7 @@ class TestAmplitudes:
             fs=fs, response='a', penalty=0.)
 
         freqs = {
-            # 'resonances': m_freqs,
+            'resonances': m_freqs,
             'complex': c_freqs,
             'real': r_freqs
         }

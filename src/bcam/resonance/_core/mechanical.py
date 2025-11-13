@@ -50,17 +50,25 @@ def _validate_dims(M, C, K, check_symmetry=True):
 # Amplitudes
 # =================================
 
-def _sinh_m(x):
-    eps = np.finfo(x.dtype).eps
-    y = np.where(x, x, eps)
-    return -np.exp(-y/2) / (2*np.sinh(y/2))
+# def _sinh_m(x):
+#     eps = np.finfo(x.dtype).eps
+#     y = np.where(x, x, eps)
+#     return -np.exp(-y/2) / (2*np.sinh(y/2))
 
-def _sum_exp_weighted(a, fs: float, ns: int):
-    # TODO: add the case a = 0.
-    T = ns / fs
-    r = 1 - _sinh_m(a/fs)*np.exp(a/fs)*(1 - np.exp(a*T))/ns
-    r *= _sinh_m(a/fs)
-    return r
+# def _sum_exp_weighted(a, fs: float, ns: int):
+#     # TODO: add the case a = 0.
+#     T = ns / fs
+#     r = 1 - _sinh_m(a/fs)*np.exp(a/fs)*(1 - np.exp(a*T))/ns
+#     r *= _sinh_m(a/fs)
+#     return r
+
+def _sum_exp_weighted(a, fs:float, ns:int):
+    z = np.exp(a/fs)
+    sl = np.abs(z-1)>1e-4
+    z[sl] = (z[sl]*((z[sl]**ns)-ns-1)+ns)/((z[sl]-1)**2)
+    sl = ~sl
+    z[sl] = sum((ns-i)*(z[sl]**i) for i in range(ns))
+    return z/ns
 
 def trig_fft(x):
     '''
@@ -147,6 +155,7 @@ def metric_amps(freqs, fs, ns, response='a'):
             r *= x[np.newaxis, :]
         return r
 
+    # TODO: Check order.
     m1 = _mult(resonances, c_freqs)
     m2 = _mult(np.conj(resonances), c_freqs)
 
@@ -175,7 +184,7 @@ def metric_amps(freqs, fs, ns, response='a'):
 
     m_f_f = np.zeros((2*n_c, 2*n_c))
     m_f_f[:n_c, :n_c] = np.real(m1 + m2)
-    m_f_f[n_c:, :n_c] = np.imag(m1 + m2)
+    m_f_f[n_c:, :n_c] = -np.imag(m1 - m2)
     m_f_f[:n_c, n_c:] = m_f_f[n_c:, :n_c].T
     m_f_f[n_c:, n_c:] = np.real(-m1 + m2)
     m_f_f *= 0.5
@@ -192,11 +201,11 @@ def metric_amps(freqs, fs, ns, response='a'):
 
     m_fr_fr = m1
 
-    return np.block(
+    return np.real(np.block(
         [[m_r_r, m_r_f.T, m_r_fr.T],
          [m_r_f, m_f_f, m_fr_f.T],
          [m_r_fr, m_fr_f, m_fr_fr]]
-    )
+    ))
 
 
 def reshape_injection(x, n_out:int, n_in:int):
@@ -318,7 +327,7 @@ class Amplitudes(BaseEstimator):
                 freqs_ *= resonances
             T = ns / fs
             t = t.reshape(1, -1)
-            r_ = np.exp(resonances[:, np.newaxis] * t) * (1 - t/T)
+            r_ = np.exp(resonances[:, np.newaxis]*t)*(1-t/T)
             r_ *= freqs_[:, np.newaxis]
             return r_
 
@@ -389,8 +398,6 @@ class Amplitudes(BaseEstimator):
         else:
             r2 = r[:, dim_c:dim_c+2*n_c].reshape(n_out, n_in, 2*n_c)
             r3 = r[:, dim_c+2*n_c:].reshape(n_out, n_in, n_r)
-
-        self._raw_coeff_ = (r1, r2, r3)
 
         if r1 is None:
             self.tensor_modes_ = np.array([])
