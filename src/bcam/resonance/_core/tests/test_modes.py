@@ -332,7 +332,7 @@ class TestAmplitudes:
         n_out, n_in = 1, 1
         _amps, _freqs = [], []
 
-        dof = 0
+        dof = 2
         if dof > 0:
             modal = mechanical.randomSystem(
                 masses=rng.uniform(1, 2, dof),
@@ -349,7 +349,7 @@ class TestAmplitudes:
         _amps.append(amps)
         _freqs.append(m_freqs)
 
-        n_c, n_r = 0, 3
+        n_c, n_r = 2, 2
         c_freqs = -rng.uniform(0.1, 1, n_c) + 2j*np.pi*rng.uniform(1, 50, n_c)
         c_amps = rng.normal(scale=1, size=(n_out, n_in, n_c)).astype(np.complex128)
         c_amps += 1j * rng.normal(scale=.1, size=(n_out, n_in, n_c))

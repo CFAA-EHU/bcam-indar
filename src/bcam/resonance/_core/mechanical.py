@@ -193,8 +193,8 @@ def metric_amps(freqs, fs, ns, response='a'):
     m1 = _mult(c_freqs, r_freqs)
 
     m_fr_f = np.zeros((n_r, 2*n_c))
-    m_fr_f[:, :n_c] = np.imag(m1)
-    m_fr_f[:, n_c:] = np.real(m1)
+    m_fr_f[:, :n_c] = np.real(m1)
+    m_fr_f[:, n_c:] = -np.imag(m1)
 
     # Block (r_freqs, r_freqs).
     m1 = _mult(r_freqs, r_freqs)
@@ -270,7 +270,7 @@ class Amplitudes(BaseEstimator):
 
     @property
     def all_amps_(self):
-        if not hasattr(self, '_raw_coeff_'):
+        if not hasattr(self, 'tensor_modes_'):
             msg = 'Call fit() before accessing all_amps_.'
             raise ValueError(msg)
         return {
@@ -292,33 +292,22 @@ class Amplitudes(BaseEstimator):
         else:
             dim_c = 2*dof - 1 if dof > 0 else 0
             dim = dim_c + 2*(2*n_c + n_r)
-            m_ = np.ma.masked_array(
-                np.zeros((dim, dim), dtype=m.dtype),
-                mask=False
-            )
+            m_ = np.zeros((dim, dim), dtype=m.dtype)
 
             # hide (mask) rows and columns in the region [dim_c:s)
             s = dim_c + 2*n_c + n_r
-            mask = np.zeros(m_.shape, dtype=bool)
-            mask[dim_c:s, :] = True
-            mask[:, dim_c:s] = True
-            m_.mask = mask
+            mask = np.ones(m_.shape, dtype=bool)
+            mask[dim_c:s, :] = False
+            mask[:, dim_c:s] = False
+            np.place(m_, mask, m.flatten())
 
-
-            # m_[:dim_c, dim_c+2*n_c+n_r:] = m[:dim_c, dim_c:]
-            # m_[dim_c+2*n_c+n_r:, :dim_c] = m[dim_c:, :dim_c]
-            # m_[:dim_c, :dim_c] = m[:dim_c, :dim_c]
-            # m_[dim_c+2*n_c+n_r:, dim_c+2*n_c+n_r:] = m[dim_c:, dim_c:]
-
-            m_[:dim_c, :dim_c] = m[:dim_c, :dim_c]
-            s = dim_c+2*n_c+n_r
-            m_[:s, :s] = m
+            m_[:s, :s] += m
+            return m, m_
 
     def _rhs(self, y, freqs):
         fs = self.fs
         ns = y.shape[-1]
         resonances, c_freqs, r_freqs = list(freqs.values())
-        r = []
 
         # Resonances.
         def prod(t):
@@ -338,7 +327,6 @@ class Amplitudes(BaseEstimator):
             r1 = np.concatenate(
                 [np.imag(r1), trig_fft(np.real(r1))[..., 1:]],
                 axis=-1)
-            r.append(r1)
 
         # Complex frequencies.
         def prod(t, freqs):
@@ -354,22 +342,36 @@ class Amplitudes(BaseEstimator):
             r2 = np.concatenate(
                 [np.real(r2), -np.imag(r2)],
                 axis=-1)
-            r2 = r2.reshape(-1, 2*len(c_freqs))
-            r.append(r2)
 
         # Real frequencies.
         if len(r_freqs) != 0:
             r3 = np.einsum(
                 'ijt,kt->ijk',
                 y, prod(np.arange(ns)/fs, r_freqs))
-            r3 = r3.reshape(-1, len(r_freqs))
-            r.append(r3)
-        
+
         if (len(c_freqs) == 0) and (len(r_freqs) == 0):
             # Project to space of 'symmetric' matrices.
-            return reshape_projection(r[0]).T
+            return reshape_projection(r1).T
+        if len(resonances) == 0:
+            r2 = r2.reshape(-1, 2*len(c_freqs))
+            r3 = r3.reshape(-1, len(r_freqs))
+            return np.concatenate([r2, r3], axis=1).T
+        else:
+            r = np.concatenate([r1, r2, r3], axis=1)
+            n_out, n_in, _ = y.shape
+            dim = r.shape[-1]
+            
+            # Diagonal elements or without symmetric pair.
+            rd = r[np.arange(n_in), np.arange(n_in)]
+            rd = np.concatenate([rd, r[n_in:].reshape(-1, dim)])
 
-        return np.concatenate(r, axis=1).T
+            # Off-diagonal pairs.
+            mask = np.zeros((n_in, n_in, dim), dtype=bool)
+            mask[np.arange(n_in), np.arange(n_in)] = True
+            r = np.ma.array(r[:n_in, n_in], mask=mask)
+            r = r.flatten()
+
+            return rd.T, r
 
     def fit(self, y, freqs):
         n_out, n_in, ns = y.shape
@@ -379,26 +381,39 @@ class Amplitudes(BaseEstimator):
             _freqs[k] = np.array(tmp) if tmp is not None else np.array([])
         self._freqs = _freqs
 
+        dof = len(self._freqs['resonances'])
+        dim_c = 2*dof - 1 if dof > 0 else 0
+        n_c, n_r = len(self._freqs['complex']), len(self._freqs['real'])
+
         r = scipy.linalg.solve(
             self._matrix(self._freqs, ns),
             self._rhs(y, self._freqs),
             assume_a='pos').T
 
-        dof = len(self._freqs['resonances'])
-        dim_c = 2*dof - 1 if dof > 0 else 0
-        n_c, n_r = len(self._freqs['complex']), len(self._freqs['real'])
-
         if (n_c == 0) and (n_r == 0):
+            r = scipy.linalg.solve(
+                self._matrix(self._freqs, ns),
+                self._rhs(y, self._freqs),
+                assume_a='pos').T
+
             r1 = reshape_injection(r[:, :dim_c], n_out, n_in)
             r2, r3 = None, None
         elif dof == 0:
+            r = scipy.linalg.solve(
+                self._matrix(self._freqs, ns),
+                self._rhs(y, self._freqs),
+                assume_a='pos').T
+
             r1 = None
             r2 = r[:, :2*n_c].reshape(n_out, n_in, 2*n_c)
             r3 = r[:, 2*n_c:].reshape(n_out, n_in, n_r)
         else:
-            r2 = r[:, dim_c:dim_c+2*n_c].reshape(n_out, n_in, 2*n_c)
-            r3 = r[:, dim_c+2*n_c:].reshape(n_out, n_in, n_r)
+            md, moff = self._matrix(self._freqs, ns)
 
+            # r2 = r[:, dim_c:dim_c+2*n_c].reshape(n_out, n_in, 2*n_c)
+            # r3 = r[:, dim_c+2*n_c:].reshape(n_out, n_in, n_r)
+
+        # Recover amplitudes.
         if r1 is None:
             self.tensor_modes_ = np.array([])
         else:
