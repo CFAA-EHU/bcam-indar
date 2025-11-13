@@ -292,23 +292,31 @@ class TestAmplitudes:
 
     @staticmethod
     def kernel(ns, fs, a, freqs):
-        dof = len(freqs[0])
         t = np.arange(ns) / fs
-        
-        K1 = 2*fs*np.exp(freqs[0]/(2*fs)) * np.sinh(freqs[0]/(2*fs))
-        K1 = a[0] * K1.reshape(1, 1, dof)
-        K1 = np.expand_dims(K1, axis=2)
-        K1 = K1 * np.exp(freqs[0][np.newaxis, :] * t[:, np.newaxis]).reshape(1, 1, ns, dof)
-        K1 = np.imag(np.sum(K1, axis=-1))
+        K = 0
 
-        K2 = np.expand_dims(a[1], axis=2)
-        K2 = K2 * np.exp(freqs[1][np.newaxis, :] * t[:, np.newaxis]).reshape(1, 1, ns, dof)
-        K2 = np.real(np.sum(K2, axis=-1))
+        # Resonant part.
+        dof = len(freqs[0])
+        if dof != 0:
+            K1 = 2*fs*np.exp(freqs[0]/(2*fs))*freqs[0]*np.sinh(freqs[0]/(2*fs))
+            K1 = a[0] * K1.reshape(1, 1, dof)
+            K1 = np.expand_dims(K1, axis=2)
+            K1 = K1 * np.exp(freqs[0][np.newaxis, :]*t[:, np.newaxis]).reshape(1, 1, ns, dof)
+            K1 = np.imag(np.sum(K1, axis=-1))
+            K += K1
 
-        return K1 + K2
-    
+        # General part.
+        n_f = len(freqs[1])
+        if n_f != 0:
+            K2 = np.expand_dims(a[1], axis=2)
+            K2 = K2 * np.exp(freqs[1][np.newaxis, :]*t[:, np.newaxis]).reshape(1, 1, ns, n_f)
+            K2 = np.real(np.sum(K2, axis=-1))
+            K += K2
+
+        return K
+
     def test_reshape(self):
-        rng = np.random.default_rng(1234345)
+        rng = np.random.default_rng()
         dof, n_out, n_in = 4, 3, 2
 
         x = rng.normal(
@@ -319,53 +327,50 @@ class TestAmplitudes:
         assert np.allclose(x, pix)
 
     def test_amps(self):
-        rng = np.random.default_rng(12345)
-        dof = 4
-        freqs = -rng.uniform(1, 3, dof) + 2j*np.pi*rng.uniform(1, 50, dof)
+        rng = np.random.default_rng()
         ns, fs = 200, 100
         n_out, n_in = 3, 2
+        _amps, _freqs = [], []
 
-        amps = rng.normal(scale=1, size=(n_out, n_in, dof)).astype(np.complex128)
-        amps += 1j * rng.normal(scale=.1, size=(n_out, n_in, dof))
-        amps[:n_in] = 0.5 * (amps[:n_in] + amps[:n_in].transpose((1, 0, 2)))
-        data = self.kernel(ns, fs, amps, freqs)
+        dof = 0
+        if dof > 0:
+            modal = mechanical.randomSystem(
+                masses=rng.uniform(1, 2, dof),
+                dampings=rng.uniform(0.02, 0.05, dof),
+                resonances=rng.uniform(2*np.pi*1, 2*np.pi*20, dof),
+                damping_type='nop',
+                seed=None)[1]
+            m_freqs = modal['frequencies']
+            modes = modal['mode_shapes']
+            modes = modes * (1/np.sqrt(np.imag(m_freqs)))[np.newaxis, :]
+            amps = mechanical.mode_to_amps(modes, n_out, n_in)
+        else:
+            amps, m_freqs = [], []
+        _amps.append(amps)
+        _freqs.append(m_freqs)
 
-        model = mechanical.Amplitudes(
-            freqs=freqs,
-            fs=fs,
-            ns=ns,
-            n_out=n_out,
-            n_in=n_in
-        )
-        amps_fit = model.fit(data, penalty=0.)
-        data_pred = self.kernel(ns, fs, amps_fit, freqs)
-        assert np.allclose(data, data_pred, atol=0.)
+        n_c, n_r = 3, 0
+        c_freqs = -rng.uniform(0.1, 1, n_c) + 2j*np.pi*rng.uniform(1, 50, n_c)
+        c_amps = rng.normal(scale=1, size=(n_out, n_in, n_c)).astype(np.complex128)
+        c_amps += 1j * rng.normal(scale=.1, size=(n_out, n_in, n_c))
+        r_freqs = -rng.uniform(0.1, 1, n_r) + np.pi*fs*1j*rng.integers(0, 2, size=n_r)
+        r_amps = rng.normal(scale=1, size=(n_out, n_in, n_r))
+        freqs = np.concatenate([c_freqs, r_freqs], dtype=complex)
+        amps = np.concatenate([c_amps, r_amps], axis=-1)
 
-    def test_mech_amps(self):
-        dof = 4
-        modal = mechanical.randomSystem(
-            dof,
-            mass_range=(1, 2),
-            damping_range=(0.02, 0.05),
-            freqs_range=(2 * np.pi * 1, 2 * np.pi * 20),
-            damping_type='nop',
-            seed=123456)[1]
-        freqs = modal['frequencies']
-        modes = modal['mode_shapes']
-        modes = modes * (1/np.sqrt(np.imag(freqs)))[np.newaxis, :]
-        ns, fs = 210, 100
-        n_out, n_in = 3, 2
+        _freqs.append(freqs)
+        _amps.append(amps)
 
-        amps = mechanical.mode_to_amps(modes, n_out, n_in)
-        data = self.kernel(ns, fs, amps, freqs)
+        K = self.kernel(ns, fs, _amps, _freqs)
 
         model = mechanical.Amplitudes(
-            freqs=freqs,
-            fs=fs,
-            ns=ns,
-            n_out=n_out,
-            n_in=n_in,
-            mode='mechanical')
-        amps_fit = model.fit(data, penalty=0.)
-        data_pred = self.kernel(ns, fs, amps_fit, freqs)
-        assert np.allclose(data, data_pred, atol=0.)
+            fs=fs, response='a', penalty=0.)
+
+        freqs = {
+            # 'resonances': m_freqs,
+            'complex': c_freqs,
+            'real': r_freqs
+        }
+        model.fit(K, freqs)
+
+        assert np.allclose(K, model.predict(np.arange(ns)/fs), atol=0.)
