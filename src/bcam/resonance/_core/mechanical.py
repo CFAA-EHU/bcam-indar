@@ -50,18 +50,6 @@ def _validate_dims(M, C, K, check_symmetry=True):
 # Amplitudes
 # =================================
 
-# def _sinh_m(x):
-#     eps = np.finfo(x.dtype).eps
-#     y = np.where(x, x, eps)
-#     return -np.exp(-y/2) / (2*np.sinh(y/2))
-
-# def _sum_exp_weighted(a, fs: float, ns: int):
-#     # TODO: add the case a = 0.
-#     T = ns / fs
-#     r = 1 - _sinh_m(a/fs)*np.exp(a/fs)*(1 - np.exp(a*T))/ns
-#     r *= _sinh_m(a/fs)
-#     return r
-
 def _sum_exp_weighted(a, fs:float, ns:int):
     z = np.exp(a/fs)
     sl = np.abs(z-1)>1e-4
@@ -130,7 +118,7 @@ def metric_amps(freqs, fs, ns, response='a'):
     def _mult(x, y):
         r = x[np.newaxis, :] + y[:, np.newaxis]
         r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
-        r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs)) * np.sinh(y[:, np.newaxis]/(2*fs))
+        r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs))*np.sinh(y[:, np.newaxis]/(2*fs))
         if response == 'a':
             r *= x[np.newaxis, :]*y[:, np.newaxis]
         return r
@@ -150,20 +138,19 @@ def metric_amps(freqs, fs, ns, response='a'):
     def _mult(x, y):
         r = x[np.newaxis, :] + y[:, np.newaxis]
         r = np.exp(x[np.newaxis, :]/(2*fs)) * _sum_exp_weighted(r, fs, ns)
-        r *= (2*fs)*x[np.newaxis, :]*np.sinh(x[np.newaxis, :]/(2*fs))
+        r *= (2*fs)*np.sinh(x[np.newaxis, :]/(2*fs))
         if response == 'a':
             r *= x[np.newaxis, :]
         return r
 
-    # TODO: Check order.
     m1 = _mult(resonances, c_freqs)
-    m2 = _mult(np.conj(resonances), c_freqs)
+    m2 = _mult(resonances, np.conj(c_freqs))
 
     m_r_f = np.zeros((2*n_c, dim_c))
-    m_r_f[:n_c, :dof] = np.imag(m1 - m2)
+    m_r_f[:n_c, :dof] = np.imag(m1 + m2)
     m_r_f[n_c:, :dof] = np.real(m1 - m2)
     m_r_f[:n_c, dof:] = trig_fft(np.real(m1 + m2))[..., 1:]
-    m_r_f[n_c:, dof:] = trig_fft(np.imag(m1 - m2))[..., 1:]
+    m_r_f[n_c:, dof:] = trig_fft(np.imag(-m1 + m2))[..., 1:]
     m_r_f *= 0.5
 
     # Block (r_freqs, resonances).
@@ -224,11 +211,11 @@ def reshape_injection(x, n_out:int, n_in:int):
     c = n_in
     for i in range(1, n_in):
         cn = c + n_in - i
-        x_[np.arange(n_in-i), i+np.arange(n_in-i)] = x[c:cn] / np.sqrt(2)
-        x_[i+np.arange(n_in-i), np.arange(n_in-i)] = x[c:cn] / np.sqrt(2)
+        x_[np.arange(n_in-i), i+np.arange(n_in-i)] = x[c:cn]/np.sqrt(2)
+        x_[i+np.arange(n_in-i), np.arange(n_in-i)] = x[c:cn]/np.sqrt(2)
         c = cn
     if n_out > n_in:
-        x_[n_in:, :] = x[c: c + (n_out-n_in)*n_in].reshape(n_out - n_in, n_in, -1)
+        x_[n_in:, :] = x[c: c+(n_out-n_in)*n_in].reshape(n_out-n_in, n_in, -1)
     return x_
 
 def reshape_projection(x):
@@ -286,16 +273,17 @@ class Amplitudes(BaseEstimator):
 
         m = metric_amps(
             freqs, self.fs, ns, response=self.response)
+
         if ((n_c == 0) & (n_r == 0)) or (dof == 0):
             m += self.penalty * np.eye(m.shape[0])
             return m
         else:
             dim_c = 2*dof - 1 if dof > 0 else 0
             dim = dim_c + 2*(2*n_c + n_r)
+            s = dim_c + 2*n_c + n_r
             m_ = np.zeros((dim, dim), dtype=m.dtype)
 
             # hide (mask) rows and columns in the region [dim_c:s)
-            s = dim_c + 2*n_c + n_r
             mask = np.ones(m_.shape, dtype=bool)
             mask[dim_c:s, :] = False
             mask[:, dim_c:s] = False
@@ -306,27 +294,30 @@ class Amplitudes(BaseEstimator):
 
     def _rhs(self, y, freqs):
         fs = self.fs
-        ns = y.shape[-1]
+        n_out, n_in, ns = y.shape
         resonances, c_freqs, r_freqs = list(freqs.values())
 
         # Resonances.
         def prod(t):
-            freqs_ = 2*fs*np.exp(resonances/(2*fs)) * np.sinh(resonances/(2*fs))
+            freqs_ = 2*fs*np.exp(resonances/(2*fs))*np.sinh(resonances/(2*fs))
             if self.response == 'a':
                 freqs_ *= resonances
-            T = ns / fs
+            T = ns/fs
             t = t.reshape(1, -1)
             r_ = np.exp(resonances[:, np.newaxis]*t)*(1-t/T)
             r_ *= freqs_[:, np.newaxis]
             return r_
 
-        if len(resonances) != 0:
+        dof = len(resonances)
+        if dof != 0:
             r1 = np.einsum(
                 'ijt,kt->ijk',
                 y, prod(np.arange(ns)/fs))
             r1 = np.concatenate(
                 [np.imag(r1), trig_fft(np.real(r1))[..., 1:]],
                 axis=-1)
+        else:
+            r1 = np.zeros((n_out, n_in, 0), dtype=y.dtype)
 
         # Complex frequencies.
         def prod(t, freqs):
@@ -335,43 +326,60 @@ class Amplitudes(BaseEstimator):
             r_ = np.exp(freqs[:, np.newaxis]*t)*(1-t/T)
             return r_
 
-        if len(c_freqs) != 0:
+        n_c = len(c_freqs)
+        if n_c != 0:
             r2 = np.einsum(
                 'ijt,kt->ijk',
                 y, prod(np.arange(ns)/fs, c_freqs))
             r2 = np.concatenate(
                 [np.real(r2), -np.imag(r2)],
                 axis=-1)
+        else:
+            r2 = np.zeros((n_out, n_in, 0), dtype=y.dtype)
 
         # Real frequencies.
-        if len(r_freqs) != 0:
+        n_r = len(r_freqs)
+        if n_r != 0:
             r3 = np.einsum(
                 'ijt,kt->ijk',
                 y, prod(np.arange(ns)/fs, r_freqs))
+        else:
+            r3 = np.zeros((n_out, n_in, 0), dtype=y.dtype)
 
-        if (len(c_freqs) == 0) and (len(r_freqs) == 0):
+        r1, r2, r3 = np.real(r1), np.real(r2), np.real(r3)
+        if (n_c == 0) and (n_r == 0):
             # Project to space of 'symmetric' matrices.
             return reshape_projection(r1).T
-        if len(resonances) == 0:
-            r2 = r2.reshape(-1, 2*len(c_freqs))
-            r3 = r3.reshape(-1, len(r_freqs))
+        elif dof == 0:
+            r2 = r2.reshape(-1, 2*n_c)
+            r3 = r3.reshape(-1, n_r)
             return np.concatenate([r2, r3], axis=1).T
         else:
-            r = np.concatenate([r1, r2, r3], axis=1)
-            n_out, n_in, _ = y.shape
-            dim = r.shape[-1]
-            
+            r = np.concatenate([r1, r2, r3], axis=-1)
+            dim = (2*dof-1)+2*n_c+n_r
+
             # Diagonal elements or without symmetric pair.
             rd = r[np.arange(n_in), np.arange(n_in)]
-            rd = np.concatenate([rd, r[n_in:].reshape(-1, dim)])
+            rd = np.concatenate([rd, r[n_in:].reshape(n_in*(n_out-n_in), dim)])
+            del r
 
             # Off-diagonal pairs.
-            mask = np.zeros((n_in, n_in, dim), dtype=bool)
-            mask[np.arange(n_in), np.arange(n_in)] = True
-            r = np.ma.array(r[:n_in, n_in], mask=mask)
-            r = r.flatten()
+            dim_a = (2*dof-1)+2*(2*n_c+n_r)
+            roff = np.zeros((n_in*(n_in-1)//2, dim_a))
+            c = 0
+            dim_res = 2*dof-1
+            for i in range(1, n_in):
+                cn = c+n_in-i
+                diag_u = (np.arange(n_in-i), i+np.arange(n_in-i))
+                diag_l = (i+np.arange(n_in-i), np.arange(n_in-i))
+                roff[c:cn, :dim_res] = (r1[diag_u]+r1[diag_l])
+                roff[c:cn, dim_res:dim_res+2*n_c] = r2[diag_u]
+                roff[c:cn, dim_res+2*n_c:dim] = r3[diag_u]
+                roff[c:cn, dim:dim+2*n_c] = r2[diag_l]
+                roff[c:cn, dim+2*n_c:] = r3[diag_l]
+                c = cn
 
-            return rd.T, r
+            return rd.T, roff.T
 
     def fit(self, y, freqs):
         n_out, n_in, ns = y.shape
@@ -382,13 +390,8 @@ class Amplitudes(BaseEstimator):
         self._freqs = _freqs
 
         dof = len(self._freqs['resonances'])
-        dim_c = 2*dof - 1 if dof > 0 else 0
+        dim_c = 2*dof-1 if dof > 0 else 0
         n_c, n_r = len(self._freqs['complex']), len(self._freqs['real'])
-
-        r = scipy.linalg.solve(
-            self._matrix(self._freqs, ns),
-            self._rhs(y, self._freqs),
-            assume_a='pos').T
 
         if (n_c == 0) and (n_r == 0):
             r = scipy.linalg.solve(
@@ -409,9 +412,48 @@ class Amplitudes(BaseEstimator):
             r3 = r[:, 2*n_c:].reshape(n_out, n_in, n_r)
         else:
             md, moff = self._matrix(self._freqs, ns)
+            rhs_d, rhs_off = self._rhs(y, self._freqs)
 
-            # r2 = r[:, dim_c:dim_c+2*n_c].reshape(n_out, n_in, 2*n_c)
-            # r3 = r[:, dim_c+2*n_c:].reshape(n_out, n_in, n_r)
+            # Diagonal elements or without symmetric pair.
+            rd = scipy.linalg.solve(
+                md, rhs_d,
+                assume_a='pos').T
+            del md, rhs_d
+
+            r1 = np.zeros((n_out, n_in, dim_c), dtype=float)
+            r2 = np.zeros((n_out, n_in, 2*n_c), dtype=float)
+            r3 = np.zeros((n_out, n_in, n_r), dtype=float)
+
+            # Diagonal elements.
+            dim_t = dim_c+2*n_c+n_r
+            slices = [slice(None, dim_c), slice(dim_c, dim_c+2*n_c), slice(dim_c+2*n_c, None)]
+            for r_, s in zip([r1, r2, r3], slices):
+                r_[n_in:] = rd[n_in:].reshape(n_out-n_in, n_in, dim_t)[..., s]
+                r_[np.arange(n_in), np.arange(n_in)] = rd[:n_in, s]
+            del rd
+
+            # Off-diagonal pairs.
+            roff = scipy.linalg.solve(
+                moff, rhs_off,
+                assume_a='pos').T
+            del moff, rhs_off
+
+            c = 0
+            dim_g = dim_c+2*n_c+n_r
+            for i in range(1, n_in):
+                cn = c+n_in-i
+                diag_u = (np.arange(n_in-i), i+np.arange(n_in-i))
+                diag_l = (i+np.arange(n_in-i), np.arange(n_in-i))
+                # Resonances.
+                r1[diag_u] = roff[c:cn, :dim_c]
+                r1[diag_l] = roff[c:cn, :dim_c]
+                # Other frequencies.
+                r2[diag_u] = roff[c:cn, dim_c:dim_c+2*n_c]
+                r3[diag_u] = roff[c:cn, dim_c+2*n_c:dim_g]
+                r2[diag_l] = roff[c:cn, dim_g:dim_g+2*n_c]
+                r3[diag_l] = roff[c:cn, dim_g+2*n_c:]
+                c = cn
+            del roff
 
         # Recover amplitudes.
         if r1 is None:

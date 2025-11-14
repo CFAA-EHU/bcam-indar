@@ -329,13 +329,13 @@ class TestAmplitudes:
     def test_amps(self):
         rng = np.random.default_rng()
         ns, fs = 200, 100
-        n_out, n_in = 1, 1
+        n_out, n_in = 3, 2
         _amps, _freqs = [], []
 
-        dof = 2
+        dof = 3
         if dof > 0:
             modal = mechanical.randomSystem(
-                masses=rng.uniform(1, 2, dof),
+                masses=rng.uniform(0.1, 0.2, dof),
                 dampings=rng.uniform(0.02, 0.05, dof),
                 resonances=rng.uniform(2*np.pi*1, 2*np.pi*20, dof),
                 damping_type='nop',
@@ -351,8 +351,8 @@ class TestAmplitudes:
 
         n_c, n_r = 2, 2
         c_freqs = -rng.uniform(0.1, 1, n_c) + 2j*np.pi*rng.uniform(1, 50, n_c)
-        c_amps = rng.normal(scale=1, size=(n_out, n_in, n_c)).astype(np.complex128)
-        c_amps += 1j * rng.normal(scale=.1, size=(n_out, n_in, n_c))
+        c_amps = rng.normal(scale=1., size=(n_out, n_in, n_c)).astype(np.complex128)
+        c_amps += 1j * rng.normal(scale=1e-1, size=(n_out, n_in, n_c))
         r_freqs = -rng.uniform(0.1, 1, n_r) + np.pi*fs*1j*rng.integers(0, 2, size=n_r)
         r_amps = rng.normal(scale=1, size=(n_out, n_in, n_r))
         freqs = np.concatenate([c_freqs, r_freqs], dtype=complex)
