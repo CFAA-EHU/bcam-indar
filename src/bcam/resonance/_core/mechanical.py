@@ -719,21 +719,36 @@ class PartialModesMap:
 
         # Check mass positivity.
         dof = len(self.freqs)
+
+        def positivity(D, matrix:str, sign=1):
+            m = D[0][:, np.newaxis] * z_.T
+            m += m.T
+            m[np.arange(dof), np.arange(dof)] += D[1]
+            m -= (z_ * D[1][np.newaxis, :]) @ z_.T
+            m *= sign
+            success = True
+            try:
+                chk = scipy.linalg.cholesky(
+                    m, lower=False, overwrite_a=True)
+            except scipy.linalg.LinAlgError:
+                chk = np.nan
+                logger.warning(f'{matrix} matrix is not positive-definite.')
+                success = False
+            return chk, success
+
         D = np.real(self.freqs), np.imag(self.freqs)
-        m = D[0][:, np.newaxis] * z_.T
-        m += m.T
-        m[np.arange(dof), np.arange(dof)] += D[1]
-        m -= (z_ * D[1][np.newaxis, :]) @ z_.T
-        try:
-            self._chk = scipy.linalg.cholesky(
-                m, lower=False, overwrite_a=True)
-        except scipy.linalg.LinAlgError:
-            self._chk = np.nan
-            logger.warning('Mass matrix is not positive-definite.')
+        self._mass_chk, mass_success = positivity(D, 'Mass')
+        if not mass_success:
             self._psi = np.nan
             return
 
-        self._psi = x + 1j * x @ z_
+        D = np.real(self.freqs**2), np.imag(self.freqs**2)
+        self._damp_chk, damp_success = positivity(D, 'Damping', sign=-1)
+        if not damp_success:
+            self._psi = np.nan
+            return
+
+        self._psi = x + 1j*x@z_
 
     def __call__(self, x, z):
         """
@@ -833,20 +848,32 @@ class PartialModesMap:
         self.point = (x, z)
         q = self._grass[0]
         c_res = -np.mean(np.log(np.diag(q[self.coords])))
-        if isinstance(self._chk, float) and np.isnan(self._chk):
-            c_pos = 1e50
-        else:
-            c_pos = -np.mean(np.log(np.diag(self._chk)))
-        return np.array([c_res, c_pos])
+        c_pos = []
+        for constr in [self._mass_chk, self._damp_chk]:
+            if isinstance(constr, float) and np.isnan(constr):
+                c_pos.append(1e50)
+            else:
+                c_pos.append(-np.mean(np.log(np.diag(constr))))
+
+        return np.array([c_res, *c_pos])
 
     def _dmass(self, dz_):
         D = np.real(self.freqs), np.imag(self.freqs)
 
-        dm = D[0][:, np.newaxis] * dz_.T
+        dm = D[0][:, np.newaxis]*dz_.T
         dm += dm.T
-        dm_ = (self._z_ * D[1][np.newaxis, :]) @ dz_.T
+        dm_ = (self._z_*D[1][np.newaxis, :])@dz_.T
         dm_ += dm_.T
-        return dm - dm_
+        return dm-dm_
+
+    def _ddamp(self, dz_):
+        D = np.real(self.freqs**2), np.imag(self.freqs**2)
+
+        dm = D[0][:, np.newaxis]*dz_.T
+        dm += dm.T
+        dm_ = (self._z_*D[1][np.newaxis, :])@dz_.T
+        dm_ += dm_.T
+        return -(dm-dm_)
 
     def jac_constraints(self, x, z):
         self.point = (x, z)
@@ -855,16 +882,17 @@ class PartialModesMap:
         def d_constr(dx, dz):
             self.vector = (dx, dz)
             dq = self._dq
-            jac = np.zeros(2)
+            jac = np.zeros(3)
 
             jac[0] = -np.mean(np.diag(dq[self.coords])/np.diag(q[self.coords]))
 
-            if isinstance(self._chk, float):
-                jac[1] = 0
-            else:
-                dchk = self._dmass(self._dz_)
-                dchk = derivatives.jac_cho(self._chk, dchk)
-                jac[1] = -np.mean(np.diag(dchk)/np.diag(self._chk))
+            for i, fun, chk in zip([1, 2], [self._dmass, self._ddamp], [self._mass_chk, self._damp_chk]):
+                if isinstance(chk, float):
+                    jac[i] = 0
+                else:
+                    dchk = fun(self._dz_)
+                    dchk = derivatives.jac_cho(chk, dchk)
+                    jac[i] = -np.mean(np.diag(dchk)/np.diag(chk))
             return jac
 
         return d_constr
@@ -876,12 +904,21 @@ class PartialModesMap:
         d2m_ += d2m_.T
         return d2m - d2m_
 
+    def _hessp_d(self, pz, pdz_, pdq, pd2q):
+        d2z_ = self._hessp_z_(pz, pdq, pd2q)
+        d2m = self._ddamp(d2z_)
+        d2m_ = (pdz_ * np.imag(self.freqs**2)[np.newaxis, :]) @ self._dz_.T
+        d2m_ += d2m_.T
+        return d2m+d2m_
+
     def hessp_constraints(self, x, z, px, pz):
         self.point = (x, z)
         self._compute_jac_expensive(px, pz)
         pdq, pds, pdz_ = self._dq, self._ds, self._dz_
-        pdchk = self._dmass(pdz_)
-        pdchk = derivatives.jac_cho(self._chk, pdchk)
+        pdm_chk = self._dmass(pdz_)
+        pdm_chk = derivatives.jac_cho(self._mass_chk, pdm_chk)
+        pdd_chk = self._ddamp(pdz_)
+        pdd_chk = derivatives.jac_cho(self._damp_chk, pdd_chk)
 
         def local(a, da, pda, pd2a):
             idx = (np.arange(len(a)), np.arange(len(a)))
@@ -893,20 +930,33 @@ class PartialModesMap:
             q = self._grass[0]
             pd2q, _ = derivatives.hessp_grass(
                 pdq, pds, self._dq, self._ds, self.coords, self._grass)
-            hessp = np.zeros(2)
+            hessp = np.zeros(3)
 
             hessp[0] = -np.mean(local(
                 q[self.coords], self._dq[self.coords], pdq[self.coords], pd2q[self.coords]))
 
-            if isinstance(self._chk, float):
+            if isinstance(self._mass_chk, float):
                 hessp[1] = 0
             else:
                 dchk = self._dmass(self._dz_)
-                dchk = derivatives.jac_cho(self._chk, dchk)
+                dchk = derivatives.jac_cho(self._mass_chk, dchk)
                 d2chk = self._hessp_m(pz, pdz_, pdq, pd2q)
 
-                d2chk = derivatives.jac_cho(self._chk, d2chk - pdchk.T@dchk - dchk.T@pdchk)
-                hessp[1] = -np.mean(local(self._chk, dchk, pdchk, d2chk))
+                d2chk = derivatives.jac_cho(
+                    self._mass_chk, d2chk - pdm_chk.T@dchk - dchk.T@pdm_chk)
+                hessp[1] = -np.mean(local(self._mass_chk, dchk, pdm_chk, d2chk))
+
+            if isinstance(self._damp_chk, float):
+                hessp[2] = 0
+            else:
+                dchk = self._ddamp(self._dz_)
+                dchk = derivatives.jac_cho(self._damp_chk, dchk)
+                d2chk = self._hessp_d(pz, pdz_, pdq, pd2q)
+
+                d2chk = derivatives.jac_cho(
+                    self._damp_chk, d2chk - pdd_chk.T@dchk - dchk.T@pdd_chk)
+                hessp[2] = -np.mean(local(self._damp_chk, dchk, pdd_chk, d2chk))
+
             return hessp
 
         return hessp_fun
@@ -1334,10 +1384,10 @@ class ComplexModes:
             return np.array(hessp).T
 
         dim = 2*n_out*dof - n_out*(n_out+1)//2
-        shift = self._ref_constr + np.array([1, 1])
+        shift = self._ref_constr + np.array([1, 1, 1])
         scalar_f = ConstraintModifier(shift, 0.1)
         constraints = ScalarComposition(
-            scalar_f, constr_fun, constr_jac, constr_hessp, (2, dim))
+            scalar_f, constr_fun, constr_jac, constr_hessp, (3, dim))
 
         def constr_hess(x, v):
             def hess(p):
@@ -1346,8 +1396,8 @@ class ComplexModes:
 
         r = scipy.optimize.NonlinearConstraint(
             constraints,
-            lb=np.array([-np.inf, -np.inf]),
-            ub=np.array([5, 5]),
+            lb=np.array([-np.inf, -np.inf, -np.inf]),
+            ub=np.array([5, 5, 5]),
             jac=constraints.jac,
             hess=constr_hess,
             keep_feasible=True
@@ -1364,6 +1414,9 @@ class ComplexModes:
         x0 = tuple(e/np.sqrt(self._rescale) for e in x0)
 
         self._ref_constr = self._modes_map.constraints(*x0)
+        if np.any(np.isnan(self._ref_constr)):
+            msg = 'Initial guess does not satisfy constraints.'
+            raise ValueError(msg)
 
         def callback(intermediate_result:scipy.optimize.OptimizeResult):
             if intermediate_result.nit >= maxiter:
