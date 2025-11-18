@@ -230,7 +230,7 @@ class TestModesFitting:
     def test_prop(self):
         dof, n_out, n_in = 4, 3, 2
         rng = np.random.default_rng()
-        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        freqs = -rng.uniform(1, 2, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
         modes_m = rng.normal(size=(n_out, dof))
         amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
 
@@ -247,12 +247,12 @@ class TestModesFitting:
     def test_complex(self):
         dof, n_out, n_in = 4, 3, 2
         rng = np.random.default_rng()
-        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        freqs = -rng.uniform(2, 5, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
         coords = np.arange(n_out)
         modes_m = np.nan
         while isinstance(modes_m, float):
             xm = rng.normal(size=(n_out, dof))
-            zm = 5e-2*rng.normal(size=(n_out, dof))
+            zm = 1e-2*rng.normal(size=(n_out, dof))
             zm[:n_out, :n_out] = zm[:n_out, :n_out] - zm[:n_out, :n_out].T
             modes_m = mechanical.PartialModesMap(freqs, coords)(xm, zm)
         amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
@@ -275,7 +275,7 @@ class TestModesFitting:
         # The result is unique up to a sign flip in each mode.
         modes_fit *= np.sign(np.real(modes_m[0, :]/modes_fit[0, :]))[np.newaxis, :]
 
-        # assert modes.success_
+        assert modes.optRes_['success']
         assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)
 
 # Fitting tests
