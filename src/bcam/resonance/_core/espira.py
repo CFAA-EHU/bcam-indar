@@ -733,20 +733,22 @@ class EspiraR(BaseEstimator):
             *,
             order=None,
             damping=0.,
+            fs:float=1.,
             store_y=True,
             copy_y=True):
         self.order = order
         self.damping = damping
+        self.fs = fs
         self.store_y = store_y
         self.copy_y = copy_y
 
     @property
     def r_resonances_(self):
-        return np.log(self.r_poles_)
+        return np.log(self.r_poles_.astype(complex))*self.fs
 
     @property
     def c_resonances_(self):
-        return np.log(self.c_poles_)
+        return np.log(self.c_poles_)*self.fs
 
     @property
     def resonances_(self):
@@ -763,14 +765,15 @@ class EspiraR(BaseEstimator):
 
     def fit(self, y, parity, seed_freqs=None):
         N = y.shape[0]
-        N_ = 2*(N-1)+parity
+        ns = 2*(N-1)+parity
+        self._ns = ns
         rational = RatAppSym(order=self.order, store_y=self.store_y)
-        ωN = np.exp(-2j*np.pi/N_)
+        ωN = np.exp(-2j*np.pi/ns)
         if self.copy_y:
             y = np.copy(y)
         if self.damping > 0.:
-            x = np.fft.irfft(y, n=N_, axis=0)
-            x *= np.pow(self.damping, np.arange(N_)/(N_-1))[:, np.newaxis]
+            x = np.fft.irfft(y, n=ns, axis=0)
+            x *= np.pow(self.damping, np.arange(ns)/(ns-1))[:, np.newaxis]
             np.fft.rfft(x, axis=0, out=y)
             del x
         y *= (ωN**np.arange(N))[:, np.newaxis]
@@ -780,11 +783,11 @@ class EspiraR(BaseEstimator):
 
         self.r_poles_ = np.copy(rational.r_poles_)
         self.c_poles_ = np.copy(rational.c_poles_)
-        self.r_amps_ = rational.r_residues_/(1-(rational.r_poles_[:, np.newaxis])**N_)
-        self.c_amps_ = rational.c_residues_/(1-(rational.c_poles_[:, np.newaxis])**N_)
+        self.r_amps_ = rational.r_residues_/(1-(rational.r_poles_[:, np.newaxis])**ns)
+        self.c_amps_ = rational.c_residues_/(1-(rational.c_poles_[:, np.newaxis])**ns)
         if self.damping > 0.:
-            self.r_poles_ *= np.pow(self.damping, -1/(N_-1))
-            self.c_poles_ *= np.pow(self.damping, -1/(N_-1))
+            self.r_poles_ *= np.pow(self.damping, -1/(ns-1))
+            self.c_poles_ *= np.pow(self.damping, -1/(ns-1))
 
         return self
 
@@ -806,6 +809,38 @@ class EspiraR(BaseEstimator):
         if self.damping > 0.:
             self.r_poles_ *= np.pow(self.damping, -1/(N_-1))
             self.c_poles_ *= np.pow(self.damping, -1/(N_-1))
+
+        return self
+
+    def pole_pruning(self, stol:float=1e-5):
+        ns = self._ns
+        poles = [self.r_poles_, self.c_poles_]
+        amps = [self.r_amps_, self.c_amps_]
+
+        # Remove unstable poles.
+        for i in [0, 1]:
+            idxs = np.nonzero(np.abs(poles[i]) <= 1)[0]
+            poles[i] = poles[i][idxs]
+            amps[i] = amps[i][idxs]
+
+        # Remove spurious poles.
+        avg_norm = 0
+        if len(poles[0]) > 0:
+            avg_norm += np.sum(
+                (amps[0]**2)*(_inner_prod(ns, poles[0])[:, np.newaxis]))
+        if len(poles[1]) > 0:
+            avg_norm += np.sum(
+                amps[1]*np.conj(amps[1])*_inner_prod(ns, poles[1])[:, np.newaxis])
+        avg_norm = np.sqrt(np.real(avg_norm))
+        for i in [0, 1]:
+            idxs = np.nonzero(np.linalg.norm(amps[i], axis=1) >= stol*avg_norm)[0]
+            poles[i] = poles[i][idxs]
+            amps[i] = amps[i][idxs]
+
+        self.r_poles_ = poles[0]
+        self.c_poles_ = poles[1]
+        self.r_amps_ = amps[0]
+        self.c_amps_ = amps[1]
 
         return self
 
@@ -1092,26 +1127,3 @@ class StablePoles:
         ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
 
         return ax
-
-def pole_pruning(amps, poles, ns, stol=1e-5):
-    # Remove unstable poles.
-    for i in [0, 1]:
-        idxs = np.nonzero(np.abs(poles[i]) <= 1)[0]
-        poles[i] = poles[i][idxs]
-        amps[i] = amps[i][idxs]
-    
-    # Remove spurious poles.
-    avg_norm = 0
-    if len(poles[0]) > 0:
-        avg_norm += np.sum(
-            (amps[0]**2)*(_inner_prod(ns, poles[0])[:, np.newaxis]))
-    if len(poles[1]) > 0:
-        avg_norm += np.sum(
-            amps[1]*np.conj(amps[1])*_inner_prod(ns, poles[1])[:, np.newaxis])
-    avg_norm = np.sqrt(np.real(avg_norm))
-    for i in [0, 1]:
-        idxs = np.nonzero(np.linalg.norm(amps[i], axis=1) >= stol*avg_norm)[0]
-        poles[i] = poles[i][idxs]
-        amps[i] = amps[i][idxs]
-
-    return amps, poles

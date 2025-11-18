@@ -372,7 +372,7 @@ class Amplitudes(BaseEstimator):
                 cn = c+n_in-i
                 diag_u = (np.arange(n_in-i), i+np.arange(n_in-i))
                 diag_l = (i+np.arange(n_in-i), np.arange(n_in-i))
-                roff[c:cn, :dim_res] = (r1[diag_u]+r1[diag_l])
+                roff[c:cn, :dim_res] = r1[diag_u]+r1[diag_l]
                 roff[c:cn, dim_res:dim_res+2*n_c] = r2[diag_u]
                 roff[c:cn, dim_res+2*n_c:dim] = r3[diag_u]
                 roff[c:cn, dim:dim+2*n_c] = r2[diag_l]
@@ -502,6 +502,43 @@ class Amplitudes(BaseEstimator):
             K2 = K2 * np.exp(freqs[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, nf)
             K2 = np.real(np.sum(K2, axis=-1))
             K += K2
+
+        return K
+    
+    def mech_part(self, X):
+        resonances = self._freqs['resonances']
+        X = np.atleast_1d(X)
+        ns = X.shape[0]
+        fs = self.fs
+
+        dof = len(resonances)
+        if dof > 0:
+            K = 2*fs*np.exp(resonances/(2*fs)) * np.sinh(resonances/(2*fs))
+            if self.response == 'a':
+                K *= resonances
+            K = self.tensor_modes_ * K.reshape(1, 1, dof)
+            K = np.expand_dims(K, axis=2)
+            K = K * np.exp(resonances[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, dof)
+            K = np.imag(np.sum(K, axis=-1))
+        else:
+            K = 0
+
+        return K
+    
+    def residual(self, X):
+        _, c_freqs, r_freqs = list(self._freqs.values())
+        X = np.atleast_1d(X)
+        ns = X.shape[0]
+
+        freqs = np.concatenate([c_freqs, r_freqs], dtype=complex)
+        amps = np.concatenate([self.complex_amps_, self.real_amps_], axis=-1)
+        nf = len(freqs)
+        if nf > 0:
+            K = np.expand_dims(amps, axis=2)
+            K = K * np.exp(freqs[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, nf)
+            K = np.real(np.sum(K, axis=-1))
+        else:
+            K = 0
 
         return K
 
@@ -875,26 +912,58 @@ class PartialModesMap:
         return hessp_fun
 
 
+def _metric_amps_modes(resonances, fs, ns, response='a'):
+    '''
+    Compute the metric for amplitude coefficients.
+    '''
+    dof = len(resonances)
+
+    if response not in ['a', 'v']:
+        raise ValueError(f'Unknown response type: {response}')
+
+    # Model resonances block.
+    def _mult(x, y):
+        r = x[np.newaxis, :] + y[:, np.newaxis]
+        r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
+        r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs))*np.sinh(y[:, np.newaxis]/(2*fs))
+        if response == 'a':
+            r *= x[np.newaxis, :]*y[:, np.newaxis]
+        return r
+
+    m1 = _mult(resonances, np.conj(resonances))
+    m2 = _mult(resonances, resonances)
+
+    m_r_r = np.zeros((2*dof, 2*dof))
+    m_r_r[:dof, :dof] = np.real(m1 - m2)
+    m_r_r[dof:, :dof] = np.imag(m1 + m2)
+    m_r_r[:dof, dof:] = m_r_r[dof:, :dof].T
+    m_r_r[dof:, dof:] = np.real(m1 + m2)
+    m_r_r *= 0.5
+
+    return np.real(m_r_r)
+
 class RealModes:
 
     def __init__(
         self,
-        freqs,
+        resonances,
         amps,
-        fs:int,
-        ns:int
+        ns:int,
+        response:str='a',
+        fs:int=1,
     ):
-        assert freqs.ndim == 1, 'Expected a 1D-array for frequencies.'
+        assert resonances.ndim == 1, 'Expected a 1D-array for frequencies.'
         assert amps.ndim == 3, 'Expected a 3D-array for amplitudes.'
         n_out, n_in, dof = amps.shape
         assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
-        assert dof == len(freqs), 'The last dimension of amplitudes must match the number of frequencies.'
+        assert dof == len(resonances), 'The last dimension of amplitudes must match the number of frequencies.'
         assert dof >= n_out, 'dof must be greater than or equal to n_out.'
 
-        self.freqs = freqs
+        self.resonances = resonances
         self.amps = amps
         self.fs = fs
         self.ns = ns
+        self.response = response
 
         self._rescale = np.max(np.abs(amps))
         self.modes_fit_ = None
@@ -904,8 +973,8 @@ class RealModes:
         self._get_metric()
 
     def _get_metric(self):
-        self._metric = metric_amps(
-            self.freqs, self.fs, self.ns, a_type='normal')
+        self._metric = _metric_amps_modes(
+            self.resonances, self.fs, self.ns, response=self.response)
 
     def _fun(self, x):
         n_out, n_in, dof = self.amps.shape
@@ -1005,7 +1074,32 @@ class RealModes:
         self.modes_fit_ = np.sqrt(self._rescale) * res.x.reshape(n_out, dof)
         self.success_ = res.success
         self.message_ = res.message
-        return self.modes_fit_
+
+        return self
+
+    def predict(self, X, response:str=None):
+        X = np.atleast_1d(X)
+        ns = X.shape[0]
+        dof = len(self.resonances)
+        response = self.response if response is None else response
+        K = np.zeros((ns, self.amps.shape[0]), dtype=float)
+
+        if self.modes_fit_ is None:
+            msg = 'Call fit() before accessing modes_fit_.'
+            raise ValueError(msg)
+
+        n_out, n_in = self.amps.shape[:2]
+        amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
+        K = 2*self.fs*np.exp(self.resonances/(2*self.fs)) * np.sinh(self.resonances/(2*self.fs))
+        if response == 'a':
+            K *= self.resonances
+        K = amps_fit * K.reshape(1, dof)
+        K = np.expand_dims(K, axis=2)
+        K = K * np.exp(self.resonances[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, dof)
+        K = np.imag(np.sum(K, axis=-1))
+
+        return K
+
 
 
 class ConstraintModifier:
@@ -1101,24 +1195,26 @@ class ComplexModes:
 
     def __init__(
         self,
-        freqs,
+        resonances,
         coords,
         amps,
         fs:int,
         ns:int,
+        response:str='a',
     ):
-        self.freqs = freqs
-        assert freqs.ndim == 1, 'Expected 1D array for frequencies.'
-        
+        self.resonances = resonances
+        assert resonances.ndim == 1, 'Expected 1D array for frequencies.'
+
         self.amps = amps
         assert amps.ndim == 3, 'Expected 3D array for amplitudes.'
-        assert amps.shape[2] == len(freqs), 'Incompatible shapes for frequencies and amplitudes.'
-        
+        assert amps.shape[2] == len(resonances), 'Incompatible shapes for frequencies and amplitudes.'
+
         self.fs = fs
         self.ns = ns
+        self.response = response
         PartialModesMap.atol = 1e-10
         PartialModesMap.rtol = 1e-8
-        self._modes_map = PartialModesMap(freqs, coords)
+        self._modes_map = PartialModesMap(resonances, coords)
 
         self._rescale = np.max(np.abs(amps))
         self._get_metric()
@@ -1135,8 +1231,8 @@ class ComplexModes:
         return np.sqrt(self._rescale) * self._modes_map(*self._raw_modes_fit)
 
     def _get_metric(self):
-        self._metric = metric_amps(
-            self.freqs, self.fs, self.ns, a_type='normal')
+        self._metric = _metric_amps_modes(
+            self.resonances, self.fs, self.ns, response=self.response)
 
     def _fun(self, x):
         n_out, n_in, dof = self.amps.shape
@@ -1286,7 +1382,31 @@ class ComplexModes:
         n_out, _, dof = self.amps.shape
         self._raw_modes_fit = reshape_modes_input(res.x, dof, n_out)
         self.optRes_ = res
-        return self.modes_fit_
+
+        return self
+
+    def predict(self, X, response:str=None):
+        X = np.atleast_1d(X)
+        ns = X.shape[0]
+        dof = len(self.resonances)
+        response = self.response if response is None else response
+        K = np.zeros((ns, self.amps.shape[0]), dtype=float)
+
+        if self.modes_fit_ is None:
+            msg = 'Call fit() before accessing modes_fit_.'
+            raise ValueError(msg)
+
+        n_out, n_in = self.amps.shape[:2]
+        amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
+        K = 2*self.fs*np.exp(self.resonances/(2*self.fs)) * np.sinh(self.resonances/(2*self.fs))
+        if response == 'a':
+            K *= self.resonances
+        K = amps_fit * K.reshape(1, dof)
+        K = np.expand_dims(K, axis=2)
+        K = K * np.exp(self.resonances[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, dof)
+        K = np.imag(np.sum(K, axis=-1))
+
+        return K
 
 
 def modal_to_system(mode_shapes, Z):
