@@ -269,10 +269,10 @@ class RatAppSym(BaseEstimator):
     def __init__(
             self,
             *,
-            order=None,
-            store_y=True):
+            order:int=None,
+            save_intermediate:bool=False):
         self.order = order
-        self.store_y = store_y
+        self.save_intermediate = save_intermediate
 
     @staticmethod
     def count_freqs(idxs, N, parity):
@@ -526,13 +526,7 @@ class RatAppSym(BaseEstimator):
         logger.debug(f'==== step: {step} ====')
         r, w = self._get_weights(gS, gG, parity)
 
-        if self.store_y:
-            self._y = y
-            self._parity = parity
-            if not hasattr(self, '_freqs'):
-                self._freqs = np.array(gS['index'])
-            elif len(gS['index']) > len(self._freqs):
-                self._freqs = np.array(gS['index'])
+        self.indices_ = np.array(gS['index'])
 
         # Find if S contains 0 and N.
         endsS = []
@@ -558,7 +552,7 @@ class RatAppSym(BaseEstimator):
             [self.r_residues_, self.c_residues_, np.conj(self.c_residues_)],
             axis=0)
 
-    def fit(self, y, parity, seed_freqs=None):
+    def fit(self, y, parity, seed_freqs=None, indices=None):
         N, rank = y.shape
         N_ = 2*(N-1)+parity
         max_order = _get_max_order((N_, rank))
@@ -568,12 +562,16 @@ class RatAppSym(BaseEstimator):
             msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
             raise ValueError(msg)
 
+        if indices is None:
+            seed_ = self.set_seed_freqs(y, parity, seed_freqs=seed_freqs)
+        else:
+            seed_ = np.asarray(indices)
+
         if self.order > max_order:
             msg = f'The order exceeds the maximum allowed order {max_order}.'
             raise ValueError(msg)
 
-        _freqs = self.set_seed_freqs(y, parity, seed_freqs=seed_freqs)
-        poles, residues = self._fit(y, parity, _freqs)
+        poles, residues = self._fit(y, parity, seed_)
 
         self.r_poles_ = np.array(poles[0])
         self.c_poles_ = np.array(poles[1])
@@ -582,51 +580,51 @@ class RatAppSym(BaseEstimator):
 
         return self
 
-    def refit(self):
-        if not self.store_y:
-            msg = 'Refit option is disabled.'
-            logger.warning(msg, stacklevel=2)
-            return self
+    # def refit(self):
+    #     if not self.store_y:
+    #         msg = 'Refit option is disabled.'
+    #         logger.warning(msg, stacklevel=2)
+    #         return self
 
-        N, rank = self._y.shape
-        N_ = 2*(N-1)+self._parity
-        max_order = _get_max_order((N_, rank))
-        if rank > self.order:
-            msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
-            raise ValueError(msg)
+    #     N, rank = self._y.shape
+    #     N_ = 2*(N-1)+self._parity
+    #     max_order = _get_max_order((N_, rank))
+    #     if rank > self.order:
+    #         msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
+    #         raise ValueError(msg)
 
-        if self.order > max_order:
-            msg = f'The number of poles must be less than half the number of time samples. \
-            max_order readjusted to {max_order}'
-            raise ValueError(msg)
+    #     if self.order > max_order:
+    #         msg = f'The number of poles must be less than half the number of time samples. \
+    #         max_order readjusted to {max_order}'
+    #         raise ValueError(msg)
 
-        # Set frequencies.
-        n_freqs = self.count_freqs(self._freqs, N, self._parity)
-        if n_freqs-1 > self.order:
-            count = 0
-            n_freqs = 0
-            while n_freqs-1 < self.order:
-                count += 1
-                n_freqs = self.count_freqs(self._freqs[:count], N, self._parity)
-            _freqs = self._freqs[:count]
-        elif n_freqs-1 == self.order:
-            _freqs = self._freqs
-        else:
-            ωN = np.exp(-2j*np.pi/N_)
-            c_freqs = np.setdiff1d(np.arange(N), self._freqs, assume_unique=True)
-            y_pred = self.predict(ωN**(-c_freqs))
-            idx = np.argmax(np.linalg.norm(self._y[c_freqs]-y_pred, axis=1))
-            del y_pred
-            _freqs = np.append(self._freqs, c_freqs[idx])
+    #     # Set frequencies.
+    #     n_freqs = self.count_freqs(self._freqs, N, self._parity)
+    #     if n_freqs-1 > self.order:
+    #         count = 0
+    #         n_freqs = 0
+    #         while n_freqs-1 < self.order:
+    #             count += 1
+    #             n_freqs = self.count_freqs(self._freqs[:count], N, self._parity)
+    #         _freqs = self._freqs[:count]
+    #     elif n_freqs-1 == self.order:
+    #         _freqs = self._freqs
+    #     else:
+    #         ωN = np.exp(-2j*np.pi/N_)
+    #         c_freqs = np.setdiff1d(np.arange(N), self._freqs, assume_unique=True)
+    #         y_pred = self.predict(ωN**(-c_freqs))
+    #         idx = np.argmax(np.linalg.norm(self._y[c_freqs]-y_pred, axis=1))
+    #         del y_pred
+    #         _freqs = np.append(self._freqs, c_freqs[idx])
 
-        poles, residues = self._fit(self._y, self._parity, _freqs)
+    #     poles, residues = self._fit(self._y, self._parity, _freqs)
 
-        self.r_poles_ = np.array(poles[0])
-        self.c_poles_ = np.array(poles[1])
-        self.r_residues_ = np.array(residues[0])
-        self.c_residues_ = np.array(residues[1])
+    #     self.r_poles_ = np.array(poles[0])
+    #     self.c_poles_ = np.array(poles[1])
+    #     self.r_residues_ = np.array(residues[0])
+    #     self.c_residues_ = np.array(residues[1])
 
-        return self
+    #     return self
 
     def predict(self, X):
         return rational_function(
