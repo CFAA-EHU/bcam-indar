@@ -268,13 +268,16 @@ def H1(X, y):
     if X.shape != y.shape:
         raise ValueError("Input X and y must have the same shape.")
     if X.ndim == 1:
-        X = X.reshape(-1, 1)
-        y = y.reshape(-1, 1)
+        X = X.reshape(1, -1)
+        y = y.reshape(1, -1)
 
+    X_fr = np.fft.rfft(X, axis=1)
+    y_fr = np.fft.rfft(y, axis=1)
     H1_num = sum(
-        np.fft.rfft(X[:, rep])*np.conj(np.fft.rfft(y[:, rep]))
-        for rep in range(X.shape[1]))
+        np.conj(X_fr[rep])*y_fr[rep]
+        for rep in range(X.shape[0]))
     H1_den = sum(
-        np.abs(np.fft.rfft(X[:, rep]))**2
-        for rep in range(X.shape[1]))
+        np.abs(X_fr[rep])**2
+        for rep in range(X.shape[0]))
+
     return H1_num/H1_den
