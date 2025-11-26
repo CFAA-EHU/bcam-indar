@@ -270,9 +270,9 @@ class RatAppSym(BaseEstimator):
             self,
             *,
             order:int=None,
-            save_intermediate:bool=False):
+            reuse:bool=False):
         self.order = order
-        self.save_intermediate = save_intermediate
+        self.reuse = reuse
 
     @staticmethod
     def count_freqs(idxs, N, parity):
@@ -496,7 +496,8 @@ class RatAppSym(BaseEstimator):
         )
 
         if np.linalg.norm(residues[-1]) > 1e-8:
-            msg = 'The constant term of rational function is not close to zero.'
+            msg = f'The constant term of rational function is not close to zero.\
+                Its value is {np.linalg.norm(residues[-1])}.'
             logger.error(msg, stacklevel=2)
         residues = residues[:-1]
         residues = [residues[:lr], residues[lr:lr+lc]+1j*residues[lr+lc:]]
@@ -510,14 +511,16 @@ class RatAppSym(BaseEstimator):
 
     def _fit(self, y, parity, indices):
         N = y.shape[0]
-        step = 1
         gS, gG = self._initialize_sets(y, indices)
         n_freqs = self.count_freqs(gS['index'], N, parity)
+
+        step = 1
         while n_freqs-1 < self.order:
             logger.debug(f'==== step: {step} ====')
             r, w = self._get_weights(gS, gG, parity)
             idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
             _update_sets(gS, gG, idx)
+
             if (gS['index'][-1] == 0) or (parity == 0 and gS['index'][-1] == N-1):
                 n_freqs += 1
             else:
@@ -525,8 +528,13 @@ class RatAppSym(BaseEstimator):
             step += 1
         logger.debug(f'==== step: {step} ====')
         r, w = self._get_weights(gS, gG, parity)
+        idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
 
-        self.indices_ = np.array(gS['index'])
+        if self.reuse:
+            if len(gS['index'])+1 > len(self.indices_):
+                self.indices_ = gS['index'].copy()
+                self.indices_.append(gG['index'][idx])
+                self.indices_ = np.array(self.indices_)
 
         # Find if S contains 0 and N.
         endsS = []
@@ -552,7 +560,7 @@ class RatAppSym(BaseEstimator):
             [self.r_residues_, self.c_residues_, np.conj(self.c_residues_)],
             axis=0)
 
-    def fit(self, y, parity, seed_freqs=None, indices=None):
+    def fit(self, y, parity, seed_freqs=None):
         N, rank = y.shape
         N_ = 2*(N-1)+parity
         max_order = _get_max_order((N_, rank))
@@ -562,16 +570,27 @@ class RatAppSym(BaseEstimator):
             msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
             raise ValueError(msg)
 
-        if indices is None:
-            seed_ = self.set_seed_freqs(y, parity, seed_freqs=seed_freqs)
+        if hasattr(self, 'indices_') and (seed_freqs is None):
+            indices = self.indices_
+            n_freqs = 0
+            i = 0
+            while n_freqs-1 < self.order:
+                if (indices[i] == 0) or (parity == 0 and indices[i] == N-1):
+                    n_freqs += 1
+                else:
+                    n_freqs += 2
+                i += 1
+            indices = indices[:i]
         else:
-            seed_ = np.asarray(indices)
+            indices = self.set_seed_freqs(y, parity, seed_freqs=seed_freqs)
+            if self.reuse:
+                self.indices_ = indices
 
         if self.order > max_order:
             msg = f'The order exceeds the maximum allowed order {max_order}.'
             raise ValueError(msg)
 
-        poles, residues = self._fit(y, parity, seed_)
+        poles, residues = self._fit(y, parity, indices)
 
         self.r_poles_ = np.array(poles[0])
         self.c_poles_ = np.array(poles[1])
@@ -579,52 +598,6 @@ class RatAppSym(BaseEstimator):
         self.c_residues_ = np.array(residues[1])
 
         return self
-
-    # def refit(self):
-    #     if not self.store_y:
-    #         msg = 'Refit option is disabled.'
-    #         logger.warning(msg, stacklevel=2)
-    #         return self
-
-    #     N, rank = self._y.shape
-    #     N_ = 2*(N-1)+self._parity
-    #     max_order = _get_max_order((N_, rank))
-    #     if rank > self.order:
-    #         msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
-    #         raise ValueError(msg)
-
-    #     if self.order > max_order:
-    #         msg = f'The number of poles must be less than half the number of time samples. \
-    #         max_order readjusted to {max_order}'
-    #         raise ValueError(msg)
-
-    #     # Set frequencies.
-    #     n_freqs = self.count_freqs(self._freqs, N, self._parity)
-    #     if n_freqs-1 > self.order:
-    #         count = 0
-    #         n_freqs = 0
-    #         while n_freqs-1 < self.order:
-    #             count += 1
-    #             n_freqs = self.count_freqs(self._freqs[:count], N, self._parity)
-    #         _freqs = self._freqs[:count]
-    #     elif n_freqs-1 == self.order:
-    #         _freqs = self._freqs
-    #     else:
-    #         ωN = np.exp(-2j*np.pi/N_)
-    #         c_freqs = np.setdiff1d(np.arange(N), self._freqs, assume_unique=True)
-    #         y_pred = self.predict(ωN**(-c_freqs))
-    #         idx = np.argmax(np.linalg.norm(self._y[c_freqs]-y_pred, axis=1))
-    #         del y_pred
-    #         _freqs = np.append(self._freqs, c_freqs[idx])
-
-    #     poles, residues = self._fit(self._y, self._parity, _freqs)
-
-    #     self.r_poles_ = np.array(poles[0])
-    #     self.c_poles_ = np.array(poles[1])
-    #     self.r_residues_ = np.array(residues[0])
-    #     self.c_residues_ = np.array(residues[1])
-
-    #     return self
 
     def predict(self, X):
         return rational_function(
@@ -729,15 +702,15 @@ class EspiraR(BaseEstimator):
     def __init__(
             self,
             *,
-            order=None,
-            damping=0.,
+            order:int=None,
+            damping:float=0.,
             fs:float=1.,
-            store_y=True,
-            copy_y=True):
+            reuse:bool=False,
+            copy_y:bool=True):
         self.order = order
         self.damping = damping
         self.fs = fs
-        self.store_y = store_y
+        self.reuse = reuse
         self.copy_y = copy_y
 
     @property
@@ -765,7 +738,16 @@ class EspiraR(BaseEstimator):
         N = y.shape[0]
         ns = 2*(N-1)+parity
         self._ns = ns
-        rational = RatAppSym(order=self.order, store_y=self.store_y)
+
+        if hasattr(self, '_rational'):
+            rational = self._rational
+        else:
+            rational = RatAppSym()
+            self._rational = rational
+        rational.set_params(
+            order=self.order,
+            reuse=self.reuse)
+
         ωN = np.exp(-2j*np.pi/ns)
         if self.copy_y:
             y = np.copy(y)
@@ -776,8 +758,6 @@ class EspiraR(BaseEstimator):
             del x
         y *= (ωN**np.arange(N))[:, np.newaxis]
         rational.fit(y, parity, seed_freqs=seed_freqs)
-        if self.store_y:
-            self._rational = rational
 
         self.r_poles_ = np.copy(rational.r_poles_)
         self.c_poles_ = np.copy(rational.c_poles_)
@@ -786,27 +766,6 @@ class EspiraR(BaseEstimator):
         if self.damping > 0.:
             self.r_poles_ *= np.pow(self.damping, -1/(ns-1))
             self.c_poles_ *= np.pow(self.damping, -1/(ns-1))
-
-        return self
-
-    def refit(self):
-        if not self.store_y:
-            msg = 'Refit option is disabled.'
-            logger.warning(msg, stacklevel=2)
-            return self
-
-        self._rational.set_params(order=self.order)
-        rational = self._rational.refit()
-
-        self.r_poles_ = np.copy(rational.r_poles_)
-        self.c_poles_ = np.copy(rational.c_poles_)
-        N = rational._y.shape[0]
-        N_ = 2*(N-1)+rational._parity
-        self.r_amps_ = rational.r_residues_/(1-(rational.r_poles_[:, np.newaxis])**N_)
-        self.c_amps_ = rational.c_residues_/(1-(rational.c_poles_[:, np.newaxis])**N_)
-        if self.damping > 0.:
-            self.r_poles_ *= np.pow(self.damping, -1/(N_-1))
-            self.c_poles_ *= np.pow(self.damping, -1/(N_-1))
 
         return self
 
@@ -891,14 +850,14 @@ class StablePoles:
     def __init__(
         self,
         model,
-        orders,
+        max_order,
         *,
         radius=None,
         q:float=1/3,
         min_scale:int=-10
     ):
         self.model = model
-        self.orders = orders
+        self.max_order = max_order
         self.radius = radius
         self.q = q
         self.min_scale = min_scale
@@ -1031,9 +990,8 @@ class StablePoles:
         self._ns = ns
 
         # Validate orders.
-        min_order, max_order = self.orders
-        if (min_order is None) or (min_order < y.shape[1]):
-            min_order = y.shape[1]
+        max_order = self.max_order
+        min_order = y.shape[1]
         max_order_ = _get_max_order((ns, y.shape[1]))
         if (max_order is None) or (max_order > max_order_):
             max_order = max_order_
@@ -1043,11 +1001,12 @@ class StablePoles:
         for order in range(min_order, max_order+1):
             if order <= real_order:
                 continue
-            self.model.set_params(order=order)
+            self.model.set_params(
+                order=order, reuse=True, copy_y=True)
             if order == min_order:
                 self.model.fit(y, parity, seed_freqs=seed_freqs)
             else:
-                self.model.refit()
+                self.model.fit(y, parity)
             real_order = len(self.model.r_poles_) + 2*len(self.model.c_poles_)
 
             amps_ = np.concatenate(

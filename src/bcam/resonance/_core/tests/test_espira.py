@@ -258,17 +258,17 @@ class Test_ESPIRA:
 
         # ==== Fit exponential sum ====
         model = espira.EspiraR(
-            order=2*M, store_y=False, copy_y=False)
+            order=2*M, copy_y=False)
         model.fit(y, N%2)
+        # Remove spurious poles with very small amplitude.
+        model.pole_pruning(stol=1e-5)
+        
         poles_fit = [model.r_poles_, model.c_poles_]
         amps_fit = [model.r_amps_, model.c_amps_]
         idxs = np.argsort(poles_fit[1])
         poles_fit[1] = poles_fit[1][idxs]
         amps_fit[1] = amps_fit[1][idxs]
 
-        # Remove spurious poles with very small amplitude.
-        amps_fit, poles_fit = espira.pole_pruning(
-            amps_fit, poles_fit, N, stol=1e-5)
 
         assert (len(poles_fit[0]) == 0) and (len(poles_fit[1]) == M//2)
         assert np.allclose(poles_fit[1], poles)
