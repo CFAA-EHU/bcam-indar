@@ -269,10 +269,8 @@ class RatAppSym(BaseEstimator):
     def __init__(
             self,
             *,
-            order:int=None,
-            reuse:bool=False):
+            order:int=None):
         self.order = order
-        self.reuse = reuse
 
     @staticmethod
     def count_freqs(idxs, N, parity):
@@ -369,6 +367,7 @@ class RatAppSym(BaseEstimator):
         N_ = 2*(N-1) + parity
         rank = len(gS['data'][0])
         ωN = np.exp(-2j * np.pi / N_)
+
         # Locate zero and N.
         endsS = []
         if gG['index'][0] != 0:
@@ -384,10 +383,12 @@ class RatAppSym(BaseEstimator):
         Lp = Lp / Cp[..., np.newaxis]
         Lm = Lm / Cm[..., np.newaxis]
         mr = 2*len(gS['index']) - len(endsS)
+
         # Adapt matrix L for real and imaginary parts.
         LR = np.zeros(
             (mr, 2*len(gG['data']), rank),
             dtype=np.float64)
+        # Now it come the gymnastics to avoid copying and sorting gS and gG every time.
         # Add frequencies 0 and N/2 if they are in gS.
         ends_ = 2*endsS - np.arange(len(endsS))
         LR[ends_, ::2] = np.real(Lp[endsS])
@@ -414,9 +415,9 @@ class RatAppSym(BaseEstimator):
         gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
         In = scipy.linalg.qr(gS_, pivoting=True)[0]
         In = In[:, rank:]
+
         # Compute weights to find best rational approximation.
         LR = LR @ In
-
         eigval, w = scipy.linalg.svd(
             LR,
             overwrite_a=True,
@@ -435,20 +436,29 @@ class RatAppSym(BaseEstimator):
 
         return p/(q[:, np.newaxis]), w
 
-    def _normal_form(self, barycentric, N, parity):
+    def _get_poles(self, barycentric, N, parity):
         N_ = 2*(N-1) + parity
-        gS, endsS, w = barycentric
-        S = np.array(gS['index'])
-        gS = np.array(gS['data'])
-        inners = np.setdiff1d(np.arange(len(S)), endsS, assume_unique=True)
-        w = np.concatenate((w, np.conj(w[inners])))
-        M = 2*len(S) - len(endsS) - 1
+        S, w = barycentric
+        idxs = np.argsort(S)
+        S = S[idxs]
+        w = w[idxs]
+
+        e = np.array([0, len(S)])
+        c = 0
+        if S[0] == 0:
+            e[0] = 1
+            c += 1
+        if parity == 0 and (S[-1] == N-1):
+            e[1] = len(S)-1
+            c += 1
+        M = 2*len(S) - c - 1
         ωN = np.exp(-2j * np.pi / N_)
 
+        w = np.concatenate((w, np.conj(w[e[0]:e[1]])))
         a = np.zeros((M+2, M+2), dtype=np.complex128)
         a[1:, 0] = 1
         a[0, 1:] = w
-        a[1:, 1:] = np.diag(ωN**(np.concatenate((-S, S[inners]))))
+        a[1:, 1:] = np.diag(ωN**(np.concatenate((-S, S[e[0]:e[1]]))))
 
         b = np.eye(M+2, dtype=np.complex128)
         b[0, 0] = 0
@@ -479,35 +489,30 @@ class RatAppSym(BaseEstimator):
             msg = f'Expected {M} poles, got {dim} instead.'
             raise ValueError(msg)
 
-        C = np.zeros((len(S), M+1), dtype=np.complex128)
-        lr, lc = len(poles[0]), len(poles[1])
-        if lr > 0:
-            C[:, :lr] = 1/(ωN**(-S)[:, np.newaxis] - poles[0][np.newaxis, :])
-        if lc > 0:
-            C[:, lr:lr+lc] = 1/(ωN**(-S)[:, np.newaxis] - poles[1][np.newaxis, :])
-            C[:, lr:lr+lc] += 1/(ωN**(-S)[:, np.newaxis] - np.conj(poles[1])[np.newaxis, :])
-            C[:, lr+lc:-1] = 1j/(ωN**(-S)[:, np.newaxis] - poles[1][np.newaxis, :])
-            C[:, lr+lc:-1] -= 1j/(ωN**(-S)[:, np.newaxis] - np.conj(poles[1])[np.newaxis, :])
-        C[:, -1] = 1
-        C = np.concatenate((np.real(C), np.imag(C[inners])), axis=0)
-        residues = scipy.linalg.solve(
-            C,
-            np.concatenate((np.real(gS), np.imag(gS[inners])), axis=0)
+        return poles
+
+    def _get_residues(self, y, parity, poles):
+        N = y.shape[0]
+        N_ = 2*(N-1) + parity
+        ωN = np.exp(-2j * np.pi / N_)
+        S = np.arange(N)
+
+        # Construct Cauchy matrix.
+        Cr = 1/(ωN**(-S[:, np.newaxis])-poles[0][np.newaxis, :])
+        Ci1 = 1/(ωN**(-S[:, np.newaxis])-poles[1][np.newaxis, :])
+        Ci2 = 1/(ωN**(-S[:, np.newaxis])-np.conj(poles[1])[np.newaxis, :])
+        C = np.concatenate(
+            (Cr, Ci1 + Ci2, 1j*(Ci1 - Ci2)),
+            axis=1
         )
 
-        if np.linalg.norm(residues[-1]) > 1e-8:
-            msg = f'The constant term of rational function is not close to zero.\
-                Its value is {np.linalg.norm(residues[-1])}.'
-            logger.error(msg, stacklevel=2)
-        residues = residues[:-1]
-        residues = [residues[:lr], residues[lr:lr+lc]+1j*residues[lr+lc:]]
+        # Solve for residues.
+        r = scipy.linalg.lstsq(
+            C, y, overwrite_a=True, overwrite_b=True)[0]
+        lr, lc = len(poles[0]), len(poles[1])
+        residues = [r[:lr], r[lr:lr+lc] + 1j*r[lr+lc:]]
 
-        for i in range(2):
-            idxs = np.argsort(np.linalg.norm(residues[i], axis=1))[::-1]
-            residues[i] = residues[i][idxs]
-            poles[i] = poles[i][idxs]
-
-        return poles, residues
+        return residues
 
     def _fit(self, y, parity, indices):
         N = y.shape[0]
@@ -529,24 +534,17 @@ class RatAppSym(BaseEstimator):
         logger.debug(f'==== step: {step} ====')
         r, w = self._get_weights(gS, gG, parity)
         idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
-
-        if self.reuse:
-            if len(gS['index'])+1 > len(self.indices_):
-                self.indices_ = gS['index'].copy()
-                self.indices_.append(gG['index'][idx])
-                self.indices_ = np.array(self.indices_)
-
-        # Find if S contains 0 and N.
-        endsS = []
-        if gG['index'][0] != 0:
-            endsS.append(gS['index'].index(0))
-        if parity == 0 and (gG['index'][-1] != N-1):
-            endsS.append(gS['index'].index(N-1))
-        endsS = np.sort(np.array(endsS, dtype=np.int64))
+        
+        # Store indices for reuse.
+        if len(gS['index'])+1 > len(self.indices_):
+            self.indices_ = gS['index'].copy()
+            self.indices_.append(gG['index'][idx])
+            self.indices_ = np.array(self.indices_)
 
         # Find poles and residues.
-        barycentric = (gS, endsS, w)
-        poles, residues = self._normal_form(barycentric, N, parity)
+        barycentric = (np.array(gS['index']), w)
+        poles = self._get_poles(barycentric, N, parity)
+        residues = self._get_residues(y, parity, poles)
 
         return poles, residues
 
@@ -560,7 +558,7 @@ class RatAppSym(BaseEstimator):
             [self.r_residues_, self.c_residues_, np.conj(self.c_residues_)],
             axis=0)
 
-    def fit(self, y, parity, seed_freqs=None):
+    def fit(self, y, parity, seed_freqs=None, reuse:bool=True):
         N, rank = y.shape
         N_ = 2*(N-1)+parity
         max_order = _get_max_order((N_, rank))
@@ -570,7 +568,8 @@ class RatAppSym(BaseEstimator):
             msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
             raise ValueError(msg)
 
-        if hasattr(self, 'indices_') and (seed_freqs is None):
+        if hasattr(self, 'indices_') and reuse:
+            # Ignores seed_freqs and reuse previous indices.
             indices = self.indices_
             n_freqs = 0
             i = 0
@@ -583,8 +582,7 @@ class RatAppSym(BaseEstimator):
             indices = indices[:i]
         else:
             indices = self.set_seed_freqs(y, parity, seed_freqs=seed_freqs)
-            if self.reuse:
-                self.indices_ = indices
+            self.indices_ = indices
 
         if self.order > max_order:
             msg = f'The order exceeds the maximum allowed order {max_order}.'
