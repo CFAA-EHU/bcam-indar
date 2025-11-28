@@ -1,7 +1,6 @@
 import pytest
 
 import numpy as np
-import scipy
 
 from bcam.resonance._core import espira
 
@@ -141,7 +140,7 @@ class Test_RatAppSym:
     def test_symmetric_fit_real_complex(self):
         # Test with real and complex poles.
         # ------------------------
-        rng = np.random.default_rng()
+        rng = np.random.default_rng(23434)
         MR, MC = 2, 4
         N = 2 * (2*MC + MR + 1) + 10
         ωN = np.exp(-2j * np.pi / N)
@@ -155,11 +154,11 @@ class Test_RatAppSym:
         poles_R = np.zeros(MR, dtype=np.float64)
         poles_R[0] = -rng.uniform(0.7, 0.9)
         poles_R[1] = rng.uniform(0.7, 0.9)
-        poles = (poles_R, poles_C)
+        poles = [poles_R, poles_C]
         residues_R = rng.normal(0, 2, (MR, 1))
         residues_C = rng.normal(0, 2, (MC, 1)) + 1j * rng.normal(0, 2, (MC, 1))
         residues_C = residues_C[idxs]
-        residues = (residues_R, residues_C)
+        residues = [residues_R, residues_C]
         poles_ = np.concatenate((poles_R, poles_C, np.conj(poles_C)))
         residues_ = np.concatenate((residues_R, residues_C, np.conj(residues_C)), axis=0)
 

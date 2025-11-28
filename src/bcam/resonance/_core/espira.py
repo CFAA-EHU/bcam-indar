@@ -362,86 +362,131 @@ class RatAppSym(BaseEstimator):
         return gS, gG
 
     def _get_weights(self, gS, gG, parity):
-        n_freqs = len(gS['data'])
-        N = n_freqs + len(gG['data'])
+        S_, gS_ = np.array(gS['index']), np.array(gS['data'])
+        G_, gG_ = np.array(gG['index']), np.array(gG['data'])
+        idxs = np.argsort(S_)
+        S_, gS_ = S_[idxs], gS_[idxs]
+        n_S, rank = gS_.shape
+        n_G = gG_.shape[0]
+
+        N = n_S + n_G
         N_ = 2*(N-1) + parity
-        rank = len(gS['data'][0])
         ωN = np.exp(-2j * np.pi / N_)
 
-        # Locate zero and N.
-        endsS = []
-        if gG['index'][0] != 0:
-            endsS.append(gS['index'].index(0))
-        if parity == 0 and (gG['index'][-1] != N-1):
-            endsS.append(gS['index'].index(N-1))
-        endsS = np.sort(np.array(endsS, dtype=np.int64))
+        # # Locate zero and N.
+        # endsS = []
+        # if gG['index'][0] != 0:
+        #     endsS.append(gS['index'].index(0))
+        # if parity == 0 and (gG['index'][-1] != N-1):
+        #     endsS.append(gS['index'].index(N-1))
+        # endsS = np.sort(np.array(endsS, dtype=np.int64))
 
-        Cp = ωN**(-np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
-        Cm = ωN**(np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
-        Lp = np.array(gS['data'])[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
-        Lm = np.conj(np.array(gS['data']))[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
-        Lp = Lp / Cp[..., np.newaxis]
-        Lm = Lm / Cm[..., np.newaxis]
-        mr = 2*len(gS['index']) - len(endsS)
+        # Locate zero and N-1 in S_ and G_.
+        e = []
+        innS, innG = [0, len(S_)], [0, len(G_)]
+        if S_[0] == 0:
+            e.append(0)
+            innS[0] = 1
+        else:
+            innG[0] = 1
+        if parity == 0 and (S_[-1] == N-1):
+            e.append(len(S_)-1)
+            innS[1] = len(S_) - 1
+        else:
+            innG[1] = len(G_) - 1
+        innS, innG = np.s_[innS[0]:innS[1]], np.s_[innG[0]:innG[1]]
+        e = np.array(e, dtype=np.int64)
+        M = 2*len(S_) - len(e)
 
-        # Adapt matrix L for real and imaginary parts.
-        LR = np.zeros(
-            (mr, 2*len(gG['data']), rank),
-            dtype=np.float64)
-        # Now it come the gymnastics to avoid copying and sorting gS and gG every time.
-        # Add frequencies 0 and N/2 if they are in gS.
-        ends_ = 2*endsS - np.arange(len(endsS))
-        LR[ends_, ::2] = np.real(Lp[endsS])
-        LR[ends_, 1::2] = np.imag(Lp[endsS])
-        # Add inner frequencies.
-        inners = np.setdiff1d(np.arange(n_freqs), endsS, assume_unique=True)
-        inners_ = np.setdiff1d(np.arange(mr), ends_, assume_unique=True)
-        LR[inners_[::2], ::2] = np.real(Lp[inners]) + np.real(Lm[inners])
-        LR[inners_[::2], 1::2] = np.imag(Lp[inners]) + np.imag(Lm[inners])
-        LR[inners_[1::2], ::2] = -np.imag(Lp[inners]) + np.imag(Lm[inners])
-        LR[inners_[1::2], 1::2] = np.real(Lp[inners]) - np.real(Lm[inners])
-        # Take into account that 0 and N/2 appear only once.
-        if gG['index'][0] == 0:
-            LR[:, :2] = LR[:, :2] / np.sqrt(2)
-        if parity == 0 and (gG['index'][-1] == N-1):
-            LR[:, -2:] = LR[:, -2:] / np.sqrt(2)
-        LR = LR.reshape(mr, -1).T
-        del Lp, Lm
+        # Construct Loewner matrix L.
+        Cr = 1/(ωN**(-S_[e])[:, np.newaxis]-ωN**(-G_)[np.newaxis, :])
+        Lr = (gS_[e][:, np.newaxis] - gG_[np.newaxis, :]) * Cr[..., np.newaxis]
+        C1 = 1/(ωN**(-S_[innS])[:, np.newaxis]-ωN**(-G_)[np.newaxis, :])
+        L1 = (gS_[innS][:, np.newaxis] - gG_[np.newaxis, :]) * C1[..., np.newaxis]
+        C2 = 1/(ωN**(S_[innS])[:, np.newaxis]-ωN**(-G_)[np.newaxis, :])
+        L2 = (np.conj(gS_[innS])[:, np.newaxis] - gG_[np.newaxis, :]) * C2[..., np.newaxis]
+        L = np.concatenate((Lr, L1+L2, 1j*(L1-L2)), axis=0)
+        del Lr, L1, L2
+
+        # Separate real and imaginary parts.
+        L = np.concatenate(
+            (np.real(L), np.imag(L[:, innG])), axis=1, dtype=float
+        )
+        L = L.reshape(M, -1).T
+
+        # Cp = ωN**(-np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
+        # Cm = ωN**(np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
+        # Lp = np.array(gS['data'])[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
+        # Lm = np.conj(np.array(gS['data']))[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
+        # Lp = Lp / Cp[..., np.newaxis]
+        # Lm = Lm / Cm[..., np.newaxis]
+
+        # # Adapt matrix L for real and imaginary parts.
+        # LR = np.zeros(
+        #     (M, 2*len(gG['data']), rank),
+        #     dtype=np.float64)
+        # # Now it come the gymnastics to avoid copying and sorting gS and gG every time.
+        # # Add frequencies 0 and N/2 if they are in gS.
+        # ends_ = 2*endsS - np.arange(len(endsS))
+        # LR[ends_, ::2] = np.real(Lp[endsS])
+        # LR[ends_, 1::2] = np.imag(Lp[endsS])
+        # # Add inner frequencies.
+        # inners = np.setdiff1d(np.arange(n_S), endsS, assume_unique=True)
+        # inners_ = np.setdiff1d(np.arange(M), ends_, assume_unique=True)
+        # LR[inners_[::2], ::2] = np.real(Lp[inners]) + np.real(Lm[inners])
+        # LR[inners_[::2], 1::2] = np.imag(Lp[inners]) + np.imag(Lm[inners])
+        # LR[inners_[1::2], ::2] = -np.imag(Lp[inners]) + np.imag(Lm[inners])
+        # LR[inners_[1::2], 1::2] = np.real(Lp[inners]) - np.real(Lm[inners])
+        # # Take into account that 0 and N/2 appear only once.
+        # if gG['index'][0] == 0:
+        #     LR[:, :2] = LR[:, :2] / np.sqrt(2)
+        # if parity == 0 and (gG['index'][-1] == N-1):
+        #     LR[:, -2:] = LR[:, -2:] / np.sqrt(2)
+        # LR = LR.reshape(M, -1).T
+        # del Lp, Lm
 
         # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
-        gS_ = np.zeros((mr, rank), dtype=np.float64)
-        gS_[ends_, :] = np.real(np.array(gS['data'])[endsS])
-        gS_[inners_[::2], :] = 2*np.real(np.array(gS['data'])[inners])
-        gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
-        In = scipy.linalg.qr(gS_, pivoting=True)[0]
+        tmpS = np.concatenate(
+            (np.real(gS_[e]), 2*np.real(gS_[innS]), -2*np.imag(gS_[innS])),
+            axis=0, dtype=float
+        )
+        In = scipy.linalg.qr(tmpS, pivoting=True)[0]
         In = In[:, rank:]
 
+        # gS_ = np.zeros((M, rank), dtype=np.float64)
+        # gS_[ends_, :] = np.real(np.array(gS['data'])[endsS])
+        # gS_[inners_[::2], :] = 2*np.real(np.array(gS['data'])[inners])
+        # gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
+
         # Compute weights to find best rational approximation.
-        LR = LR @ In
+        L = L @ In
         eigval, w = scipy.linalg.svd(
-            LR,
+            L,
             overwrite_a=True,
             full_matrices=False)[1:]
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
         w = In @ w[-1]
-        w_ = np.zeros((n_freqs,), dtype=np.complex128)
-        w_[endsS] = w[ends_]
-        w_[inners] = w[inners_[::2]] + 1j * w[inners_[1::2]]
+        w_ = np.zeros_like(S_, dtype=complex)
+        w_[innS] = w[len(e):len(S_)] + 1j*w[len(S_):]
+        w_[e] = w[:len(e)]
         w = w_
 
-        # Compute rational function at G frequencies.
-        rp = w[:, np.newaxis] * np.array(gS['data'])
-        p = (1/Cp).T @ rp + (1/Cm[inners]).T @ np.conj(rp)[inners]
-        q = (1/Cp).T @ w + (1/Cm[inners]).T @ np.conj(w)[inners]
+        # w_ = np.zeros((n_S,), dtype=np.complex128)
+        # w_[endsS] = w[ends_]
+        # w_[inners] = w[inners_[::2]] + 1j * w[inners_[1::2]]
+        # w = w_
 
+        # Compute rational function at G frequencies.
+        rp = w[:, np.newaxis] * gS_
+        p = Cr.T@rp[e] + C1.T@rp[innS] + C2.T@np.conj(rp[innS])
+        q = Cr.T@w[e] + C1.T@w[innS] + C2.T@np.conj(w[innS])
         return p/(q[:, np.newaxis]), w
 
     def _get_poles(self, barycentric, N, parity):
         N_ = 2*(N-1) + parity
         S, w = barycentric
-        idxs = np.argsort(S)
-        S = S[idxs]
-        w = w[idxs]
+        S = np.sort(S)
+        # No need to sort w as it comes sorted from _get_weights.
 
         e = np.array([0, len(S)])
         c = 0
@@ -488,6 +533,10 @@ class RatAppSym(BaseEstimator):
         if dim != M:
             msg = f'Expected {M} poles, got {dim} instead.'
             raise ValueError(msg)
+        
+        # Remove poles larger than 1.
+        for i in range(2):
+            poles[i] = poles[i][np.log(np.abs(poles[i])) < (1e-4)/N_]
 
         return poles
 
@@ -495,15 +544,27 @@ class RatAppSym(BaseEstimator):
         N = y.shape[0]
         N_ = 2*(N-1) + parity
         ωN = np.exp(-2j * np.pi / N_)
-        S = np.arange(N)
+        I = np.arange(N)
 
         # Construct Cauchy matrix.
-        Cr = 1/(ωN**(-S[:, np.newaxis])-poles[0][np.newaxis, :])
-        Ci1 = 1/(ωN**(-S[:, np.newaxis])-poles[1][np.newaxis, :])
-        Ci2 = 1/(ωN**(-S[:, np.newaxis])-np.conj(poles[1])[np.newaxis, :])
+        Cr = 1/(ωN**(-I[:, np.newaxis])-poles[0][np.newaxis, :])
+        Cr = np.real(Cr)
+        Ci1 = 1/(ωN**(-I[:, np.newaxis])-poles[1][np.newaxis, :])
+        Ci2 = 1/(ωN**(-I[:, np.newaxis])-np.conj(poles[1])[np.newaxis, :])
         C = np.concatenate(
             (Cr, Ci1 + Ci2, 1j*(Ci1 - Ci2)),
             axis=1
+        )
+        
+        # Separate real and imaginary of matrix and y.
+        e = [1, N+parity-1]
+        C = np.concatenate(
+            (np.real(C), np.imag(C[e[0]:e[1]])),
+            axis=0, dtype=float
+        )
+        y = np.concatenate(
+            (np.real(y), np.imag(y[e[0]:e[1]])), axis=0,
+            dtype=float
         )
 
         # Solve for residues.
@@ -1005,7 +1066,13 @@ class StablePoles:
                 self.model.fit(y, parity, seed_freqs=seed_freqs)
             else:
                 self.model.fit(y, parity)
-            real_order = len(self.model.r_poles_) + 2*len(self.model.c_poles_)
+            real_order = np.sort(self.model.indices_[:-1])
+            c = 0
+            if real_order[0] == 0:
+                c += 1
+            if parity == 0 and (real_order[-1] == N-1):
+                c += 1
+            real_order = 2*len(real_order) - c - 1
 
             amps_ = np.concatenate(
                 (self.model.r_amps_, self.model.c_amps_),
