@@ -90,20 +90,6 @@ class Test_RatApp:
 
 class Test_RatAppSym:
 
-    @staticmethod
-    def _fit_symmetric(y, parity, order):
-        # Fit the signal.
-        model = espira.RatAppSym(order=order)
-        model.fit(y, parity)
-        model.pole_pruning(tol=1e-5)
-        rr = model.r_residues_
-        rc = model.c_residues_
-        poles_fit = [model.r_poles_, model.c_poles_]
-        poles_fit = [poles_fit[0], poles_fit[1]]
-        residues_fit = [rr, rc]
-
-        return poles_fit, residues_fit
-
     def test_symmetric_fit_complex(self):
         # Test only complex poles
         # ------------------------

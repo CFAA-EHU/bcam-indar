@@ -373,14 +373,6 @@ class RatAppSym(BaseEstimator):
         N_ = 2*(N-1) + parity
         ωN = np.exp(-2j * np.pi / N_)
 
-        # # Locate zero and N.
-        # endsS = []
-        # if gG['index'][0] != 0:
-        #     endsS.append(gS['index'].index(0))
-        # if parity == 0 and (gG['index'][-1] != N-1):
-        #     endsS.append(gS['index'].index(N-1))
-        # endsS = np.sort(np.array(endsS, dtype=np.int64))
-
         # Locate zero and N-1 in S_ and G_.
         e = []
         innS, innG = [0, len(S_)], [0, len(G_)]
@@ -414,37 +406,6 @@ class RatAppSym(BaseEstimator):
         )
         L = L.reshape(M, -1).T
 
-        # Cp = ωN**(-np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
-        # Cm = ωN**(np.array(gS['index']))[:, np.newaxis] - ωN**(-np.array(gG['index']))[np.newaxis, :]
-        # Lp = np.array(gS['data'])[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
-        # Lm = np.conj(np.array(gS['data']))[:, np.newaxis] - np.array(gG['data'])[np.newaxis, :]
-        # Lp = Lp / Cp[..., np.newaxis]
-        # Lm = Lm / Cm[..., np.newaxis]
-
-        # # Adapt matrix L for real and imaginary parts.
-        # LR = np.zeros(
-        #     (M, 2*len(gG['data']), rank),
-        #     dtype=np.float64)
-        # # Now it come the gymnastics to avoid copying and sorting gS and gG every time.
-        # # Add frequencies 0 and N/2 if they are in gS.
-        # ends_ = 2*endsS - np.arange(len(endsS))
-        # LR[ends_, ::2] = np.real(Lp[endsS])
-        # LR[ends_, 1::2] = np.imag(Lp[endsS])
-        # # Add inner frequencies.
-        # inners = np.setdiff1d(np.arange(n_S), endsS, assume_unique=True)
-        # inners_ = np.setdiff1d(np.arange(M), ends_, assume_unique=True)
-        # LR[inners_[::2], ::2] = np.real(Lp[inners]) + np.real(Lm[inners])
-        # LR[inners_[::2], 1::2] = np.imag(Lp[inners]) + np.imag(Lm[inners])
-        # LR[inners_[1::2], ::2] = -np.imag(Lp[inners]) + np.imag(Lm[inners])
-        # LR[inners_[1::2], 1::2] = np.real(Lp[inners]) - np.real(Lm[inners])
-        # # Take into account that 0 and N/2 appear only once.
-        # if gG['index'][0] == 0:
-        #     LR[:, :2] = LR[:, :2] / np.sqrt(2)
-        # if parity == 0 and (gG['index'][-1] == N-1):
-        #     LR[:, -2:] = LR[:, -2:] / np.sqrt(2)
-        # LR = LR.reshape(M, -1).T
-        # del Lp, Lm
-
         # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
         tmpS = np.concatenate(
             (np.real(gS_[e]), 2*np.real(gS_[innS]), -2*np.imag(gS_[innS])),
@@ -452,11 +413,6 @@ class RatAppSym(BaseEstimator):
         )
         In = scipy.linalg.qr(tmpS, pivoting=True)[0]
         In = In[:, rank:]
-
-        # gS_ = np.zeros((M, rank), dtype=np.float64)
-        # gS_[ends_, :] = np.real(np.array(gS['data'])[endsS])
-        # gS_[inners_[::2], :] = 2*np.real(np.array(gS['data'])[inners])
-        # gS_[inners_[1::2], :] = -2*np.imag(np.array(gS['data'])[inners])
 
         # Compute weights to find best rational approximation.
         L = L @ In
@@ -470,11 +426,6 @@ class RatAppSym(BaseEstimator):
         w_[innS] = w[len(e):len(S_)] + 1j*w[len(S_):]
         w_[e] = w[:len(e)]
         w = w_
-
-        # w_ = np.zeros((n_S,), dtype=np.complex128)
-        # w_[endsS] = w[ends_]
-        # w_[inners] = w[inners_[::2]] + 1j * w[inners_[1::2]]
-        # w = w_
 
         # Compute rational function at G frequencies.
         rp = w[:, np.newaxis] * gS_
