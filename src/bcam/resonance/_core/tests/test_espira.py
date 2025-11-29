@@ -95,14 +95,12 @@ class Test_RatAppSym:
         # Fit the signal.
         model = espira.RatAppSym(order=order)
         model.fit(y, parity)
+        model.pole_pruning(tol=1e-5)
         rr = model.r_residues_
         rc = model.c_residues_
         poles_fit = [model.r_poles_, model.c_poles_]
-        # Remove spurious poles with very small residues.
-        idx_r = np.nonzero(np.linalg.norm(rr, axis=1) > 1e-5)[0]
-        idx_c = np.nonzero(np.linalg.norm(rc, axis=1) > 1e-5)[0]
-        poles_fit = [poles_fit[0][idx_r], poles_fit[1][idx_c]]
-        residues_fit = [rr[idx_r], rc[idx_c]]
+        poles_fit = [poles_fit[0], poles_fit[1]]
+        residues_fit = [rr, rc]
 
         return poles_fit, residues_fit
 
@@ -111,7 +109,7 @@ class Test_RatAppSym:
         # ------------------------
         rng = np.random.default_rng()
         M = 6
-        N = 2 * (2*M + 1) + 10
+        N = 2 * (2*M + 1) + 10 + rng.integers(0, 2)
         ωN = np.exp(-2j * np.pi / N)
 
         # Create complex frequencies and residues.
@@ -128,7 +126,14 @@ class Test_RatAppSym:
         # Construct signal.
         y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
-        poles_fit, residues_fit = self._fit_symmetric(y, N%2, 2*M)
+        # Fit the signal.
+        model = espira.RatAppSym(order=2*M)
+        model.fit(y, N%2)
+        model.pole_pruning(tol=1e-5)
+
+        poles_fit = [model.r_poles_, model.c_poles_]
+        residues_fit = [model.r_residues_, model.c_residues_]
+
         idxs = np.argsort(poles_fit[1])
         poles_fit[1] = poles_fit[1][idxs]
         residues_fit[1] = residues_fit[1][idxs]
@@ -140,9 +145,9 @@ class Test_RatAppSym:
     def test_symmetric_fit_real_complex(self):
         # Test with real and complex poles.
         # ------------------------
-        rng = np.random.default_rng(23434)
+        rng = np.random.default_rng(87577)
         MR, MC = 2, 4
-        N = 2 * (2*MC + MR + 1) + 10
+        N = 2 * (2*MC + MR + 1) + 10 + rng.integers(0, 2)
         ωN = np.exp(-2j * np.pi / N)
 
         # Create complex frequencies and residues.
@@ -165,7 +170,14 @@ class Test_RatAppSym:
         # Construct signal.
         y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
-        poles_fit, residues_fit = self._fit_symmetric(y, N%2, 2*MC + MR)
+        # Fit the signal.
+        model = espira.RatAppSym(order=2*MC + MR)
+        model.fit(y, N%2)
+        model.pole_pruning(tol=1e-5)
+
+        poles_fit = [model.r_poles_, model.c_poles_]
+        residues_fit = [model.r_residues_, model.c_residues_]
+
         for i in range(2):
             idxs = np.argsort(poles_fit[i])
             poles_fit[i] = poles_fit[i][idxs]
@@ -182,7 +194,7 @@ class Test_RatAppSym:
         rng = np.random.default_rng()
         M = 6
         L = 3
-        N = 2 * (2*M + 1) + 10
+        N = 2 * (2*M + 1) + 10 + rng.integers(0, 2)
         ωN = np.exp(-2j * np.pi / N)
 
         # Create complex frequencies and residues.
@@ -199,7 +211,14 @@ class Test_RatAppSym:
         # Construct signal.
         y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
-        poles_fit, residues_fit = self._fit_symmetric(y, N%2, 2*M)
+        # Fit the signal.
+        model = espira.RatAppSym(order=2*M)
+        model.fit(y, N%2)
+        model.pole_pruning(tol=1e-5)
+
+        poles_fit = [model.r_poles_, model.c_poles_]
+        residues_fit = [model.r_residues_, model.c_residues_]
+
         idxs = np.argsort(poles_fit[1])
         poles_fit[1] = poles_fit[1][idxs]
         residues_fit[1] = residues_fit[1][idxs]
@@ -260,14 +279,13 @@ class Test_ESPIRA:
             order=2*M, copy_y=False)
         model.fit(y, N%2)
         # Remove spurious poles with very small amplitude.
-        model.pole_pruning(stol=1e-5)
+        model.pole_pruning(tol=1e-5)
         
         poles_fit = [model.r_poles_, model.c_poles_]
         amps_fit = [model.r_amps_, model.c_amps_]
         idxs = np.argsort(poles_fit[1])
         poles_fit[1] = poles_fit[1][idxs]
         amps_fit[1] = amps_fit[1][idxs]
-
 
         assert (len(poles_fit[0]) == 0) and (len(poles_fit[1]) == M//2)
         assert np.allclose(poles_fit[1], poles)

@@ -406,7 +406,7 @@ class RatAppSym(BaseEstimator):
         C2 = 1/(ωN**(S_[innS])[:, np.newaxis]-ωN**(-G_)[np.newaxis, :])
         L2 = (np.conj(gS_[innS])[:, np.newaxis] - gG_[np.newaxis, :]) * C2[..., np.newaxis]
         L = np.concatenate((Lr, L1+L2, 1j*(L1-L2)), axis=0)
-        del Lr, L1, L2
+        del Lr, L1, L2, G_, gG_
 
         # Separate real and imaginary parts.
         L = np.concatenate(
@@ -533,10 +533,6 @@ class RatAppSym(BaseEstimator):
         if dim != M:
             msg = f'Expected {M} poles, got {dim} instead.'
             raise ValueError(msg)
-        
-        # Remove poles larger than 1.
-        for i in range(2):
-            poles[i] = poles[i][np.log(np.abs(poles[i])) < (1e-4)/N_]
 
         return poles
 
@@ -548,7 +544,6 @@ class RatAppSym(BaseEstimator):
 
         # Construct Cauchy matrix.
         Cr = 1/(ωN**(-I[:, np.newaxis])-poles[0][np.newaxis, :])
-        Cr = np.real(Cr)
         Ci1 = 1/(ωN**(-I[:, np.newaxis])-poles[1][np.newaxis, :])
         Ci2 = 1/(ωN**(-I[:, np.newaxis])-np.conj(poles[1])[np.newaxis, :])
         C = np.concatenate(
@@ -658,6 +653,23 @@ class RatAppSym(BaseEstimator):
 
         return self
 
+    def pole_pruning(self, tol=1e-6):
+        poles = [self.r_poles_, self.c_poles_]
+        residues = [self.r_residues_, self.c_residues_]
+
+        for i in range(2):
+            idxs = np.nonzero(
+                np.linalg.norm(residues[i], axis=1) > np.abs((np.abs(poles[i])-1))*tol)[0]
+            poles[i] = poles[i][idxs]
+            residues[i] = residues[i][idxs]
+
+        self.r_poles_ = poles[0]
+        self.c_poles_ = poles[1]
+        self.r_residues_ = residues[0]
+        self.c_residues_ = residues[1]
+
+        return self
+
     def predict(self, X):
         return rational_function(
             self.poles_,
@@ -764,12 +776,10 @@ class EspiraR(BaseEstimator):
             order:int=None,
             damping:float=0.,
             fs:float=1.,
-            reuse:bool=False,
             copy_y:bool=True):
         self.order = order
         self.damping = damping
         self.fs = fs
-        self.reuse = reuse
         self.copy_y = copy_y
 
     @property
@@ -793,7 +803,7 @@ class EspiraR(BaseEstimator):
             axis=0,
             dtype=complex)
 
-    def fit(self, y, parity, seed_freqs=None):
+    def fit(self, y, parity, seed_freqs=None, reuse:bool=True):
         N = y.shape[0]
         ns = 2*(N-1)+parity
         self._ns = ns
@@ -803,9 +813,7 @@ class EspiraR(BaseEstimator):
         else:
             rational = RatAppSym()
             self._rational = rational
-        rational.set_params(
-            order=self.order,
-            reuse=self.reuse)
+        rational.set_params( order=self.order)
 
         ωN = np.exp(-2j*np.pi/ns)
         if self.copy_y:
@@ -816,47 +824,38 @@ class EspiraR(BaseEstimator):
             np.fft.rfft(x, axis=0, out=y)
             del x
         y *= (ωN**np.arange(N))[:, np.newaxis]
-        rational.fit(y, parity, seed_freqs=seed_freqs)
+        rational.fit(y, parity, seed_freqs=seed_freqs, reuse=reuse)
 
         self.r_poles_ = np.copy(rational.r_poles_)
         self.c_poles_ = np.copy(rational.c_poles_)
         self.r_amps_ = rational.r_residues_/(1-(rational.r_poles_[:, np.newaxis])**ns)
         self.c_amps_ = rational.c_residues_/(1-(rational.c_poles_[:, np.newaxis])**ns)
         if self.damping > 0.:
-            self.r_poles_ *= np.pow(self.damping, -1/(ns-1))
-            self.c_poles_ *= np.pow(self.damping, -1/(ns-1))
+            self.r_poles_ *= np.pow(rational.damping, -1/(ns-1))
+            self.c_poles_ *= np.pow(rational.damping, -1/(ns-1))
 
         return self
 
-    def pole_pruning(self, stol:float=1e-5):
-        ns = self._ns
-        poles = [self.r_poles_, self.c_poles_]
-        amps = [self.r_amps_, self.c_amps_]
+    def pole_pruning(self, tol=1e-6):
+        self._rational.pole_pruning(tol=tol)
+
+        poles = [self._rational.r_poles_, self._rational.c_poles_]
+        residues = [self._rational.r_residues_, self._rational.c_residues_]
 
         # Remove unstable poles.
         for i in [0, 1]:
-            idxs = np.nonzero(np.abs(poles[i]) <= 1)[0]
+            idxs = np.nonzero(np.abs(poles[i]) < 1+1e-10)[0]
             poles[i] = poles[i][idxs]
-            amps[i] = amps[i][idxs]
+            residues[i] = residues[i][idxs]
 
-        # Remove spurious poles.
-        avg_norm = 0
-        if len(poles[0]) > 0:
-            avg_norm += np.sum(
-                (amps[0]**2)*(_inner_prod(ns, poles[0])[:, np.newaxis]))
-        if len(poles[1]) > 0:
-            avg_norm += np.sum(
-                amps[1]*np.conj(amps[1])*_inner_prod(ns, poles[1])[:, np.newaxis])
-        avg_norm = np.sqrt(np.real(avg_norm))
-        for i in [0, 1]:
-            idxs = np.nonzero(np.linalg.norm(amps[i], axis=1) >= stol*avg_norm)[0]
-            poles[i] = poles[i][idxs]
-            amps[i] = amps[i][idxs]
-
+        ns = self._ns
         self.r_poles_ = poles[0]
         self.c_poles_ = poles[1]
-        self.r_amps_ = amps[0]
-        self.c_amps_ = amps[1]
+        self.r_amps_ = residues[0]/(1-(poles[0][:, np.newaxis])**ns)
+        self.c_amps_ = residues[1]/(1-(poles[1][:, np.newaxis])**ns)
+        if self.damping > 0.:
+            self.r_poles_ *= np.pow(self._rational.damping, -1/(ns-1))
+            self.c_poles_ *= np.pow(self._rational.damping, -1/(ns-1))
 
         return self
 
@@ -1060,19 +1059,13 @@ class StablePoles:
         for order in range(min_order, max_order+1):
             if order <= real_order:
                 continue
-            self.model.set_params(
-                order=order, reuse=True, copy_y=True)
+            self.model.set_params(order=order, copy_y=True)
             if order == min_order:
-                self.model.fit(y, parity, seed_freqs=seed_freqs)
+                self.model.fit(y, parity, seed_freqs=seed_freqs, reuse=True)
             else:
-                self.model.fit(y, parity)
-            real_order = np.sort(self.model.indices_[:-1])
-            c = 0
-            if real_order[0] == 0:
-                c += 1
-            if parity == 0 and (real_order[-1] == N-1):
-                c += 1
-            real_order = 2*len(real_order) - c - 1
+                self.model.fit(y, parity, reuse=True)
+            real_order = len(self.model.r_poles_) + 2*len(self.model.c_poles_)
+            self.model.pole_pruning(tol=0.)
 
             amps_ = np.concatenate(
                 (self.model.r_amps_, self.model.c_amps_),
@@ -1097,20 +1090,35 @@ class StablePoles:
             poles_set, amps_set, ns=ns)
         self.min_order_ = min_order
         self.clusters_ = clusters
+        self.clusters_amps_ = self._collect_amps()
 
         return self
+
+    def _collect_amps(self):
+        amps = []
+        for c in self.clusters_:
+            amps_c = {}
+            for order, p in c.items():
+                idx = np.argmin(np.abs(self.poles_set_[order] - p))
+                amps_c[order] = self.amps_set_[order][idx]
+            amps.append(amps_c)
+        return amps
     
     def clusters_stats(self):
         if not hasattr(self, 'clusters_'):
             raise ValueError('You must run find_clusters() first.')
 
         stats = []
-        for c in self.clusters_:
-            mean = np.mean(list(c.values()))
-            std = _std_new(list(c.values()), self._ns)
+        for c, amps_c in zip(self.clusters_, self.clusters_amps_):
+            p_mean = np.mean(list(c.values()))
+            p_std = _std_new(list(c.values()), self._ns)
+            a_mean = np.mean(list(amps_c.values()))
+            a_std = np.std(list(amps_c.values()))
             stats.append({
-                'mean': mean,
-                'std': std,
+                'p. mean': p_mean,
+                'p. std': p_std,
+                'a. mean': a_mean,
+                'a. std': a_std,
             })
         return stats
 
