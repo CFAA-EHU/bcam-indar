@@ -764,7 +764,7 @@ class EspiraR(BaseEstimator):
         else:
             rational = RatAppSym()
             self._rational = rational
-        rational.set_params( order=self.order)
+        rational.set_params(order=self.order)
 
         ωN = np.exp(-2j*np.pi/ns)
         if self.copy_y:
@@ -952,8 +952,8 @@ class StablePoles:
 
     def _clustering(self, poles, amps, ns):
         min_scale = self.min_scale
-        poles = {k: v.copy() for k, v in poles.items()}
-        amps = {k: v.copy() for k, v in amps.items()}
+        poles = {k: v.copy() for k, v in poles.items() if len(v) > 0}
+        amps = {k: v.copy() for k, v in amps.items() if len(v) > 0}
         n_orders = len(poles)
 
         # Compute the largest amplitude for each order.
@@ -981,6 +981,9 @@ class StablePoles:
             scale -= 1
 
         # Get intersection of orders.
+        if len(clusters) == 0:
+            return clusters, None
+
         orders_clusters = [list(c.keys()) for c in clusters]
         common_orders = orders_clusters[0]
         for oc in orders_clusters[1:]:
