@@ -4,8 +4,9 @@ import logging
 import bisect
 
 import numpy as np
-from sklearn.base import BaseEstimator
 import scipy
+import pandas as pd
+from sklearn.base import BaseEstimator
 import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
@@ -868,16 +869,18 @@ class StablePoles:
         self.model = model
         self.max_order = max_order
         self.radius = radius
-        self.q = q
+        self.q = q # TODO: remove this parameter.
         self.min_scale = min_scale
 
     def _add_poles(
         self, clusters, new_set, order, ns):
         radius = self.radius
-        radius = dist(0., 0.6, ns) if radius is None else radius
+        radius = dist(0., 0.9, ns) if radius is None else radius
         q = self.q
 
-        mean_clusters = [np.mean(list(c.values())) for c in clusters]
+        # mean_clusters = [np.mean(list(c.values())) for c in clusters]
+        min_ord_clusters = [min(c.keys()) for c in clusters]
+        mean_clusters = [c[k] for k, c in zip(min_ord_clusters, clusters)]
         mean_clusters = np.array(mean_clusters)
         std_clusters = [
             _std_new(list(c.values()), ns) if len(c) > 1 else radius
@@ -934,7 +937,7 @@ class StablePoles:
                 continue
             clusters = self._add_poles(
                 clusters, poles_, order, ns)
-        clusters = [c for c in clusters if len(c) > n_orders//2]
+        clusters = [c for c in clusters if len(c) > 0.25*n_orders]
 
         # Reorder clustered poles by order.
         clusters_ = {order: [] for order in amps.keys()}
@@ -964,7 +967,7 @@ class StablePoles:
         # Find clusters.
         min_scale = -np.inf if min_scale is None else min_scale
         clusters = []
-        while (scale > min_scale) and (len(poles) > n_orders//2):
+        while (scale > min_scale) and (len(poles) > 0.25*n_orders):
             clusters_, poles, amps = self._level_clustering(
                 poles, amps, level, ns)
             clusters.extend(clusters_)
@@ -980,21 +983,7 @@ class StablePoles:
             level /= 2
             scale -= 1
 
-        # Get intersection of orders.
-        if len(clusters) == 0:
-            return clusters, None
-
-        orders_clusters = [list(c.keys()) for c in clusters]
-        common_orders = orders_clusters[0]
-        for oc in orders_clusters[1:]:
-            common_orders = np.intersect1d(
-                common_orders, oc, assume_unique=True)
-        if len(common_orders) > 0:
-            min_order = np.min(common_orders)
-        else:
-            min_order = None
-
-        return clusters, min_order
+        return clusters
 
     def fit(self, y, parity, seed_freqs=None):
         N = y.shape[0]
@@ -1040,10 +1029,21 @@ class StablePoles:
         self.amps_set_ = amps_set
         self.poles_set_ = poles_set
 
-        clusters, min_order = self._clustering(
+        # Get clusters.
+        clusters = self._clustering(
             poles_set, amps_set, ns=ns)
-        self.min_order_ = min_order
-        self.clusters_ = clusters
+        # Sort cluster stats. by decreasing number of poles first, then by increasing pole std.
+        prop = ['number', 'pole std.']
+        stats = {p: [] for p in prop}
+        for c in clusters:
+            stats['number'].append(len(c))
+            stats['pole std.'].append(_std_new(list(c.values()), self._ns))
+        idxs = np.lexsort((
+            stats['pole std.'],
+            -np.array(stats['number'])
+        ))
+        clusters = np.array(clusters, dtype=object)
+        self.clusters_ = list(clusters[idxs])
         self.clusters_amps_ = self._collect_amps()
 
         return self
@@ -1062,23 +1062,30 @@ class StablePoles:
         if not hasattr(self, 'clusters_'):
             raise ValueError('You must run find_clusters() first.')
 
-        stats = []
+        columns = ['number', 'pole', 'pole std.', 'amp.', 'amp. std.', 'highest order', 'lowest order']
+        stats = {c: [] for c in columns}
         for c, amps_c in zip(self.clusters_, self.clusters_amps_):
-            p_mean = np.mean(list(c.values()))
-            p_std = _std_new(list(c.values()), self._ns)
-            a_mean = np.mean(list(amps_c.values()))
-            a_std = np.std(list(amps_c.values()))
-            stats.append({
-                'p. mean': p_mean,
-                'p. std': p_std,
-                'a. mean': a_mean,
-                'a. std': a_std,
-            })
-        return stats
+            stats['number'].append(len(c))
+            orders = list(c.keys())
+            stats['highest order'].append(orders[0])
+            stats['lowest order'].append(orders[-1])
+            stats['pole'].append(c[orders[0]])
+            stats['pole std.'].append(_std_new(list(c.values()), self._ns))
+            stats['amp.'].append(np.mean(list(amps_c.values())))
+            stats['amp. std.'].append(np.std(list(amps_c.values())))
 
-    def plot(self, scale, ax=None):
+        return pd.DataFrame(stats)
+
+    def plot_poles(self, scale, ax=None):
         if not hasattr(self, 'amps_set_'):
             raise ValueError('You must run find_clusters() first.')
+
+        if ax is None:
+            _, ax = plt.subplots(nrows=1)
+            show = True
+        else:
+            ax = ax
+            show = False
 
         # Compute maximum amplitude across all orders.
         grand_max = np.max([e[0] for e in self.amps_set_.values()])
@@ -1089,14 +1096,15 @@ class StablePoles:
             idxs_scale = np.nonzero((set_ > level/8) & (set_ <= level))[0]
             poles_scale[order] = self.poles_set_[order][idxs_scale]
 
-        if ax is None:
-            _, ax = plt.subplots(nrows=1)
-        else:
-            ax = ax
-
         ax.set_title(f'Level [{level/8:.2f}, {level:.2f}]')
         for i, poles_ in poles_scale.items():
             ax.plot(poles_.real, poles_.imag, 'o', label=f'order {i}')
+            # Annotate points with order.
+            for p in poles_:
+                ax.annotate(
+                    f'{i}', xy=(p.real, p.imag),
+                    textcoords='offset points', xytext=(0,5),
+                    ha='center', fontsize=8)
 
         # Plot a unit circle.
         theta = np.linspace(0, 2*np.pi, 100)
@@ -1110,4 +1118,43 @@ class StablePoles:
         ax.set_aspect('equal')
         ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
 
-        return ax
+        if show:
+            plt.show()
+
+    def plot_clusters(self, ax=None):
+        if not hasattr(self, 'clusters_'):
+            raise ValueError('You must run find_clusters() first.')
+
+        if ax is None:
+            _, ax = plt.subplots(nrows=1)
+            show = True
+        else:
+            ax = ax
+            show = False
+
+        ax.set_title('Clusters')
+        for i, c in enumerate(self.clusters_):
+            poles_ = list(c.values())
+            poles_ = np.array(poles_)
+            ax.plot(poles_.real, poles_.imag, 'o', label=f'cluster {i}')
+            # Annotate points with order.
+            for order, p in c.items():
+                ax.annotate(
+                    f'{order}', xy=(p.real, p.imag),
+                    textcoords='offset points', xytext=(0,5),
+                    ha='center', fontsize=8)
+
+        # Plot a unit circle.
+        theta = np.linspace(0, 2*np.pi, 100)
+        ax.plot(np.cos(theta), np.sin(theta), color='k')
+        ax.set_xlim([-1.1, 1.1])
+        ax.set_ylim([-.05, 1.1])
+
+        # Draw the diameter at y=0 (only across the unit circle)
+        ax.plot([-1.0, 1.0], [0.0, 0.0], color='k', lw=0.5)
+
+        ax.set_aspect('equal')
+        ax.legend(loc='upper left', bbox_to_anchor=(1, 1))
+
+        if show:
+            plt.show()
