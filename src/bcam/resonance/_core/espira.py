@@ -878,9 +878,14 @@ class StablePoles:
         radius = dist(0., 0.9, ns) if radius is None else radius
         q = self.q
 
-        # mean_clusters = [np.mean(list(c.values())) for c in clusters]
-        min_ord_clusters = [min(c.keys()) for c in clusters]
-        mean_clusters = [c[k] for k, c in zip(min_ord_clusters, clusters)]
+        def mean_weighted(c):
+            l = len(c) if len(c) < 4 else 4
+            w = 1/(2**np.arange(l))
+            poles = list(c.values())[-l:]
+            avg = sum([p*w_ for p, w_ in zip(poles[::-1], w)]) / np.sum(w)
+            return avg
+
+        mean_clusters = [mean_weighted(c) for c in clusters]
         mean_clusters = np.array(mean_clusters)
         std_clusters = [
             _std_new(list(c.values()), ns) if len(c) > 1 else radius
@@ -1121,10 +1126,11 @@ class StablePoles:
         if show:
             plt.show()
 
-    def plot_clusters(self, ax=None):
+    def plot_clusters(self, clusters=None, ax=None):
         if not hasattr(self, 'clusters_'):
             raise ValueError('You must run find_clusters() first.')
 
+        clusters = clusters if clusters is not None else range(len(self.clusters_))
         if ax is None:
             _, ax = plt.subplots(nrows=1)
             show = True
@@ -1133,7 +1139,7 @@ class StablePoles:
             show = False
 
         ax.set_title('Clusters')
-        for i, c in enumerate(self.clusters_):
+        for i, c in zip(clusters, [self.clusters_[k] for k in clusters]):
             poles_ = list(c.values())
             poles_ = np.array(poles_)
             ax.plot(poles_.real, poles_.imag, 'o', label=f'cluster {i}')
