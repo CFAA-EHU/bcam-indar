@@ -916,10 +916,8 @@ class StablePoles:
         return clusters
 
     def _level_clustering(
-        self, poles, amps, level, ns
+        self, poles, amps, level, n_orders, ns
     ):
-        n_orders = len(amps)
-
         # For each order, find poles within the level.
         poles_scale, idxs_scale = {}, {}
         for order, set_ in amps.items():
@@ -974,7 +972,7 @@ class StablePoles:
         clusters = []
         while (scale > min_scale) and (len(poles) > 0.25*n_orders):
             clusters_, poles, amps = self._level_clustering(
-                poles, amps, level, ns)
+                poles, amps, level, n_orders, ns)
             clusters.extend(clusters_)
 
             # Remove empty orders.
