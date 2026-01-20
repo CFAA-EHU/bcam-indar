@@ -108,7 +108,7 @@ class RatApp:
         else:
             rank = 1
         self._rank = rank
-    
+
     def set_seed_freqs(self, freqs=None):
         '''Set initial frequencies for the algorithm.
         
@@ -863,20 +863,17 @@ class StablePoles:
         max_order,
         *,
         radius=None,
-        q:float=1/3,
         min_scale:int=-10
     ):
         self.model = model
         self.max_order = max_order
         self.radius = radius
-        self.q = q # TODO: remove this parameter.
         self.min_scale = min_scale
 
     def _add_poles(
         self, clusters, new_set, order, ns):
         radius = self.radius
         radius = dist(0., 0.9, ns) if radius is None else radius
-        q = self.q
 
         def mean_weighted(c):
             l = len(c) if len(c) < 4 else 4
@@ -887,10 +884,6 @@ class StablePoles:
 
         mean_clusters = [mean_weighted(c) for c in clusters]
         mean_clusters = np.array(mean_clusters)
-        std_clusters = [
-            _std_new(list(c.values()), ns) if len(c) > 1 else radius
-            for c in clusters]
-        std_clusters = np.array(std_clusters)
         # Compute distance matrix.
         Pa, Pb = np.meshgrid(mean_clusters, new_set, indexing='ij')
         D = dist(Pa, Pb, ns)
@@ -900,7 +893,7 @@ class StablePoles:
         while np.min(D) < np.inf:
             # Get index of minimum distance without flattening.
             idx = np.unravel_index(np.argmin(D), D.shape)
-            if D[idx] < np.min([radius, np.power(std_clusters[idx[0]], q)]):
+            if D[idx] < radius:
                 clusters[idx[0]].update({order: new_set[idx[1]]})
                 pop_idxs.append(idx[1])
                 D[idx[0], :] = np.inf
