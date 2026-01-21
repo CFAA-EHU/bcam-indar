@@ -242,6 +242,19 @@ def reshape_projection(x):
     return x_
 
 
+def kernel(times, resonances, amps, fs, response='a'):
+    dof = len(resonances)
+    ns = len(times)
+    K = 2*fs*np.exp(resonances/(2*fs)) * np.sinh(resonances/(2*fs))
+    if response == 'a':
+        K *= resonances
+    K = amps * K.reshape(1, dof)
+    K = np.expand_dims(K, axis=2)
+    K = K * np.exp(resonances[np.newaxis, :]*times[:, np.newaxis]).reshape(1, 1, ns, dof)
+    K = np.imag(np.sum(K, axis=-1))
+
+    return K
+
 class Amplitudes(BaseEstimator):
 
     def __init__(
@@ -485,14 +498,7 @@ class Amplitudes(BaseEstimator):
 
         dof = len(resonances)
         if dof > 0:
-            K1 = 2*fs*np.exp(resonances/(2*fs)) * np.sinh(resonances/(2*fs))
-            if self.response == 'a':
-                K1 *= resonances
-            K1 = self.tensor_modes_ * K1.reshape(1, 1, dof)
-            K1 = np.expand_dims(K1, axis=2)
-            K1 = K1 * np.exp(resonances[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, dof)
-            K1 = np.imag(np.sum(K1, axis=-1))
-            K = K1
+            K = kernel(X, resonances, self.tensor_modes_, fs, self.response)
 
         freqs = np.concatenate([c_freqs, r_freqs], dtype=complex)
         amps = np.concatenate([self.complex_amps_, self.real_amps_], axis=-1)
@@ -508,22 +514,14 @@ class Amplitudes(BaseEstimator):
     def mech_part(self, X):
         resonances = self._freqs['resonances']
         X = np.atleast_1d(X)
-        ns = X.shape[0]
         fs = self.fs
 
         dof = len(resonances)
         if dof > 0:
-            K = 2*fs*np.exp(resonances/(2*fs)) * np.sinh(resonances/(2*fs))
-            if self.response == 'a':
-                K *= resonances
-            K = self.tensor_modes_ * K.reshape(1, 1, dof)
-            K = np.expand_dims(K, axis=2)
-            K = K * np.exp(resonances[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, dof)
-            K = np.imag(np.sum(K, axis=-1))
+            K = kernel(X, resonances, self.tensor_modes_, fs, self.response)
+            return K
         else:
-            K = 0
-
-        return K
+            return np.nan
     
     def residual(self, X):
         _, c_freqs, r_freqs = list(self._freqs.values())
@@ -1130,7 +1128,6 @@ class RealModes:
     def predict(self, X, response:str=None):
         X = np.atleast_1d(X)
         ns = X.shape[0]
-        dof = len(self.resonances)
         response = self.response if response is None else response
         K = np.zeros((ns, self.amps.shape[0]), dtype=float)
 
@@ -1140,13 +1137,7 @@ class RealModes:
 
         n_out, n_in = self.amps.shape[:2]
         amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
-        K = 2*self.fs*np.exp(self.resonances/(2*self.fs)) * np.sinh(self.resonances/(2*self.fs))
-        if response == 'a':
-            K *= self.resonances
-        K = amps_fit * K.reshape(1, dof)
-        K = np.expand_dims(K, axis=2)
-        K = K * np.exp(self.resonances[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, dof)
-        K = np.imag(np.sum(K, axis=-1))
+        K = kernel(X, self.resonances, amps_fit, self.fs, response=response)
 
         return K
 
@@ -1451,13 +1442,7 @@ class ComplexModes:
 
         n_out, n_in = self.amps.shape[:2]
         amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
-        K = 2*self.fs*np.exp(self.resonances/(2*self.fs)) * np.sinh(self.resonances/(2*self.fs))
-        if response == 'a':
-            K *= self.resonances
-        K = amps_fit * K.reshape(1, dof)
-        K = np.expand_dims(K, axis=2)
-        K = K * np.exp(self.resonances[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, dof)
-        K = np.imag(np.sum(K, axis=-1))
+        K = kernel(X, self.resonances, amps_fit, self.fs, response=response)
 
         return K
 
