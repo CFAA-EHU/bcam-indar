@@ -261,8 +261,7 @@ class Test_ESPIRA:
         y = np.fft.rfft(x, axis=0)
 
         # ==== Fit exponential sum ====
-        model = espira.EspiraR(
-            order=2*M, copy_y=False)
+        model = espira.EspiraR(order=2*M)
         model.fit(y, N%2)
         # Remove spurious poles with very small amplitude.
         model.pole_pruning(tol=1e-5)
