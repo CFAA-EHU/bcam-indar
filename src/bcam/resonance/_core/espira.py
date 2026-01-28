@@ -424,7 +424,6 @@ class RatAppSym(BaseEstimator):
             full_matrices=False)[1:]
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
         w = In @ w[-1]
-        # w = w[-1]
         w_ = np.zeros_like(S_, dtype=complex)
         w_[innS] = w[len(e):len(S_)] + 1j*w[len(S_):]
         w_[e] = w[:len(e)]
@@ -435,6 +434,413 @@ class RatAppSym(BaseEstimator):
         p = Cr.T@rp[e] + C1.T@rp[innS] + C2.T@np.conj(rp[innS])
         q = Cr.T@w[e] + C1.T@w[innS] + C2.T@np.conj(w[innS])
         return p/(q[:, np.newaxis]), w
+
+    def _get_poles(self, barycentric, N, parity):
+        N_ = 2*(N-1) + parity
+        S, w = barycentric
+        S = np.sort(S)
+        # No need to sort w as it comes sorted from _get_weights.
+
+        e = np.array([0, len(S)])
+        c = 0
+        if S[0] == 0:
+            e[0] = 1
+            c += 1
+        if parity == 0 and (S[-1] == N-1):
+            e[1] = len(S)-1
+            c += 1
+        M = 2*len(S) - c - 1
+        ωN = np.exp(-2j * np.pi / N_)
+
+        w = np.concatenate((w, np.conj(w[e[0]:e[1]])))
+        a = np.zeros((M+2, M+2), dtype=np.complex128)
+        a[1:, 0] = 1
+        a[0, 1:] = w
+        a[1:, 1:] = np.diag(ωN**(np.concatenate((-S, S[e[0]:e[1]]))))
+
+        b = np.eye(M+2, dtype=np.complex128)
+        b[0, 0] = 0
+
+        poles = scipy.linalg.eigvals(a, b, overwrite_a=True)
+        poles = poles[2:]
+
+        # Separate real and complex conjugated poles.
+        poles_u = list(poles[np.imag(poles) >= 0])
+        poles_l = list(poles[np.imag(poles) < 0])
+        poles_r, poles_c = [], []
+        while (len(poles_u) > 0) and (len(poles_l) > 0):
+            distances = np.abs([p - np.conj(poles_u[-1]) for p in poles_l])
+            idx = np.argmin(distances)
+            if distances[idx] < 1e-8:
+                poles_c.append(poles_u.pop())
+                poles_l.pop(idx)
+            else:
+                poles_r.append(poles_u.pop())
+        poles_r.extend(poles_u)
+        poles_r.extend(poles_l)
+        poles_r = np.real(poles_r)
+        poles_c = np.array(poles_c)
+        poles = [poles_r, poles_c]
+        dim = 2*len(poles[1]) + len(poles[0])
+        # Check that the number of poles is correct.
+        if dim != M:
+            msg = f'Expected {M} poles, got {dim} instead.'
+            raise ValueError(msg)
+
+        return poles
+
+    def _get_residues(self):
+        N = self._y.shape[0]
+        N_ = 2*(N-1) + self._parity
+        poles = [self.r_poles_, self.c_poles_]
+        ωN = np.exp(-2j * np.pi / N_)
+        I = np.arange(N)
+
+        # Construct Cauchy matrix.
+        Cr = 1/(ωN**(-I[:, np.newaxis])-poles[0][np.newaxis, :])
+        Ci1 = 1/(ωN**(-I[:, np.newaxis])-poles[1][np.newaxis, :])
+        Ci2 = 1/(ωN**(-I[:, np.newaxis])-np.conj(poles[1])[np.newaxis, :])
+        C = np.concatenate(
+            (Cr, Ci1 + Ci2, 1j*(Ci1 - Ci2)),
+            axis=1
+        )
+        
+        # Separate real and imaginary parts of matrix and y.
+        e = [1, N+self._parity-1]
+        C = np.concatenate(
+            (np.real(C), np.imag(C[e[0]:e[1]])),
+            axis=0, dtype=float
+        )
+        y = np.concatenate(
+            (np.real(self._y), np.imag(self._y[e[0]:e[1]])), axis=0,
+            dtype=float
+        )
+
+        # Solve for residues.
+        r = scipy.linalg.lstsq(
+            C, y, overwrite_a=True, overwrite_b=True)[0]
+        lr, lc = len(poles[0]), len(poles[1])
+        residues = [r[:lr], r[lr:lr+lc] + 1j*r[lr+lc:]]
+
+        return residues
+
+    def _fit(self, y, parity, indices):
+        N = y.shape[0]
+        gS, gG = self._initialize_sets(y, indices)
+        n_freqs = self.count_freqs(gS['index'], N, parity)
+
+        step = 1
+        while n_freqs-1 < self.order:
+            logger.debug(f'==== step: {step} ====')
+            r, w = self._get_weights(gS, gG, parity)
+            idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
+            _update_sets(gS, gG, idx)
+
+            if (gS['index'][-1] == 0) or (parity == 0 and gS['index'][-1] == N-1):
+                n_freqs += 1
+            else:
+                n_freqs += 2
+            step += 1
+        logger.debug(f'==== step: {step} ====')
+        r, w = self._get_weights(gS, gG, parity)
+        idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
+
+        # Store indices for reuse.
+        if len(gS['index'])+1 > len(self.indices_):
+            self.indices_ = gS['index'].copy()
+            self.indices_.append(gG['index'][idx])
+            self.indices_ = np.array(self.indices_)
+
+        # Find poles and residues.
+        barycentric = (np.array(gS['index']), w)
+        poles = self._get_poles(barycentric, N, parity)
+
+        return poles
+
+    @property
+    def poles_(self):
+        return np.concatenate([self.r_poles_, self.c_poles_, np.conj(self.c_poles_)])
+
+    @property
+    def r_residues_(self):
+        if (not hasattr(self, '_residues')) or (self._residues is None):
+            self._residues = self._get_residues()
+        return self._residues[0]
+
+    @property
+    def c_residues_(self):
+        if (not hasattr(self, '_residues')) or (self._residues is None):
+            self._residues = self._get_residues()
+        return self._residues[1]
+
+    @property
+    def residues_(self):
+        if (not hasattr(self, '_residues')) or (self._residues is None):
+            self._residues = self._get_residues()
+        return np.concatenate(
+            [self.r_residues_, self.c_residues_, np.conj(self.c_residues_)],
+            axis=0)
+
+    def fit(self, y, parity, seed_freqs=None, reuse:bool=True):
+        self._y = np.asarray(y)
+        self._parity = parity
+        N, rank = y.shape
+        N_ = 2*(N-1)+parity
+        max_order = _get_max_order((N_, rank))
+        if self.order is None:
+            self.order = rank
+        elif rank > self.order:
+            msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
+            raise ValueError(msg)
+
+        if hasattr(self, 'indices_') and reuse:
+            # Ignores seed_freqs and reuse previous indices.
+            indices = self.indices_
+            n_freqs = 0
+            i = 0
+            while n_freqs-1 < self.order:
+                if (indices[i] == 0) or (parity == 0 and indices[i] == N-1):
+                    n_freqs += 1
+                else:
+                    n_freqs += 2
+                i += 1
+            indices = indices[:i]
+        else:
+            indices = self.set_seed_freqs(y, parity, seed_freqs=seed_freqs)
+            self.indices_ = indices
+
+        if self.order > max_order:
+            msg = f'The order exceeds the maximum allowed order {max_order}.'
+            raise ValueError(msg)
+
+        poles = self._fit(y, parity, indices)
+
+        self.r_poles_ = np.array(poles[0])
+        self.c_poles_ = np.array(poles[1])
+
+        return self
+
+    def pole_pruning(self, tol=1e-6):
+        poles = [self.r_poles_, self.c_poles_]
+        residues = [self.r_residues_, self.c_residues_]
+
+        for i in range(2):
+            idxs = np.nonzero(
+                np.linalg.norm(residues[i], axis=1) > np.abs((np.abs(poles[i])-1))*tol)[0]
+            poles[i] = poles[i][idxs]
+            residues[i] = residues[i][idxs]
+
+        self.r_poles_ = poles[0]
+        self.c_poles_ = poles[1]
+        self._residues = None
+
+        return self
+
+    def predict(self, X):
+        return rational_function(
+            self.poles_,
+            self.residues_,
+            X
+        )
+
+
+
+
+
+
+class RationalFitting(BaseEstimator):
+
+    def __init__(
+            self,
+            *,
+            order:int=None):
+        self.order = order
+
+    @staticmethod
+    def count_freqs(idxs, N, parity):
+        idxs = np.array(idxs)
+        idxs = np.sort(idxs)
+        n_freqs = 0
+        if idxs[0] == 0:
+            n_freqs += 1
+        if parity == 0 and (idxs[-1] == N-1):
+            n_freqs += 1
+        n_freqs = 2*len(idxs) - n_freqs
+        return n_freqs
+
+    def set_seed_freqs(self, y, parity, seed_freqs=None):
+        '''Set initial frequencies for the algorithm.
+
+        Parameters
+        ----------
+        freqs : 1darray
+            They must be ordered in decreasing order of importance,
+            and the indices must be unique.
+        '''
+        N, rank = y.shape
+        if seed_freqs is None:
+            # Choose rank + 1 peaks as initial frequencies.
+            abs_v = np.linalg.norm(y, axis=1)
+            abs_v = np.concatenate((abs_v, abs_v[-2+parity::-1]))
+            abs_v = np.concatenate((abs_v, abs_v))
+            peaks, h = scipy.signal.find_peaks(
+                abs_v,
+                height=np.max(abs_v)/5,
+                distance=np.max((N/(4*(rank+1)), 2))
+            )
+            idxs = np.argsort(h['peak_heights'])[::-1]
+            peaks = peaks[idxs]%(len(abs_v)//2)
+            _, idxs = np.unique(peaks, return_index=True)
+            peaks = peaks[np.sort(idxs)]
+            freqs = peaks[peaks < N]
+        else:
+            freqs = np.asarray(seed_freqs)
+
+        if freqs.ndim != 1:
+            raise ValueError('freqs must be a 1D array.')
+        if not (np.all(freqs >= 0) and np.all(freqs < N)):
+            raise ValueError('freqs must be in the range [0, N).')
+        if len(freqs) != len(np.unique(freqs)):
+            raise ValueError('freqs must be unique.')
+
+        freqs = list(freqs)
+        freqs.reverse()
+        freqs_ = []
+        c = 0
+        while (c < rank+1) and (len(freqs) > 0):
+            p = freqs.pop()
+            freqs_.append(p)
+            if (p == 0) or (parity == 0 and p == N-1):
+                c += 1
+            else:
+                c += 2
+        # Generate additional random indices if c < rank + 1.
+        if c < rank + 1:
+            logger.warning(
+                'Not enough freqs found. Adding random indices.', stacklevel=2)
+            diff = np.setdiff1d(np.arange(N), freqs_, assume_unique=True)
+            rng = np.random.default_rng()
+            rng.shuffle(diff)
+            diff = list(diff)
+            while c < rank+1:
+                p = diff.pop()
+                freqs_.append(p)
+                if (p == 0) or (parity == 0 and p == N-1):
+                    c += 1
+                else:
+                    c += 2
+
+        return np.array(freqs_)
+
+    def _initialize_sets(self, y, freqs):
+        N = y.shape[0]
+        gG = {'index': list(range(N)), 'data': list(y)}
+        gS = {}
+
+        gS['index'] = [gG['index'][f] for f in freqs]
+        gS['data'] = [gG['data'][f] for f in freqs]
+        for f in freqs:
+            idx = bisect.bisect_left(gG['index'], f)
+            gG['index'].pop(idx)
+            gG['data'].pop(idx)
+        return gS, gG
+
+    def _get_weights(self, gS, gG, parity):
+        S_, gS_ = np.array(gS['index']), np.array(gS['data'])
+        G_, gG_ = np.array(gG['index']), np.array(gG['data'])
+        idxs = np.argsort(S_)
+        S_, gS_ = S_[idxs], gS_[idxs]
+        n_S, rank = gS_.shape
+        n_G = gG_.shape[0]
+
+        N = n_S + n_G
+        N_ = 2*(N-1) + parity
+        ωN = np.exp(-2j * np.pi / N_)
+
+        # Locate zero and N-1 in S_ and G_.
+        e = []
+        innS, innG = [0, len(S_)], [0, len(G_)]
+        if S_[0] == 0:
+            e.append(0)
+            innS[0] = 1
+        else:
+            innG[0] = 1
+        if parity == 0 and (S_[-1] == N-1):
+            e.append(len(S_)-1)
+            innS[1] = len(S_) - 1
+        else:
+            innG[1] = len(G_) - 1
+        innS, innG = np.s_[innS[0]:innS[1]], np.s_[innG[0]:innG[1]]
+        e = np.array(e, dtype=np.int64)
+        M = 2*len(S_)-len(e)
+
+        # Construct system matrix L.
+        Cr = 1/(ωN**(-G_)[:, np.newaxis]-ωN**(-S_[e])[np.newaxis, :])
+        C1 = 1/(ωN**(-G_)[:, np.newaxis]-ωN**(-S_[innS])[np.newaxis, :])
+        C2 = 1/(ωN**(-G_)[:, np.newaxis]-ωN**(S_[innS])[np.newaxis, :])
+
+        id = np.eye(n_S)
+        id = np.concatenate(
+            (id, 1j*id[:, innS]), axis=1, dtype=complex)
+        id = np.concatenate(
+            (np.real(id), np.imag(id[innS])), axis=0, dtype=float)
+        L = np.concatenate(
+            (Cr, C1+C2, 1j*(C1-C2)), axis=1, dtype=complex)
+        L = np.concatenate(
+            (np.real(L), np.imag(L[innG])), axis=0, dtype=float)
+        L = np.concatenate((L, id), axis=0)
+
+        # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
+        tmpS = np.zeros(shape=(M, 1), dtype=float)
+        tmpS[:len(e)] = 1
+        tmpS[len(e):len(S_)] = 2
+        In = scipy.linalg.qr(tmpS, pivoting=True)[0]
+        In = In[:, 1:]
+
+        L = np.kron(np.eye(rank), L@In)
+        del id
+
+        Dr = (gG_[:, np.newaxis, i]*Cr for i in range(rank))
+        D1 = (gG_[:, np.newaxis, i]*C1 for i in range(rank))
+        D2 = (np.conj(gG_[:, np.newaxis, i])*C2 for i in range(rank))
+        Idh = (np.diag(gS_[:, i]) for i in range(rank))
+        R = []
+        for dr, d1, d2, idh in zip(Dr, D1, D2, Idh):
+            idh = np.concatenate(
+                (idh, 1j*idh[:, innS]), axis=1, dtype=complex)
+            idh = np.concatenate(
+                (np.real(idh), np.imag(idh[innS])), axis=0, dtype=float)
+            r = np.concatenate(
+                (dr, d1+d2, 1j*(d1-d2)), axis=1, dtype=complex)
+            r = np.concatenate(
+                (np.real(r), np.imag(r[innG])), axis=0, dtype=float)
+            r = np.concatenate((r, idh), axis=0)
+            R.append(r)
+        R = np.vstack(R)
+        L = np.concatenate((L, -R), axis=1)
+        del r, R, idh, gS_, gG_
+
+        # Compute weights to find best rational approximation.
+        eigval, w = scipy.linalg.svd(
+            L,
+            overwrite_a=True,
+            full_matrices=False)[1:]
+        logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
+        w = w[-1]
+        num, den = w[:-M], w[-M:]
+        num = np.split(num, rank)
+        num = [In@n for n in num]
+        num.append(den)
+        w = np.vstack(num).T
+        w_ = np.zeros(shape=(len(S_), rank+1), dtype=complex)
+        w_[innS] = w[len(e):len(S_)] + 1j*w[len(S_):]
+        w_[e] = w[:len(e)]
+        w = w_
+
+        # Compute rational function at G frequencies.
+        p = Cr@w[e, :-1] + C1@w[innS, :-1] + C2@np.conj(w[innS, :-1])
+        q = Cr@w[e, -1] + C1@w[innS, -1] + C2@np.conj(w[innS, -1])
+        return p/(q[:, np.newaxis]), w[:, -1]
 
     def _get_poles(self, barycentric, N, parity):
         N_ = 2*(N-1) + parity
