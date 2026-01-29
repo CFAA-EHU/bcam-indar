@@ -778,7 +778,7 @@ class RationalFitting(BaseEstimator):
         e = np.array(e, dtype=np.int64)
         dimS = 2*n_S-len(e)
 
-        L = np.zeros(shape=(N_*rank, (dimS-0)*rank+dimS), dtype=float)
+        L = np.zeros(shape=(N_*rank, (dimS-1)*rank+dimS), dtype=float)
 
         # Construct system matrix L.
         Cr = 1/(ωN**(-G_)[:, np.newaxis]-ωN**(-S_[e])[np.newaxis, :])
@@ -807,18 +807,18 @@ class RationalFitting(BaseEstimator):
                 (np.real(r), np.imag(r[innG])), axis=0, dtype=float)
             r = np.concatenate((r, idh), axis=0)
 
-            # # Construct inclusion matrix into the space that
-            # # satisfies (3.14) of [From ESPRIT to ESPIRA].
-            # vec = [gS_[e, k], 2*np.real(gS_[innS, k]), -2*np.imag(gS_[innS, k])]
-            # vec = np.real(np.concatenate(vec))
-            # idx = np.argmax(np.abs(vec))
-            # vec = vec / vec[idx]
-            # r = r - r[:, idx, np.newaxis]*vec[np.newaxis, :]
-            # # Remove column idx.
-            # r = np.delete(r, idx, axis=1)
+            # Construct inclusion matrix into the space that
+            # satisfies (3.14) of [From ESPRIT to ESPIRA].
+            vec = [gS_[e, k], 2*np.real(gS_[innS, k]), -2*np.imag(gS_[innS, k])]
+            vec = np.real(np.concatenate(vec))
+            idx = np.argmax(np.abs(vec))
+            vec = vec / vec[idx]
+            r = r - r[:, idx, np.newaxis]*vec[np.newaxis, :]
+            # Remove column idx.
+            r = np.delete(r, idx, axis=1)
 
             # Fill block k of L.
-            L[k*N_:(k+1)*N_, k*(dimS-0):(k+1)*(dimS-0)] = r
+            L[k*N_:(k+1)*N_, k*(dimS-1):(k+1)*(dimS-1)] = r
 
             # Fill rightmost blocks of L.
             # Define basic block matrices.
@@ -849,19 +849,18 @@ class RationalFitting(BaseEstimator):
         num, den = eigvec[:-dimS], eigvec[-dimS:]
         num = np.split(num, rank)
 
-        # # Transform weights in numerator to recover original form.
-        # for k in range(rank):
-        #     vec = [gS_[e, k], 2*np.real(gS_[innS, k]), -2*np.imag(gS_[innS, k])]
-        #     vec = np.real(np.concatenate(vec))
-        #     idx = np.argmax(np.abs(vec))
-        #     vec = vec / vec[idx]
-        #     vec = np.delete(vec, idx)
-        #     num_ = np.zeros(shape=(dimS,), dtype=float)
-        #     num_[:idx] = num[k][:idx]
-        #     num_[idx+1:] = num[k][idx:]
-        #     num_[idx] = -vec@num[k]
-        #     num[k] = num_
-        # del gS_
+        # Transform weights in numerator to recover original form.
+        for k in range(rank):
+            vec = [gS_[e, k], 2*np.real(gS_[innS, k]), -2*np.imag(gS_[innS, k])]
+            vec = np.real(np.concatenate(vec))
+            idx = np.argmax(np.abs(vec))
+            vec = vec / vec[idx]
+            vec = np.delete(vec, idx)
+            num_ = np.zeros(shape=(dimS,), dtype=float)
+            num_[:idx] = num[k][:idx]
+            num_[idx+1:] = num[k][idx:]
+            num_[idx] = -vec@num[k]
+            num[k] = num_
 
         w = np.zeros(shape=(n_S,), dtype=complex)
         w[e] = den[:len(e)]

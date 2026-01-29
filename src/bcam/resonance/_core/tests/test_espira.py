@@ -320,7 +320,7 @@ class Test_PoleFitting:
     def test_fit_real_complex(self):
         # Test with real and complex poles.
         # ------------------------
-        rng = np.random.default_rng(12354)
+        rng = np.random.default_rng()
         MR, MC = 1, 0
         N = 2 * (2*MC + MR + 1) + 10 + rng.integers(0, 2)
         ωN = np.exp(-2j * np.pi / N)
