@@ -299,7 +299,7 @@ class RatAppSym(BaseEstimator):
         if seed_freqs is None:
             # Choose rank + 1 peaks as initial frequencies.
             abs_v = np.linalg.norm(y, axis=1)
-            abs_v = np.concatenate((abs_v, abs_v[-2+parity::-1]))
+            abs_v = np.concatenate((abs_v, abs_v[-2+parity:0:-1]))
             abs_v = np.concatenate((abs_v, abs_v))
             peaks, h = scipy.signal.find_peaks(
                 abs_v,
@@ -383,11 +383,13 @@ class RatAppSym(BaseEstimator):
             innS[0] = 1
         else:
             innG[0] = 1
-        if parity == 0 and (S_[-1] == N-1):
-            e.append(len(S_)-1)
-            innS[1] = len(S_) - 1
+        if parity == 1:
+            pass
+        elif S_[-1] == N-1:
+            e.append(n_S-1)
+            innS[1] = n_S - 1
         else:
-            innG[1] = len(G_) - 1
+            innG[1] = n_G - 1
         innS, innG = np.s_[innS[0]:innS[1]], np.s_[innG[0]:innG[1]]
         e = np.array(e, dtype=np.int64)
         M = 2*len(S_) - len(e)
@@ -681,7 +683,7 @@ class RationalFitting(BaseEstimator):
         if seed_freqs is None:
             # Choose rank + 1 peaks as initial frequencies.
             abs_v = np.linalg.norm(y, axis=1)
-            abs_v = np.concatenate((abs_v, abs_v[-2+parity::-1]))
+            abs_v = np.concatenate((abs_v, abs_v[-2+parity:0:-1]))
             abs_v = np.concatenate((abs_v, abs_v))
             peaks, h = scipy.signal.find_peaks(
                 abs_v,
@@ -754,93 +756,129 @@ class RationalFitting(BaseEstimator):
         n_G = gG_.shape[0]
 
         N = n_S + n_G
-        N_ = 2*(N-1) + parity
-        ωN = np.exp(-2j * np.pi / N_)
+        N_ = 2*(N-1)+parity
+        ωN = np.exp(-2j*np.pi/N_)
 
         # Locate zero and N-1 in S_ and G_.
         e = []
-        innS, innG = [0, len(S_)], [0, len(G_)]
+        innS, innG = [0, n_S], [0, n_G]
         if S_[0] == 0:
             e.append(0)
             innS[0] = 1
         else:
             innG[0] = 1
-        if parity == 0 and (S_[-1] == N-1):
-            e.append(len(S_)-1)
-            innS[1] = len(S_) - 1
+        if parity == 1:
+            pass
+        elif S_[-1] == N-1:
+            e.append(n_S-1)
+            innS[1] = n_S - 1
         else:
-            innG[1] = len(G_) - 1
+            innG[1] = n_G - 1
         innS, innG = np.s_[innS[0]:innS[1]], np.s_[innG[0]:innG[1]]
         e = np.array(e, dtype=np.int64)
-        M = 2*len(S_)-len(e)
+        dimS = 2*n_S-len(e)
+
+        L = np.zeros(shape=(N_*rank, (dimS-0)*rank+dimS), dtype=float)
 
         # Construct system matrix L.
         Cr = 1/(ωN**(-G_)[:, np.newaxis]-ωN**(-S_[e])[np.newaxis, :])
         C1 = 1/(ωN**(-G_)[:, np.newaxis]-ωN**(-S_[innS])[np.newaxis, :])
         C2 = 1/(ωN**(-G_)[:, np.newaxis]-ωN**(S_[innS])[np.newaxis, :])
 
-        id = np.eye(n_S)
-        id = np.concatenate(
-            (id, 1j*id[:, innS]), axis=1, dtype=complex)
-        id = np.concatenate(
-            (np.real(id), np.imag(id[innS])), axis=0, dtype=float)
-        L = np.concatenate(
-            (Cr, C1+C2, 1j*(C1-C2)), axis=1, dtype=complex)
-        L = np.concatenate(
-            (np.real(L), np.imag(L[innG])), axis=0, dtype=float)
-        L = np.concatenate((L, id), axis=0)
+        for k in range(rank):
+            # Fill left part of L.
+            # Define basic block matrices.
+            dr = gS_[np.newaxis, e, k]*Cr
+            d1 = gS_[np.newaxis, innS, k]*C1
+            d2 = np.conj(gS_[np.newaxis, innS, k])*C2
+            idh = np.hstack((gS_[e, k], gS_[innS, k]))
+            idh = np.diag(idh)
 
-        # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
-        tmpS = np.zeros(shape=(M, 1), dtype=float)
-        tmpS[:len(e)] = 1
-        tmpS[len(e):len(S_)] = 2
-        In = scipy.linalg.qr(tmpS, pivoting=True)[0]
-        In = In[:, 1:]
-
-        L = np.kron(np.eye(rank), L@In)
-        del id
-
-        Dr = (gG_[:, np.newaxis, i]*Cr for i in range(rank))
-        D1 = (gG_[:, np.newaxis, i]*C1 for i in range(rank))
-        D2 = (np.conj(gG_[:, np.newaxis, i])*C2 for i in range(rank))
-        Idh = (np.diag(gS_[:, i]) for i in range(rank))
-        R = []
-        for dr, d1, d2, idh in zip(Dr, D1, D2, Idh):
+            # Apply transformation to take into account
+            # conjugate coefficients and real vectors.
             idh = np.concatenate(
-                (idh, 1j*idh[:, innS]), axis=1, dtype=complex)
+                (idh[:, :len(e)], idh[:, len(e):], 1j*idh[:, len(e):]),
+                axis=1, dtype=complex)
             idh = np.concatenate(
-                (np.real(idh), np.imag(idh[innS])), axis=0, dtype=float)
+                (np.real(idh), np.imag(idh[len(e):])), axis=0, dtype=float)
             r = np.concatenate(
                 (dr, d1+d2, 1j*(d1-d2)), axis=1, dtype=complex)
             r = np.concatenate(
                 (np.real(r), np.imag(r[innG])), axis=0, dtype=float)
             r = np.concatenate((r, idh), axis=0)
-            R.append(r)
-        R = np.vstack(R)
-        L = np.concatenate((L, -R), axis=1)
-        del r, R, idh, gS_, gG_
+
+            # # Construct inclusion matrix into the space that
+            # # satisfies (3.14) of [From ESPRIT to ESPIRA].
+            # vec = [gS_[e, k], 2*np.real(gS_[innS, k]), -2*np.imag(gS_[innS, k])]
+            # vec = np.real(np.concatenate(vec))
+            # idx = np.argmax(np.abs(vec))
+            # vec = vec / vec[idx]
+            # r = r - r[:, idx, np.newaxis]*vec[np.newaxis, :]
+            # # Remove column idx.
+            # r = np.delete(r, idx, axis=1)
+
+            # Fill block k of L.
+            L[k*N_:(k+1)*N_, k*(dimS-0):(k+1)*(dimS-0)] = r
+
+            # Fill rightmost blocks of L.
+            # Define basic block matrices.
+            dr = gG_[:, np.newaxis, k]*Cr
+            d1 = gG_[:, np.newaxis, k]*C1
+            d2 = gG_[:, np.newaxis, k]*C2
+
+            # Apply transformation to take into account
+            # conjugate coefficients and real vectors.
+            r = np.concatenate(
+                (dr, d1+d2, 1j*(d1-d2)), axis=1, dtype=complex)
+            r = np.concatenate(
+                (np.real(r), np.imag(r[innG])), axis=0, dtype=float)
+            r = np.concatenate((r, idh), axis=0)
+
+            # Fill block k of L.
+            L[k*N_:(k+1)*N_, -dimS:] = -r
+
+        del r, dr, d1, d2, idh, gG_
 
         # Compute weights to find best rational approximation.
-        eigval, w = scipy.linalg.svd(
+        eigval, eigvec = scipy.linalg.svd(
             L,
             overwrite_a=True,
             full_matrices=False)[1:]
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
-        w = w[-1]
-        num, den = w[:-M], w[-M:]
+        eigvec = eigvec[-1]
+        num, den = eigvec[:-dimS], eigvec[-dimS:]
         num = np.split(num, rank)
-        num = [In@n for n in num]
-        num.append(den)
-        w = np.vstack(num).T
-        w_ = np.zeros(shape=(len(S_), rank+1), dtype=complex)
-        w_[innS] = w[len(e):len(S_)] + 1j*w[len(S_):]
-        w_[e] = w[:len(e)]
-        w = w_
+
+        # # Transform weights in numerator to recover original form.
+        # for k in range(rank):
+        #     vec = [gS_[e, k], 2*np.real(gS_[innS, k]), -2*np.imag(gS_[innS, k])]
+        #     vec = np.real(np.concatenate(vec))
+        #     idx = np.argmax(np.abs(vec))
+        #     vec = vec / vec[idx]
+        #     vec = np.delete(vec, idx)
+        #     num_ = np.zeros(shape=(dimS,), dtype=float)
+        #     num_[:idx] = num[k][:idx]
+        #     num_[idx+1:] = num[k][idx:]
+        #     num_[idx] = -vec@num[k]
+        #     num[k] = num_
+        # del gS_
+
+        w = np.zeros(shape=(n_S,), dtype=complex)
+        w[e] = den[:len(e)]
+        w[innS] = den[len(e):n_S] + 1j*den[n_S:]
+        del den
+
+        num = np.vstack(num).T
+        num_ = np.zeros(shape=(n_S, rank), dtype=complex)
+        num_[e] = num[:len(e)]*gS_[e]
+        num_[innS] = (num[len(e):n_S] + 1j*num[n_S:])*gS_[innS]
+        num = num_
+        del num_
 
         # Compute rational function at G frequencies.
-        p = Cr@w[e, :-1] + C1@w[innS, :-1] + C2@np.conj(w[innS, :-1])
-        q = Cr@w[e, -1] + C1@w[innS, -1] + C2@np.conj(w[innS, -1])
-        return p/(q[:, np.newaxis]), w[:, -1]
+        p = Cr@num[e] + C1@num[innS] + C2@np.conj(num[innS])
+        q = Cr@w[e] + C1@w[innS] + C2@np.conj(w[innS])
+        return p/(q[:, np.newaxis]), w
 
     def _get_poles(self, barycentric, N, parity):
         N_ = 2*(N-1) + parity
