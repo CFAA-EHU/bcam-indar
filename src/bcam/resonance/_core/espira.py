@@ -57,10 +57,10 @@ def rational_function(poles, residues, z):
 
 
 def _get_max_order(shape):
-    N, m = shape
+    ns, rank = shape
     # Counting complex paramaters in a complex time series
     # and in a rational function, we have that:
-    max_order = m*N//(m+1)
+    max_order = rank*ns//(rank+1)
 
     return max_order
 
@@ -650,12 +650,12 @@ class RatAppSym(BaseEstimator):
 
 
 
-class RationalFitting(BaseEstimator):
+class Rational(BaseEstimator):
 
     def __init__(
             self,
             *,
-            order:int=None):
+            order:int=1):
         self.order = order
 
     @staticmethod
@@ -670,70 +670,6 @@ class RationalFitting(BaseEstimator):
         n_freqs = 2*len(idxs) - n_freqs
         return n_freqs
 
-    def set_seed_freqs(self, y, parity, seed_freqs=None):
-        '''Set initial frequencies for the algorithm.
-
-        Parameters
-        ----------
-        freqs : 1darray
-            They must be ordered in decreasing order of importance,
-            and the indices must be unique.
-        '''
-        N, rank = y.shape
-        if seed_freqs is None:
-            # Choose rank + 1 peaks as initial frequencies.
-            abs_v = np.linalg.norm(y, axis=1)
-            abs_v = np.concatenate((abs_v, abs_v[-2+parity:0:-1]))
-            abs_v = np.concatenate((abs_v, abs_v))
-            peaks, h = scipy.signal.find_peaks(
-                abs_v,
-                height=np.max(abs_v)/5,
-                distance=np.max((N/(4*(rank+1)), 2))
-            )
-            idxs = np.argsort(h['peak_heights'])[::-1]
-            peaks = peaks[idxs]%(len(abs_v)//2)
-            _, idxs = np.unique(peaks, return_index=True)
-            peaks = peaks[np.sort(idxs)]
-            freqs = peaks[peaks < N]
-        else:
-            freqs = np.asarray(seed_freqs)
-
-        if freqs.ndim != 1:
-            raise ValueError('freqs must be a 1D array.')
-        if not (np.all(freqs >= 0) and np.all(freqs < N)):
-            raise ValueError('freqs must be in the range [0, N).')
-        if len(freqs) != len(np.unique(freqs)):
-            raise ValueError('freqs must be unique.')
-
-        freqs = list(freqs)
-        freqs.reverse()
-        freqs_ = []
-        c = 0
-        while (c < rank+1) and (len(freqs) > 0):
-            p = freqs.pop()
-            freqs_.append(p)
-            if (p == 0) or (parity == 0 and p == N-1):
-                c += 1
-            else:
-                c += 2
-        # Generate additional random indices if c < rank + 1.
-        if c < rank + 1:
-            logger.warning(
-                'Not enough freqs found. Adding random indices.', stacklevel=2)
-            diff = np.setdiff1d(np.arange(N), freqs_, assume_unique=True)
-            rng = np.random.default_rng()
-            rng.shuffle(diff)
-            diff = list(diff)
-            while c < rank+1:
-                p = diff.pop()
-                freqs_.append(p)
-                if (p == 0) or (parity == 0 and p == N-1):
-                    c += 1
-                else:
-                    c += 2
-
-        return np.array(freqs_)
-
     def _initialize_sets(self, y, freqs):
         N = y.shape[0]
         gG = {'index': list(range(N)), 'data': list(y)}
@@ -747,7 +683,7 @@ class RationalFitting(BaseEstimator):
             gG['data'].pop(idx)
         return gS, gG
 
-    def _get_weights(self, gS, gG, parity):
+    def _get_weights(self, gS, gG):
         S_, gS_ = np.array(gS['index']), np.array(gS['data'])
         G_, gG_ = np.array(gG['index']), np.array(gG['data'])
         idxs = np.argsort(S_)
@@ -756,7 +692,7 @@ class RationalFitting(BaseEstimator):
         n_G = gG_.shape[0]
 
         N = n_S + n_G
-        N_ = 2*(N-1)+parity
+        N_ = 2*(N-1)+self._parity
         ωN = np.exp(-2j*np.pi/N_)
 
         # Locate zero and N-1 in S_ and G_.
@@ -767,7 +703,8 @@ class RationalFitting(BaseEstimator):
             innS[0] = 1
         else:
             innG[0] = 1
-        if parity == 1:
+
+        if self._parity == 1:
             pass
         elif S_[-1] == N-1:
             e.append(n_S-1)
@@ -879,18 +816,18 @@ class RationalFitting(BaseEstimator):
         q = Cr@w[e] + C1@w[innS] + C2@np.conj(w[innS])
         return p/(q[:, np.newaxis]), w
 
-    def _get_poles(self, barycentric, N, parity):
-        N_ = 2*(N-1) + parity
+    def _get_poles(self, barycentric, N):
+        N_ = 2*(N-1) + self._parity
         S, w = barycentric
-        S = np.sort(S)
         # No need to sort w as it comes sorted from _get_weights.
+        S = np.sort(S)
 
         e = np.array([0, len(S)])
         c = 0
         if S[0] == 0:
             e[0] = 1
             c += 1
-        if parity == 0 and (S[-1] == N-1):
+        if self._parity == 0 and (S[-1] == N-1):
             e[1] = len(S)-1
             c += 1
         M = 2*len(S) - c - 1
@@ -968,36 +905,31 @@ class RationalFitting(BaseEstimator):
 
         return residues
 
-    def _fit(self, y, parity, indices):
+    def _fit(self, y, indices):
         N = y.shape[0]
         gS, gG = self._initialize_sets(y, indices)
-        n_freqs = self.count_freqs(gS['index'], N, parity)
+        n_freqs = self.count_freqs(gS['index'], N, self._parity)
 
         step = 1
         while n_freqs-1 < self.order:
             logger.debug(f'==== step: {step} ====')
-            r, w = self._get_weights(gS, gG, parity)
+            r, w = self._get_weights(gS, gG)
             idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
             _update_sets(gS, gG, idx)
 
-            if (gS['index'][-1] == 0) or (parity == 0 and gS['index'][-1] == N-1):
+            # Count frequencies.
+            if (gS['index'][-1] == 0) or (self._parity == 0 and gS['index'][-1] == N-1):
                 n_freqs += 1
             else:
                 n_freqs += 2
             step += 1
         logger.debug(f'==== step: {step} ====')
-        r, w = self._get_weights(gS, gG, parity)
+        r, w = self._get_weights(gS, gG)
         idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
-
-        # Store indices for reuse.
-        if len(gS['index'])+1 > len(self.indices_):
-            self.indices_ = gS['index'].copy()
-            self.indices_.append(gG['index'][idx])
-            self.indices_ = np.array(self.indices_)
 
         # Find poles and residues.
         barycentric = (np.array(gS['index']), w)
-        poles = self._get_poles(barycentric, N, parity)
+        poles = self._get_poles(barycentric, N)
 
         return poles
 
@@ -1025,54 +957,54 @@ class RationalFitting(BaseEstimator):
             [self.r_residues_, self.c_residues_, np.conj(self.c_residues_)],
             axis=0)
 
-    def fit(self, y, parity, seed_freqs=None, reuse:bool=True):
+    def fit(self, y, parity:bool=None, reuse:bool=True):
         self._y = np.asarray(y)
-        self._parity = parity
-        N, rank = y.shape
-        N_ = 2*(N-1)+parity
+        
+        # Determine parity if not given.
+        if parity is None:
+            eps = np.finfo(self._y.dtype).eps
+            tiny = np.imag(self._y[-1, :])
+            parity = np.max(np.abs(tiny)) > 100*eps
+        self._parity = int(parity)
+
+        N, rank = self._y.shape
+        N_ = 2*(N-1)+self._parity
         max_order = _get_max_order((N_, rank))
-        if self.order is None:
-            self.order = rank
-        elif rank > self.order:
-            msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
+        if self.order > max_order:
+            msg = f'The order exceeds the maximum allowed order {max_order}.'
             raise ValueError(msg)
 
         if hasattr(self, 'indices_') and reuse:
-            # Ignores seed_freqs and reuse previous indices.
             indices = self.indices_
             n_freqs = 0
             i = 0
             while n_freqs-1 < self.order:
-                if (indices[i] == 0) or (parity == 0 and indices[i] == N-1):
+                if (indices[i] == 0) or (self._parity == 0 and indices[i] == N-1):
                     n_freqs += 1
                 else:
                     n_freqs += 2
                 i += 1
             indices = indices[:i]
         else:
-            indices = self.set_seed_freqs(y, parity, seed_freqs=seed_freqs)
+            indices = np.argmax(np.linalg.norm(self._y[1:N-1+self._parity], axis=1))
+            indices = np.array([indices+1])
             self.indices_ = indices
 
-        if self.order > max_order:
-            msg = f'The order exceeds the maximum allowed order {max_order}.'
-            raise ValueError(msg)
-
-        poles = self._fit(y, parity, indices)
+        poles = self._fit(self._y, indices)
 
         self.r_poles_ = np.array(poles[0])
         self.c_poles_ = np.array(poles[1])
 
         return self
 
-    def pole_pruning(self, tol=1e-6):
+    def pole_pruning(self, tol=1e-8):
         poles = [self.r_poles_, self.c_poles_]
         residues = [self.r_residues_, self.c_residues_]
 
         for i in range(2):
             idxs = np.nonzero(
-                np.linalg.norm(residues[i], axis=1) > np.abs((np.abs(poles[i])-1))*tol)[0]
+                np.linalg.norm(residues[i], axis=1) > tol)[0]
             poles[i] = poles[i][idxs]
-            residues[i] = residues[i][idxs]
 
         self.r_poles_ = poles[0]
         self.c_poles_ = poles[1]
