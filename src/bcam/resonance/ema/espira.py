@@ -76,17 +76,21 @@ class Rational(BaseEstimator):
     def __init__(
             self,
             *,
-            order:int=None):
+            order:int=None,
+            tol:float=0.,
+            compute_residues:bool=True):
         self.order = order
+        self.tol = tol
+        self.compute_residues = compute_residues
 
     @staticmethod
-    def count_freqs(idxs, N, parity):
+    def count_freqs(idxs, ns, parity):
         idxs = np.array(idxs)
         idxs = np.sort(idxs)
         n_freqs = 0
         if idxs[0] == 0:
             n_freqs += 1
-        if parity == 0 and (idxs[-1] == N-1):
+        if parity == 0 and (idxs[-1] == ns-1):
             n_freqs += 1
         n_freqs = 2*len(idxs) - n_freqs
         return n_freqs
@@ -296,7 +300,8 @@ class Rational(BaseEstimator):
 
         return poles
 
-    def _get_residues(self, y, parity, poles):
+    def _get_residues(self, y, parity):
+        poles = [self.r_poles_, self.c_poles_]
         N = y.shape[0]
         N_ = 2*(N-1) + parity
         ωN = np.exp(-2j * np.pi / N_)
@@ -347,6 +352,7 @@ class Rational(BaseEstimator):
             else:
                 n_freqs += 2
             step += 1
+        self.n_poles_ = n_freqs-1
         logger.debug(f'==== step: {step} ====')
         r, w = self._get_weights(gS, gG, parity)
         idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
@@ -368,28 +374,26 @@ class Rational(BaseEstimator):
         return np.concatenate([self.r_poles_, self.c_poles_, np.conj(self.c_poles_)])
 
     @property
-    def r_residues_(self):
-        if (not hasattr(self, '_residues')) or (self._residues is None):
-            self._residues = self._get_residues()
-        return self._residues[0]
-
-    @property
-    def c_residues_(self):
-        if (not hasattr(self, '_residues')) or (self._residues is None):
-            self._residues = self._get_residues()
-        return self._residues[1]
-
-    @property
     def residues_(self):
-        if (not hasattr(self, '_residues')) or (self._residues is None):
-            self._residues = self._get_residues()
-        return np.concatenate(
+        if self.r_residues_ is None:
+            return None
+        else:
+            return np.concatenate(
             [self.r_residues_, self.c_residues_, np.conj(self.c_residues_)],
             axis=0)
 
-    def fit(self, y, parity, seed_freqs=None, reuse:bool=True):
+    def fit(self, y, parity:bool=None, seed_freqs=None):
+        y = np.asarray(y)
+
+        # Determine parity if not given.
+        if parity is None:
+            eps = np.finfo(y.dtype).eps
+            tiny = np.imag(y[-1, :])
+            parity = np.max(np.abs(tiny)) > 100*eps
+        parity = int(parity)
         N, rank = y.shape
         N_ = 2*(N-1)+parity
+
         max_order = _get_max_order((N_, rank))
         if self.order is None:
             self.order = rank
@@ -397,7 +401,7 @@ class Rational(BaseEstimator):
             msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
             raise ValueError(msg)
 
-        if hasattr(self, 'indices_') and reuse:
+        if hasattr(self, 'indices_'):
             # Ignores seed_freqs and reuse previous indices.
             indices = self.indices_
             n_freqs = 0
@@ -421,22 +425,32 @@ class Rational(BaseEstimator):
 
         self.r_poles_ = np.array(poles[0])
         self.c_poles_ = np.array(poles[1])
+        if self.compute_residues is True:
+            residues = self._get_residues(y, parity)
+            self.r_residues_ = residues[0]
+            self.c_residues_ = residues[1]
+            if self.tol > 0.:
+                self._pole_pruning()
+                residues = self._get_residues(y, parity)
+                self.r_residues_ = residues[0]
+                self.c_residues_ = residues[1]
+        else:
+            self.r_residues_ = None
+            self.c_residues_ = None
 
         return self
 
-    def pole_pruning(self, tol=1e-6):
+    def _pole_pruning(self):
         poles = [self.r_poles_, self.c_poles_]
         residues = [self.r_residues_, self.c_residues_]
 
         for i in range(2):
             idxs = np.nonzero(
-                np.linalg.norm(residues[i], axis=1) > np.abs((np.abs(poles[i])-1))*tol)[0]
+                np.linalg.norm(residues[i], axis=1) > self.tol)[0]
             poles[i] = poles[i][idxs]
-            residues[i] = residues[i][idxs]
 
         self.r_poles_ = poles[0]
         self.c_poles_ = poles[1]
-        self._residues = None
 
         return self
 
@@ -497,10 +511,15 @@ class Espira(BaseEstimator):
             *,
             order:int=None,
             damping:float=0.,
-            fs:float=1.):
+            fs:float=1,
+            tol:float=0.,
+            compute_amps:bool=True
+        ):
         self.order = order
         self.damping = damping
         self.fs = fs
+        self.tol = tol
+        self.compute_amps = compute_amps
 
     @property
     def r_resonances_(self):
@@ -517,32 +536,23 @@ class Espira(BaseEstimator):
             dtype=complex)
 
     @property
-    def r_amps_(self):
-        if (not hasattr(self, '_amps')) or (self._amps is None):
-            self._amps = self._get_amps()
-        return self._amps[0]
-
-    @property
-    def c_amps_(self):
-        if (not hasattr(self, '_amps')) or (self._amps is None):
-            self._amps = self._get_amps()
-        return self._amps[1]
-
-    @property
     def amps_(self):
-        if (not hasattr(self, '_amps')) or (self._amps is None):
-            self._amps = self._get_amps()
-        return np.concatenate(
-            [self.r_amps_, self.c_amps_, np.conj(self.c_amps_)],
-            axis=0, dtype=complex)
+        if self.r_amps_ is None:
+            return None
+        else:
+            return np.concatenate(
+                [self.r_amps_, self.c_amps_, np.conj(self.c_amps_)],
+                axis=0, dtype=complex)
 
-    def _get_amps(self):
-        x = np.fft.irfft(self._y, n=self._ns, axis=0)
+    def _get_amps(self, y, parity):
+        N = y.shape[0]
+        ns = 2*(N-1)+parity
+        x = np.fft.irfft(y, n=ns, axis=0)
         poles = [self.r_poles_, self.c_poles_]
 
         # Construct Cauchy matrix.
-        Vr = poles[0][np.newaxis, :]**(np.arange(self._ns)[:, np.newaxis])
-        Vi = poles[1][np.newaxis, :]**(np.arange(self._ns)[:, np.newaxis])
+        Vr = poles[0][np.newaxis, :]**(np.arange(ns)[:, np.newaxis])
+        Vi = poles[1][np.newaxis, :]**(np.arange(ns)[:, np.newaxis])
         V = np.concatenate(
             (Vr, 2*np.real(Vi), -2*np.imag(Vi)),
             axis=1, dtype=float
@@ -556,10 +566,17 @@ class Espira(BaseEstimator):
 
         return amps
 
-    def fit(self, y, parity, seed_freqs=None, reuse:bool=True):
+    def fit(self, y, parity:bool=None, seed_freqs=None):
+        y = np.asarray(y)
         N = y.shape[0]
+
+        # Determine parity if not given.
+        if parity is None:
+            eps = np.finfo(y.dtype).eps
+            tiny = np.imag(y[-1, :])
+            parity = int(np.max(np.abs(tiny)) > 100*eps)
+        parity = int(parity)
         ns = 2*(N-1)+parity
-        self._ns = ns
 
         if hasattr(self, '_rational'):
             rational = self._rational
@@ -569,49 +586,56 @@ class Espira(BaseEstimator):
         rational.set_params(order=self.order)
 
         ωN = np.exp(-2j*np.pi/ns)
-        self._y = y
         if self.damping > 0.:
-            x = np.fft.irfft(self._y, n=ns, axis=0)
+            x = np.fft.irfft(y, n=ns, axis=0)
             x *= np.pow(self.damping, np.arange(ns)/(ns-1))[:, np.newaxis]
-            y_ = np.fft.rfft(x, axis=0)
+            y = np.fft.rfft(x, axis=0)
             del x
-        else:
-            y_ = y
         rational.fit(
-            y_*(ωN**np.arange(N))[:, np.newaxis],
-            parity,
-            seed_freqs=seed_freqs,
-            reuse=reuse)
+            y*(ωN**np.arange(N))[:, np.newaxis],
+            parity=parity,
+            seed_freqs=seed_freqs)
 
         self.r_poles_ = np.copy(rational.r_poles_)
         self.c_poles_ = np.copy(rational.c_poles_)
         if self.damping > 0.:
             self.r_poles_ *= np.pow(self.damping, -1/(ns-1))
             self.c_poles_ *= np.pow(self.damping, -1/(ns-1))
-        # Remove unstable poles.
+
         poles = [self.r_poles_, self.c_poles_]
+         # Remove unstable poles.
         for i in [0, 1]:
             idxs = np.nonzero(np.abs(poles[i]) < 1+1e-10)[0]
             poles[i] = poles[i][idxs]
         self.r_poles_ = poles[0]
         self.c_poles_ = poles[1]
-        self._amps = None
+        if self.compute_amps is True:
+            amps = self._get_amps(y, parity)
+            self.r_amps_ = amps[0]
+            self.c_amps_ = amps[1]
+            if self.tol > 0.:
+                self._pole_pruning()
+                amps = self._get_amps()
+                self.r_amps_ = amps[0]
+                self.c_amps_ = amps[1]
+        else:
+            self.r_amps_ = None
+            self.c_amps_ = None
 
         return self
 
-    def pole_pruning(self, tol=1e-6):
+    def _pole_pruning(self):
         poles = [self.r_poles_, self.c_poles_]
         amps = [self.r_amps_, self.c_amps_]
 
         for i in range(2):
             idxs = np.nonzero(
-                np.linalg.norm(amps[i], axis=1) > tol)[0]
+                np.linalg.norm(amps[i], axis=1) > self.tol)[0]
             poles[i] = poles[i][idxs]
-            amps[i] = amps[i][idxs]
 
         self.r_poles_ = poles[0]
         self.c_poles_ = poles[1]
-        self._amps = None
+
         return self
 
     def predict(self, X):
@@ -803,10 +827,10 @@ class StablePoles:
                 continue
             self.model.set_params(order=order)
             if order == min_order:
-                self.model.fit(y, parity, seed_freqs=seed_freqs, reuse=True)
+                self.model.fit(y, parity, seed_freqs=seed_freqs)
             else:
-                self.model.fit(y, parity, reuse=True)
-            real_order = len(self.model._rational.r_poles_)+2*len(self.model._rational.c_poles_)
+                self.model.fit(y, parity)
+            real_order = self.model._rational.n_poles_
 
             amps_ = np.concatenate(
                 (self.model.r_amps_, self.model.c_amps_),
