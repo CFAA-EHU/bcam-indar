@@ -6,7 +6,7 @@ import numpy as np
 import scipy
 import matplotlib.pyplot as plt
 
-from bcam.resonance._core import mechanical
+from bcam.resonance.ema import mechanical
 
 
 # # ==========================

@@ -71,7 +71,7 @@ def _update_sets(gS, gG, idx):
     gG['data'].pop(idx)
 
 
-class RatAppSym(BaseEstimator):
+class Rational(BaseEstimator):
 
     def __init__(
             self,
@@ -490,7 +490,7 @@ def exp_sum(poles, amplitudes, t, fs=1):
     return (poles[np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amplitudes
 
 
-class EspiraR(BaseEstimator):
+class Espira(BaseEstimator):
 
     def __init__(
             self,
@@ -564,7 +564,7 @@ class EspiraR(BaseEstimator):
         if hasattr(self, '_rational'):
             rational = self._rational
         else:
-            rational = RatAppSym()
+            rational = Rational()
             self._rational = rational
         rational.set_params(order=self.order)
 

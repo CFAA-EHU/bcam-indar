@@ -2,7 +2,7 @@ import pytest
 
 import numpy as np
 
-from bcam.resonance._core import espira
+from bcam.resonance.ema import espira
 
 
 # ============================
@@ -35,7 +35,7 @@ class Test_RatAppSym:
         y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
         # Fit the signal.
-        model = espira.RatAppSym(order=2*M)
+        model = espira.Rational(order=2*M)
         model.fit(y, N%2)
         model.pole_pruning(tol=1e-5)
 
@@ -79,7 +79,7 @@ class Test_RatAppSym:
         y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
         # Fit the signal.
-        model = espira.RatAppSym(order=2*MC + MR)
+        model = espira.Rational(order=2*MC + MR)
         model.fit(y, N%2)
         model.pole_pruning(tol=1e-5)
 
@@ -120,7 +120,7 @@ class Test_RatAppSym:
         y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
         # Fit the signal.
-        model = espira.RatAppSym(order=2*M)
+        model = espira.Rational(order=2*M)
         model.fit(y, N%2)
         model.pole_pruning(tol=1e-5)
 
@@ -162,7 +162,7 @@ class Test_ESPIRA:
         y = np.fft.rfft(x, axis=0)
 
         # ==== Fit exponential sum ====
-        model = espira.EspiraR(
+        model = espira.Espira(
             order=2*M, copy_y=False)
         model.fit(y, N%2)
         # Remove spurious poles with very small amplitude.
