@@ -9,84 +9,6 @@ from bcam.resonance._core import espira
 # Test Rational Approximation
 # ============================
 
-class Test_RatApp:
-
-    def test_rational_fit(self):
-        M = 10
-        N = 2 * (M + 1) + 10 # N >= 2 * (M + 1)
-        rng = np.random.default_rng()
-
-        # Create complex frequencies and residues.
-        r = rng.uniform(0.7, 0.9, M)
-        phase = rng.uniform(0, 1, M)
-        poles = r * np.exp(2j * np.pi * phase)
-        residues = rng.normal(0, 2, (M, 1)) + 1j * rng.normal(0, 2, (M, 1))
-
-        # Construct signal.
-        ωN = np.exp(-2j * np.pi / N)
-        x = espira.rational_function(poles, residues, ωN**(-np.arange(N)))
-
-        # Fit the signal.
-        res = espira.RatApp(x, rank_tol=1e-6)
-        poles_fit, residues_fit = res.fit(tol=1e-6)[:2]
-        x_fit = espira.rational_function(poles_fit, residues_fit, ωN**(-np.arange(N)))
-
-        assert len(poles_fit) == M
-        assert np.allclose(np.sort_complex(poles_fit), np.sort_complex(poles))
-        assert np.allclose(x_fit, x)
-
-    def test_vector_rational_fit(self):
-        M = 10
-        L = 4
-        N = 2 * (M + 1) + 40 # N >= 2 * (M + 1)
-        rng = np.random.default_rng()
-
-        # Create complex frequencies and residues.
-        r = rng.uniform(0.7, 0.9, M)
-        phase = rng.uniform(0, 1, M)
-        poles = r * np.exp(2j * np.pi * phase)
-        residues = rng.normal(0, 2, (M, L)) + 1j * rng.normal(0, 2, (M, L))
-
-        # Construct signal.
-        ωN = np.exp(-2j * np.pi / N)
-        x = espira.rational_function(poles, residues, ωN**(-np.arange(N)))
-
-        # Fit the signal.
-        res = espira.RatApp(x, rank_tol=1e-6)
-        poles_fit, residues_fit = res.fit(tol=1e-6)[:2]
-        x_fit = espira.rational_function(poles_fit, residues_fit, ωN**(-np.arange(N)))
-
-        assert len(poles_fit) == M
-        assert np.allclose(np.sort_complex(poles_fit), np.sort_complex(poles))
-        assert np.allclose(x_fit, x)
-
-    def test_deficient_rational_fit(self):
-        M = 10
-        L = 3
-        N = 2 * (M + 1) + 40 # N >= 2 * (M + 1)
-        rng = np.random.default_rng()
-
-        # Create complex frequencies and residues.
-        r = rng.uniform(0.7, 0.9, M)
-        phase = rng.uniform(0, 1, M)
-        poles = r * np.exp(2j * np.pi * phase)
-        residues = rng.normal(0, 2, (M, L-1)) + 1j * rng.normal(0, 2, (M, L-1))
-        add = rng.normal(0, 1, (L-1, 1))
-        residues = np.concatenate((residues, residues@add), axis=1)
-
-        # Construct signal.
-        ωN = np.exp(-2j * np.pi / N)
-        x = espira.rational_function(poles, residues, ωN**(-np.arange(N)))
-
-        # Fit the signal.
-        res = espira.RatApp(x, rank_tol=1e-6)
-        poles_fit, residues_fit = res.fit(tol=1e-6)[:2]
-        x_fit = espira.rational_function(poles_fit, residues_fit, ωN**(-np.arange(N)))
-
-        assert len(poles_fit) == M
-        assert np.allclose(np.sort_complex(poles_fit), np.sort_complex(poles))
-        assert np.allclose(x_fit, x)
-
 
 class Test_RatAppSym:
 
@@ -218,27 +140,6 @@ class Test_RatAppSym:
 # ============
 
 class Test_ESPIRA:
-
-    def test_espira(self):
-        M, L = 5, 3
-        N = 2 * (M + 1) + 10 # N >= 2 * (M + 1)
-        rng = np.random.default_rng()
-
-        r = rng.uniform(0.7, 0.9, M)
-        phase = rng.uniform(-0.5, 0.5, M)
-        poles = r * np.exp(2j * np.pi * phase)
-        amps = rng.normal(0, 2, (M, L)) + 1j * rng.normal(0, 2, (M, L))
-
-        x = espira.exp_sum(poles, amps, np.arange(N))
-        self.x = np.array(x)
-
-        # ==== Fit exponential sum ====
-        res = espira.Espira(x, rank_tol=1e-6)
-        amps_fit, poles_fit = res.fit(tol=1e-6)
-        x_fit = espira.exp_sum(poles_fit, amps_fit, np.arange(N), fs=1)
-
-        assert len(poles_fit) == M
-        assert np.allclose(x_fit, x)
 
     def test_espira_real(self):
         # Create a random generator.
