@@ -131,7 +131,7 @@ class Test_RatAppSym:
     def test_symmetric_fit_real_complex(self):
         # Test with real and complex poles.
         # ------------------------
-        rng = np.random.default_rng(87577)
+        rng = np.random.default_rng()
         MR, MC = 2, 4
         N = 2 * (2*MC + MR + 1) + 10 + rng.integers(0, 2)
         ωN = np.exp(-2j * np.pi / N)
