@@ -2,6 +2,7 @@
 
 import logging
 import bisect
+import attrs
 
 import numpy as np
 import scipy
@@ -57,6 +58,15 @@ def rational_function(poles, residues, z):
     
     return (1 / (z[:, np.newaxis] - poles[np.newaxis, :])) @ residues
 
+def pos_imag(x):
+    x = np.asarray(x, dtype=complex)
+    x[np.imag(x) < 0] = np.conj(x[np.imag(x) < 0])
+    return x
+
+@attrs.define
+class Poles:
+    real = attrs.field(converter=lambda x: np.asarray(x, dtype=float), default=np.array([]))
+    imag = attrs.field(converter=pos_imag, default=np.array([]))
 
 def _get_max_order(shape):
     ns, rank = shape
@@ -73,7 +83,7 @@ def _update_sets(gS, gG, idx):
     gG['data'].pop(idx)
 
 
-class Rational(BaseEstimator):
+class AAA(BaseEstimator):
 
     def __init__(
             self,
@@ -463,6 +473,127 @@ class Rational(BaseEstimator):
             X
         )
 
+class VF(BaseEstimator):
+
+    def __init__(
+        self,
+        *,
+        order:int=None,
+        cond:float=None,
+        lapack_driver:str=None
+    ):
+        self.order = order
+        self.cond = cond
+        self.lapack_driver = lapack_driver
+
+    def _get_weights(self, y, parity):
+        N, rank = y.shape
+        ns = 2*(N-1)+parity
+
+        n_poles = self.order
+        self.n_poles_ = n_poles
+        poles = 0.9*np.exp(1j*np.pi*np.arange(1, n_poles+1)/(n_poles+1))
+        poles = Poles(imag=poles)
+
+        u = np.exp(2j*np.pi/ns)
+        # Compute Cauchy matrix.
+        Cr = 1/(u**np.arange(N)[:, np.newaxis] - poles.real[np.newaxis, :])
+        Cr = np.concatenate((Cr, np.ones(shape=(N, 1), dtype=float)), axis=1)
+        C1 = 1/(u**np.arange(N)[:, np.newaxis] - poles.imag[np.newaxis, :])
+        C2 = 1/(u**np.arange(N)[:, np.newaxis] - np.conj(poles.imag)[np.newaxis, :])
+        
+        # Add constraint that rational function is symmetric.
+        C = np.concatenate(
+            (Cr, C1 + C2, 1j*(C1 - C2)),
+            dtype=complex, axis=1)
+
+        # Constraint vector.
+        const_r = np.sum(Cr[ends], axis=0) + 2*np.real(np.sum(Cr[1:last], axis=0))
+        const_c = np.sum(C1[ends], axis=0)
+        const_c_r = const_c + np.sum(C1[1:last] + C2[1:last], axis=0)
+        const_c_r = 2*np.real(const_c_r)
+        const_c_i = const_c + np.sum(C1[1:last] - C2[1:last], axis=0)
+        const_c_i = -2*np.imag(const_c_i)
+        const = np.concatenate((const_r, const_c_r, const_c_i), axis=1)/ns
+        In = scipy.linalg.qr(const.T, pivoting=True)[0]
+        In = In[:, 1:]
+        del Cr, C1, C2, const
+
+        # Construct right-most columns of system matrix. Shape = (ns, n_poles, rank).
+        R = -y[:, np.newaxis, :] * C[..., np.newaxis]
+        R = np.einsum('ijk,jl->ilk', R, In)
+
+        # Separate real and imaginary parts.
+        ends = [0]
+        if parity == 0:
+            ends.append(N-1)
+        ends = np.array(ends, dtype=np.int64)
+        last = N-1+parity
+        C = np.concatenate(
+            (np.real(C[ends]), np.sqrt(2)*np.real(C[1:last]), np.sqrt(2)*np.imag(C[1:last])),
+            axis=0, dtype=float
+        )
+        R = np.concatenate(
+            (np.real(R[ends]), np.sqrt(2)*np.real(R[1:last]), np.sqrt(2)*np.imag(R[1:last])),
+            axis=0, dtype=float
+        )
+
+        # Data to approximate. Shape = (ns, rank).
+        b = np.concatenate(
+            (np.real(y[ends]), np.sqrt(2)*np.real(y[1:last]), np.sqrt(2)*np.imag(y[1:last])),
+            axis=0, dtype=float
+        )
+
+        Rb = np.concatenate((R, b[:, np.newaxis, :]), axis=1)
+        Rb = Rb.reshape((ns, -1))
+        del R, b
+
+        # Solve LS for small Cauchy matrix.
+        normals = scipy.linalg.lstsq(
+            C, Rb, cond=self.cond, lapack_driver=self.lapack_driver)[0]
+        Rb = Rb - C@normals
+        del C, normals
+        Rb = Rb.reshape((ns, n_poles, rank))
+        R_tilde, b_tilde = Rb[:, :-1, :], Rb[:, -1, :]
+        del Rb
+        R_tilde = np.concatenate((R_tilde[..., k] for k in range(rank)), axis=0)
+        b_tilde = b_tilde.T.reshape((1, -1)).T
+
+        # Solve reduced LS problem.
+        t = scipy.linalg.lstsq(
+            R_tilde, b_tilde, cond=self.cond, lapack_driver=self.lapack_driver)[0]
+        t = In @ t
+
+        n_real = len(poles.real) + 1 # +1 for the constant term.
+        n_complex = len(poles.imag)
+        w_r = t[:n_real-1]
+        d = t[n_real-1]
+        w_c = t[n_real:n_real+n_complex] + 1j*t[n_real+n_complex:]
+
+    def fit(self, y, parity:bool=None):
+        y = np.asarray(y)
+        N, rank = y.shape
+        ns = 2*(N-1)+parity
+
+        # Determine parity if not given.
+        if parity is None:
+            eps = np.finfo(y.dtype).eps
+            tiny = np.imag(y[-1, :])
+            parity = np.max(np.abs(tiny)) > 100*eps
+        parity = int(parity)
+
+        max_order = _get_max_order((ns, rank))
+        if self.order is None:
+            self.order = rank
+        elif self.order > max_order:
+            msg = f'The order exceeds the maximum allowed order {max_order}. \
+                Redefining order to {max_order}.'
+            logging.warning(msg, stacklevel=2)
+            self.order = max_order
+
+        return self
+
+
 
 # ===============================
 # Exponential Sums Decomposition
@@ -504,83 +635,6 @@ def exp_sum(poles, amplitudes, t, fs=1):
         raise ValueError(msg)
 
     return (poles[np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amplitudes
-
-
-class VF(BaseEstimator):
-
-    def __init__(self, order:int=None):
-        self.order = order
-
-    def fit(self, y, parity, seed_freqs=None):
-        y = np.asarray(y)
-        N = y.shape[0]
-        ns = 2*(N-1)+parity
-
-        # Determine parity if not given.
-        if parity is None:
-            eps = np.finfo(y.dtype).eps
-            tiny = np.imag(y[-1, :])
-            parity = np.max(np.abs(tiny)) > 100*eps
-        parity = int(parity)
-        N, rank = y.shape
-        N_ = 2*(N-1)+parity
-
-        max_order = _get_max_order((N_, rank))
-        if self.order is None:
-            self.order = rank
-        elif rank > self.order:
-            msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
-            raise ValueError(msg)
-
-        if self.order > max_order:
-            msg = f'The order exceeds the maximum allowed order {max_order}.'
-            raise ValueError(msg)
-
-        n_poles = (self.order+1)//2
-        poles = np.zeros(shape=(2*n_poles,), dtype=complex)
-        self.n_poles_ = len(poles)
-        poles_ = 0.9*np.exp(1j*np.pi*np.arange(1, n_poles+1)/(n_poles+1))
-        poles[::2] = poles_[:n_poles]
-        poles[1::2] = np.conj(poles_[:n_poles])
-
-        # vector fitting configuration
-        vf.opts["asymp"]=1
-        vf.opts["stable"]=False
-        vf.opts["spy2"]=False
-        vf.opts["skip_res"]=True
-        niter = 5
-        for it in range(niter):
-            if it == niter - 1:
-                vf.opts["skip_res"]=False
-            poles = vf.vectfit(
-                y.T,
-                np.exp(2j*np.pi*np.arange(ns//2+1)/ns),
-                poles,
-                np.ones_like(y.T, dtype=float),
-                opts=vf.opts)[1]
-        
-        # Separate real and complex conjugated poles.
-        poles_u = list(poles[np.imag(poles) >= 0])
-        poles_l = list(poles[np.imag(poles) < 0])
-        poles_r, poles_c = [], []
-        while (len(poles_u) > 0) and (len(poles_l) > 0):
-            distances = np.abs([p - np.conj(poles_u[-1]) for p in poles_l])
-            idx = np.argmin(distances)
-            if distances[idx] < 1e-8:
-                poles_c.append(poles_u.pop())
-                poles_l.pop(idx)
-            else:
-                poles_r.append(poles_u.pop())
-        poles_r.extend(poles_u)
-        poles_r.extend(poles_l)
-        poles_r = np.real(poles_r)
-        poles_c = np.array(poles_c)
-        poles = [poles_r, poles_c]
-
-        self.r_poles_ = np.array(poles[0])
-        self.c_poles_ = np.array(poles[1])
-
-        return self
 
 
 class ExpVF(BaseEstimator):
@@ -698,7 +752,7 @@ class ExpVF(BaseEstimator):
         ))
 
 
-class Espira(BaseEstimator):
+class SuperResolution(BaseEstimator):
 
     def __init__(
             self,
