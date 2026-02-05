@@ -68,6 +68,34 @@ class Poles:
     real = attrs.field(converter=lambda x: np.asarray(x, dtype=float), default=np.array([]))
     imag = attrs.field(converter=pos_imag, default=np.array([]))
 
+    @classmethod
+    def from_raw(cls, poles):
+        poles = np.asarray(poles, dtype=complex)
+
+        # Separate real and complex conjugated poles.
+        poles_u = list(poles[np.imag(poles) >= 0])
+        poles_l = list(poles[np.imag(poles) < 0])
+        poles_r, poles_c = [], []
+        while (len(poles_u) > 0) and (len(poles_l) > 0):
+            distances = np.abs([p - np.conj(poles_u[-1]) for p in poles_l])
+            idx = np.argmin(distances)
+            if distances[idx] < 1e-8:
+                poles_c.append(poles_u.pop())
+                poles_l.pop(idx)
+            else:
+                # If a pole does not have a conjugate, we consider it as a real pole.
+                poles_r.append(poles_u.pop())
+
+        poles_r.extend(poles_u)
+        poles_r.extend(poles_l)
+        poles_r = np.real(poles_r)
+        poles_c = np.array(poles_c, dtype=complex)
+
+        return cls(real=poles_r, imag=poles_c)
+
+    def full(self):
+        return np.concatenate((self.real, self.imag, np.conj(self.imag)))
+
 def _get_max_order(shape):
     ns, rank = shape
     # Counting complex paramaters in a complex time series
@@ -287,23 +315,6 @@ class AAA(BaseEstimator):
         poles = scipy.linalg.eigvals(a, b, overwrite_a=True)
         poles = poles[2:]
 
-        # Separate real and complex conjugated poles.
-        poles_u = list(poles[np.imag(poles) >= 0])
-        poles_l = list(poles[np.imag(poles) < 0])
-        poles_r, poles_c = [], []
-        while (len(poles_u) > 0) and (len(poles_l) > 0):
-            distances = np.abs([p - np.conj(poles_u[-1]) for p in poles_l])
-            idx = np.argmin(distances)
-            if distances[idx] < 1e-8:
-                poles_c.append(poles_u.pop())
-                poles_l.pop(idx)
-            else:
-                poles_r.append(poles_u.pop())
-        poles_r.extend(poles_u)
-        poles_r.extend(poles_l)
-        poles_r = np.real(poles_r)
-        poles_c = np.array(poles_c)
-        poles = [poles_r, poles_c]
         dim = 2*len(poles[1]) + len(poles[0])
         # Check that the number of poles is correct.
         if dim != M:
@@ -479,21 +490,20 @@ class VF(BaseEstimator):
         self,
         *,
         order:int=None,
+        compute_r:bool=False,
+        prune_tol:float=0.,
         cond:float=None,
         lapack_driver:str=None
     ):
         self.order = order
+        self.compute_r = compute_r
+        self.prune_tol = prune_tol
         self.cond = cond
         self.lapack_driver = lapack_driver
 
-    def _get_weights(self, y, parity):
+    def _get_weights(self, y, parity, poles):
         N, rank = y.shape
         ns = 2*(N-1)+parity
-
-        n_poles = self.order
-        self.n_poles_ = n_poles
-        poles = 0.9*np.exp(1j*np.pi*np.arange(1, n_poles+1)/(n_poles+1))
-        poles = Poles(imag=poles)
 
         u = np.exp(2j*np.pi/ns)
         # Compute Cauchy matrix.
@@ -553,7 +563,7 @@ class VF(BaseEstimator):
             C, Rb, cond=self.cond, lapack_driver=self.lapack_driver)[0]
         Rb = Rb - C@normals
         del C, normals
-        Rb = Rb.reshape((ns, n_poles, rank))
+        Rb = Rb.reshape((ns, self.n_poles_, rank))
         R_tilde, b_tilde = Rb[:, :-1, :], Rb[:, -1, :]
         del Rb
         R_tilde = np.concatenate((R_tilde[..., k] for k in range(rank)), axis=0)
@@ -569,6 +579,19 @@ class VF(BaseEstimator):
         w_r = t[:n_real-1]
         d = t[n_real-1]
         w_c = t[n_real:n_real+n_complex] + 1j*t[n_real+n_complex:]
+
+        return w_r, w_c, d
+
+    def _get_poles(self, w_r, w_c, d, poles):
+        w = np.concatenate((w_r, w_c, np.conj(w_c)), dtype=complex)
+        M = np.diag(poles.full())
+        M += -np.ones_like(w, dtype=float) @ w / d
+
+        # Compute poles as eigenvalues of M.
+        poles = scipy.linalg.eigvals(M, overwrite_a=True)
+        poles = Poles.from_raw(poles)
+
+        return poles
 
     def fit(self, y, parity:bool=None):
         y = np.asarray(y)
@@ -590,6 +613,16 @@ class VF(BaseEstimator):
                 Redefining order to {max_order}.'
             logging.warning(msg, stacklevel=2)
             self.order = max_order
+
+        # Set initial poles.
+        n_poles = self.order
+        self.n_poles_ = n_poles
+        poles_init = 0.9*np.exp(1j*np.pi*np.arange(1, n_poles+1)/(n_poles+1))
+        poles_init = Poles(imag=poles_init)
+
+        weights = self._get_weights(y, parity, poles_init)
+        poles = self._get_poles(*weights, poles_init)
+        self.poles_ = poles
 
         return self
 
