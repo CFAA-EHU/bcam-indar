@@ -2,7 +2,7 @@ import pytest
 
 import numpy as np
 
-from bcam.resonance.ema import espira
+from bcam.resonance.ema import pole_fitting
 
 
 # ============================
@@ -32,10 +32,10 @@ class Test_RatAppSym:
         residues_ = np.concatenate((residues, np.conj(residues)), axis=0)
 
         # Construct signal.
-        y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
+        y = pole_fitting.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
         # Fit the signal.
-        model = espira.Rational(order=2*M)
+        model = pole_fitting.Rational(order=2*M)
         model.fit(y, N%2)
         model.pole_pruning(tol=1e-5)
 
@@ -76,10 +76,10 @@ class Test_RatAppSym:
         residues_ = np.concatenate((residues_R, residues_C, np.conj(residues_C)), axis=0)
 
         # Construct signal.
-        y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
+        y = pole_fitting.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
         # Fit the signal.
-        model = espira.Rational(order=2*MC + MR)
+        model = pole_fitting.Rational(order=2*MC + MR)
         model.fit(y, N%2)
         model.pole_pruning(tol=1e-5)
 
@@ -117,10 +117,10 @@ class Test_RatAppSym:
         residues_ = np.concatenate((residues, np.conj(residues)), axis=0)
 
         # Construct signal.
-        y = espira.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
+        y = pole_fitting.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
         # Fit the signal.
-        model = espira.Rational(order=2*M)
+        model = pole_fitting.Rational(order=2*M)
         model.fit(y, N%2)
         model.pole_pruning(tol=1e-5)
 
@@ -157,12 +157,12 @@ class Test_ESPIRA:
         poles = poles[idxs]
         amps = amps[idxs]
 
-        x = espira.exp_sum(poles_, amps_, np.arange(N), fs=1)
+        x = pole_fitting.exp_sum(poles_, amps_, np.arange(N), fs=1)
         x = np.real(x)
         y = np.fft.rfft(x, axis=0)
 
         # ==== Fit exponential sum ====
-        model = espira.Espira(
+        model = pole_fitting.Espira(
             order=2*M, copy_y=False)
         model.fit(y, N%2)
         # Remove spurious poles with very small amplitude.
