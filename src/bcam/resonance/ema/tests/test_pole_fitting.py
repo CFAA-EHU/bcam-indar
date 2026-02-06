@@ -9,6 +9,40 @@ from bcam.resonance.ema import pole_fitting
 # Test Rational Approximation
 # ============================
 
+def random_rational(
+        n_real_poles, n_complex_pairs, rank=1, ns=None, rng=None):
+    if rng is None:
+        rng = np.random.default_rng()
+    n_poles = n_real_poles + 2*n_complex_pairs
+    if ns is None:
+        ns = (rank+1)*2*n_poles//rank + 10 + rng.integers(0, 2)
+    u = np.exp(2j * np.pi / ns)
+
+    # Create complex frequencies and residues.
+    poles_r = rng.uniform(0.8, 0.95, n_real_poles)
+    poles_r = rng.choice([-1, 1], size=n_real_poles) * poles_r
+    rad = rng.uniform(0.8, 0.95, n_complex_pairs)
+    phase = rng.uniform(0.01, 0.49, n_complex_pairs)
+    poles_cx = rad * np.exp(2j * np.pi * phase)
+
+    r_r = rng.normal(size=(n_real_poles, rank))
+    r_cx = rng.normal(size=(n_complex_pairs, rank)) + 1j * rng.normal(size=(n_complex_pairs, rank))
+    
+    idxs = np.argsort(poles_r)
+    poles_r = poles_r[idxs]
+    r_r = r_r[idxs]
+    idxs = np.argsort(poles_cx)
+    poles_cx = poles_cx[idxs]
+    r_cx = r_cx[idxs]
+    
+    poles = np.concatenate((poles_r, poles_cx, np.conj(poles_cx)))
+    r = np.concatenate((r_r, r_cx, np.conj(r_cx)), axis=0)
+
+    # Construct signal.
+    y = pole_fitting.rational(poles, r, u**np.arange(ns//2+1))
+
+    return (poles_r, poles_cx), (r_r, r_cx), (y, ns%2)
+
 
 class Test_AAA:
 
@@ -23,12 +57,12 @@ class Test_AAA:
         # Create complex frequencies and residues.
         r = rng.uniform(0.7, 0.9, M)
         phase = rng.uniform(0.01, 0.49, M)
-        poles = r * np.exp(2j * np.pi * phase)
+        poles_cx = r * np.exp(2j * np.pi * phase)
         residues = rng.normal(0, 2, (M, 1)) + 1j * rng.normal(0, 2, (M, 1))
-        idxs = np.argsort(poles)
-        poles = poles[idxs]
+        idxs = np.argsort(poles_cx)
+        poles_cx = poles_cx[idxs]
         residues = residues[idxs]
-        poles_ = np.concatenate((poles, np.conj(poles)))
+        poles_ = np.concatenate((poles_cx, np.conj(poles_cx)))
         residues_ = np.concatenate((residues, np.conj(residues)), axis=0)
 
         # Construct signal.
@@ -46,7 +80,7 @@ class Test_AAA:
         residues_fit[1] = residues_fit[1][idxs]
 
         assert (len(poles_fit[0]) == 0) and (len(poles_fit[1]) == M)
-        assert np.allclose(poles_fit[1], poles)
+        assert np.allclose(poles_fit[1], poles_cx)
         assert np.allclose(residues_fit[1], residues)
 
     def test_symmetric_fit_real_complex(self):
@@ -137,41 +171,86 @@ class Test_AAA:
 
 class Test_VF:
 
-    def test_complex(self):
+    def test_scalar_complex(self):
         # Test only complex poles
         # ------------------------
-        rng = np.random.default_rng(21685)
-        M = 6
-        N = 2 * (2*M + 1) + 10 + rng.integers(0, 2)
-        ωN = np.exp(-2j * np.pi / N)
+        parent_rng = np.random.default_rng()
+        n_trials = 5
+        children = parent_rng.spawn(n_trials)
+        for rng in children:
+            M = rng.integers(1, 10)
+            poles, r, y = random_rational(
+                n_real_poles=0, n_complex_pairs=M, rank=1, rng=rng)
 
-        # Create complex frequencies and residues.
-        r = rng.uniform(0.8, 0.95, M)
-        phase = rng.uniform(0.01, 0.49, M)
-        poles = r * np.exp(2j * np.pi * phase)
-        residues = rng.normal(0, 2, (M, 1)) + 1j * rng.normal(0, 2, (M, 1))
-        idxs = np.argsort(poles)
-        poles = poles[idxs]
-        residues = residues[idxs]
-        poles_ = np.concatenate((poles, np.conj(poles)))
-        residues_ = np.concatenate((residues, np.conj(residues)), axis=0)
+            # Fit the signal.
+            model = pole_fitting.VF(order=2*M, niter=2)
+            model.fit(*y)
 
-        # Construct signal.
-        y = pole_fitting.rational(poles_, residues_, ωN**(-np.arange(N//2+1)))
+            for part in ['real', 'cx']:
+                p_ = getattr(model.poles_, part)
+                idxs = np.argsort(p_)
+                setattr(model.poles_, part, p_[idxs])
+                setattr(model.r_, part, getattr(model.r_, part)[idxs])
 
-        # Fit the signal.
-        model = pole_fitting.VF(order=2*M)
-        model.fit(y, N%2)
-        poles_fit = model.poles_
-        # residues_fit = [model.r_residues_, model.c_residues_]
+            assert (len(model.poles_.real) == 0) and (len(model.poles_.cx) == M)
+            assert np.allclose(model.poles_.cx, poles[1])
+            assert np.allclose(model.r_.cx, r[1])
 
-        idxs = np.argsort(poles_fit.imag)
-        poles_fit.imag = poles_fit.imag[idxs]
-        # residues_fit[1] = residues_fit[1][idxs]
+    def test_scalar_mixed(self):
+        # Test only complex poles
+        # ------------------------
+        parent_rng = np.random.default_rng()
+        n_trials = 5
+        children = parent_rng.spawn(n_trials)
+        for rng in children:
+            M = rng.integers(1, 5)
+            L = rng.integers(1, 5)
+            poles, r, y = random_rational(
+                n_real_poles=L, n_complex_pairs=M, rank=1, rng=rng)
 
-        assert (len(poles_fit.real) == 0) and (len(poles_fit.imag) == M)
-        assert np.allclose(poles_fit.imag, poles)
-        # assert np.allclose(residues_fit[1], residues)
+            # Fit the signal.
+            model = pole_fitting.VF(order=2*M+L, niter=2)
+            model.fit(*y)
+
+            for part in ['real', 'cx']:
+                p_ = getattr(model.poles_, part)
+                idxs = np.argsort(p_)
+                setattr(model.poles_, part, p_[idxs])
+                setattr(model.r_, part, getattr(model.r_, part)[idxs])
+
+            assert (len(model.poles_.real) == L) and (len(model.poles_.cx) == M)
+            assert np.allclose(model.poles_.real, poles[0])
+            assert np.allclose(model.poles_.cx, poles[1])
+            assert np.allclose(model.r_.real, r[0])
+            assert np.allclose(model.r_.cx, r[1])
+
+    def test_vector_mixed(self):
+        # Test only complex poles
+        # ------------------------
+        parent_rng = np.random.default_rng()
+        n_trials = 5
+        children = parent_rng.spawn(n_trials)
+        for rng in children:
+            M = rng.integers(2, 5)
+            L = rng.integers(1, 5)
+            poles, r, y = random_rational(
+                n_real_poles=L, n_complex_pairs=M, rank=3, rng=rng)
+
+            # Fit the signal.
+            model = pole_fitting.VF(order=2*M+L, niter=2)
+            model.fit(*y)
+
+            for part in ['real', 'cx']:
+                p_ = getattr(model.poles_, part)
+                idxs = np.argsort(p_)
+                setattr(model.poles_, part, p_[idxs])
+                setattr(model.r_, part, getattr(model.r_, part)[idxs])
+
+            assert (len(model.poles_.real) == L) and (len(model.poles_.cx) == M)
+            assert np.allclose(model.poles_.real, poles[0])
+            assert np.allclose(model.poles_.cx, poles[1])
+            assert np.allclose(model.r_.real, r[0])
+            assert np.allclose(model.r_.cx, r[1])
 
 # ============
 # Test SuperResolution

@@ -27,7 +27,7 @@ def pos_imag(x):
 @attrs.define
 class _Poles:
     real = attrs.field(converter=lambda x: np.asarray(x, dtype=float), default=np.array([]))
-    imag = attrs.field(converter=pos_imag, default=np.array([]))
+    cx = attrs.field(converter=pos_imag, default=np.array([]))
 
     @classmethod
     def from_raw(cls, poles):
@@ -52,17 +52,27 @@ class _Poles:
         poles_r = np.real(poles_r)
         poles_c = np.array(poles_c, dtype=complex)
 
-        return cls(real=poles_r, imag=poles_c)
+        return cls(real=poles_r, cx=poles_c)
 
     def full(self):
-        return np.concatenate((self.real, self.imag, np.conj(self.imag)))
+        return np.concatenate((self.real, self.cx, np.conj(self.cx)))
 
-def rational(poles, residues, z):
+
+@attrs.define
+class _HCoeffs:
+    real = attrs.field(converter=lambda x: np.asarray(x, dtype=float), default=np.array([]))
+    cx = attrs.field(converter=lambda x: np.asarray(x, dtype=complex), default=np.array([]))
+
+    def full(self):
+        return np.concatenate((self.real, self.cx, np.conj(self.cx)))
+
+
+def rational(poles, r, z):
     '''
     Parameters
     ----------
     poles : (M,) array_like
-    residues : (M, L) array_like
+    r : (M, L) array_like
     z : scalar or (N, ) array_like
 
     Return
@@ -83,24 +93,70 @@ def rational(poles, residues, z):
         msg = f'Expected a 1D array for z, got an array of dimension {z.ndim}.'
         raise ValueError(msg)
 
-    residues = np.asarray(residues)
-    if residues.ndim == 1:
-        residues = np.expand_dims(residues, axis=1)
-    elif residues.ndim > 2:
-        msg = f'Expected a 1D or 2D array for residues, got an array of dimension {residues.ndim}.'
+    r = np.asarray(r)
+    if r.ndim == 1:
+        r = np.expand_dims(r, axis=1)
+    elif r.ndim > 2:
+        msg = f'Expected a 1D or 2D array for residues, got an array of dimension {r.ndim}.'
         raise ValueError(msg)
     
-    if poles.shape[0] != residues.shape[0]:
-        msg = f'The number of poles and residues must be the same, got {poles.shape[0]} and {residues.shape[0]} instead.'
+    if poles.shape[0] != r.shape[0]:
+        msg = f'The number of poles and residues must be the same, got {poles.shape[0]} and {r.shape[0]} instead.'
         raise ValueError(msg)
     
-    return (1 / (z[:, np.newaxis] - poles[np.newaxis, :])) @ residues
+    return (1 / (z[:, np.newaxis] - poles[np.newaxis, :])) @ r
 
-def _get_max_order(shape):
-    ns, rank = shape
+def _get_residues(y, parity, poles, cond=None, lapack_driver=None):
+    N = y.shape[0]
+    ns = 2*(N-1) + parity
+
+    u = np.exp(-2j*np.pi/ns)
+    # Construct Cauchy matrix.
+    Cr = 1/(u**(-np.arange(N)[:, np.newaxis]) - poles.real[np.newaxis, :])
+    Cr = np.concatenate((Cr, np.ones(shape=(N, 1))), axis=1)
+    Ci1 = 1/(u**(-np.arange(N)[:, np.newaxis]) - poles.cx[np.newaxis, :])
+    Ci2 = 1/(u**(-np.arange(N)[:, np.newaxis]) - np.conj(poles.cx)[np.newaxis, :])
+    C = np.concatenate(
+        (Cr, Ci1 + Ci2, 1j*(Ci1 - Ci2)),
+        axis=1
+    )
+
+    # Auxiliary indices for separating real and imaginary parts.
+    ends = [0]
+    if parity == 0:
+        ends.append(N-1)
+    ends = np.array(ends, dtype=np.int64)
+    last = N-1+parity
+
+    # Separate real and imaginary parts.
+    C = np.concatenate(
+        (np.real(C[ends]), np.sqrt(2)*np.real(C[1:last]), np.sqrt(2)*np.imag(C[1:last])),
+        axis=0, dtype=float)
+    y = np.concatenate(
+        (np.real(y[ends]), np.sqrt(2)*np.real(y[1:last]), np.sqrt(2)*np.imag(y[1:last])),
+        axis=0, dtype=float)
+
+    # Solve for r.
+    r = scipy.linalg.lstsq(
+        C, y, overwrite_a=True, overwrite_b=True,
+        cond=cond, lapack_driver=lapack_driver)[0]
+    lr, lc = len(poles.real), len(poles.cx)
+    r = _HCoeffs(real=r[:lr], cx=r[lr+1:lr+1+lc] + 1j*r[lr+1+lc:])
+
+    return r
+
+def _pole_pruning(poles:_Poles, r:_HCoeffs, tol:float):
+    for part in ['real', 'cx']:
+        idxs = np.nonzero(
+            np.linalg.norm(getattr(r, part), axis=1) > tol)[0]
+        setattr(poles, part, getattr(poles, part)[idxs])
+
+    return poles
+
+def _get_max_order(ns, rank):
     # Counting complex paramaters in a complex time series
     # and in a rational function, we have that:
-    max_order = rank*ns//(rank+1)
+    max_order = rank*ns//(2*(rank+1))
 
     return max_order
 
@@ -323,41 +379,6 @@ class AAA(BaseEstimator):
 
         return poles
 
-    def _get_residues(self, y, parity):
-        poles = [self.r_poles_, self.c_poles_]
-        N = y.shape[0]
-        N_ = 2*(N-1) + parity
-        ωN = np.exp(-2j * np.pi / N_)
-        I = np.arange(N)
-
-        # Construct Cauchy matrix.
-        Cr = 1/(ωN**(-I[:, np.newaxis])-poles[0][np.newaxis, :])
-        Ci1 = 1/(ωN**(-I[:, np.newaxis])-poles[1][np.newaxis, :])
-        Ci2 = 1/(ωN**(-I[:, np.newaxis])-np.conj(poles[1])[np.newaxis, :])
-        C = np.concatenate(
-            (Cr, Ci1 + Ci2, 1j*(Ci1 - Ci2)),
-            axis=1
-        )
-        
-        # Separate real and imaginary of matrix and y.
-        e = [1, N+parity-1]
-        C = np.concatenate(
-            (np.real(C), np.imag(C[e[0]:e[1]])),
-            axis=0, dtype=float
-        )
-        y = np.concatenate(
-            (np.real(y), np.imag(y[e[0]:e[1]])), axis=0,
-            dtype=float
-        )
-
-        # Solve for residues.
-        r = scipy.linalg.lstsq(
-            C, y, overwrite_a=True, overwrite_b=True)[0]
-        lr, lc = len(poles[0]), len(poles[1])
-        residues = [r[:lr], r[lr:lr+lc] + 1j*r[lr+lc:]]
-
-        return residues
-
     def _fit(self, y, parity, indices):
         N = y.shape[0]
         gS, gG = self._initialize_sets(y, indices)
@@ -415,9 +436,9 @@ class AAA(BaseEstimator):
             parity = np.max(np.abs(tiny)) > 100*eps
         parity = int(parity)
         N, rank = y.shape
-        N_ = 2*(N-1)+parity
+        ns = 2*(N-1)+parity
 
-        max_order = _get_max_order((N_, rank))
+        max_order = _get_max_order(ns, rank)
         if self.order is None:
             self.order = rank
         elif rank > self.order:
@@ -463,20 +484,6 @@ class AAA(BaseEstimator):
 
         return self
 
-    def _pole_pruning(self):
-        poles = [self.r_poles_, self.c_poles_]
-        residues = [self.r_residues_, self.c_residues_]
-
-        for i in range(2):
-            idxs = np.nonzero(
-                np.linalg.norm(residues[i], axis=1) > self.tol)[0]
-            poles[i] = poles[i][idxs]
-
-        self.r_poles_ = poles[0]
-        self.c_poles_ = poles[1]
-
-        return self
-
     def predict(self, X):
         return rational(
             self.poles_,
@@ -489,13 +496,17 @@ class VF(BaseEstimator):
     def __init__(
         self,
         *,
-        order:int=None,
+        order:int=1,
+        poles:np.typing.ArrayLike=None,
+        niter:int=1,
         compute_r:bool=True,
         prune_tol:float=0.,
         cond:float=None,
         lapack_driver:str=None
     ):
         self.order = order
+        self.poles = poles
+        self.niter = niter
         self.compute_r = compute_r
         self.prune_tol = prune_tol
         self.cond = cond
@@ -509,8 +520,8 @@ class VF(BaseEstimator):
         # Compute Cauchy matrix.
         Cr = 1/(u**np.arange(N)[:, np.newaxis] - poles.real[np.newaxis, :])
         Cr = np.concatenate((Cr, np.ones(shape=(N, 1))), axis=1)
-        C1 = 1/(u**np.arange(N)[:, np.newaxis] - poles.imag[np.newaxis, :])
-        C2 = 1/(u**np.arange(N)[:, np.newaxis] - np.conj(poles.imag)[np.newaxis, :])
+        C1 = 1/(u**np.arange(N)[:, np.newaxis] - poles.cx[np.newaxis, :])
+        C2 = 1/(u**np.arange(N)[:, np.newaxis] - np.conj(poles.cx)[np.newaxis, :])
         
         # Add constraint that rational function is symmetric.
         C = np.concatenate(
@@ -565,7 +576,7 @@ class VF(BaseEstimator):
             C, Rb, cond=self.cond, lapack_driver=self.lapack_driver)[0]
         Rb = Rb - C@normals
         del C, normals
-        Rb = Rb.reshape((ns, self.n_poles_+1, rank))
+        Rb = Rb.reshape((ns, self.order+1, rank))
         R_tilde, b_tilde = Rb[:, :-1, :], Rb[:, -1, :]
         del Rb
         R_tilde = R_tilde.transpose(1, 2, 0).reshape((-1, ns*rank)).T
@@ -578,7 +589,7 @@ class VF(BaseEstimator):
         t = t[:, 0]
 
         n_real = len(poles.real) + 1 # +1 for the constant term.
-        n_complex = len(poles.imag)
+        n_complex = len(poles.cx)
         w_r = t[:n_real-1]
         d = t[n_real-1] + 1
         w_c = t[n_real:n_real+n_complex] + 1j*t[n_real+n_complex:]
@@ -594,8 +605,9 @@ class VF(BaseEstimator):
         poles = scipy.linalg.eigvals(M, overwrite_a=True)
         poles = _Poles.from_raw(poles)
 
-        if 2*len(poles.imag) + len(poles.real) != self.n_poles_:
-            msg = f'Expected {self.n_poles_} poles, got {2*len(poles.imag) + len(poles.real)} instead.'
+        if 2*len(poles.cx) + len(poles.real) != self.order:
+            msg = f'Problems during computation of poles. \
+                Expected {self.order} poles, got {2*len(poles.cx) + len(poles.real)} instead.'
             raise ValueError(msg)
 
         return poles
@@ -612,27 +624,61 @@ class VF(BaseEstimator):
             parity = np.max(np.abs(tiny)) > 100*eps
         parity = int(parity)
 
-        max_order = _get_max_order((ns, rank))
+        max_order = _get_max_order(ns, rank)
         if self.order is None:
             self.order = rank
         elif self.order > max_order:
-            msg = f'The order exceeds the maximum allowed order {max_order}. \
-                Redefining order to {max_order}.'
+            msg = f'The order exceeds the maximum recommended order {max_order}.'
             logging.warning(msg, stacklevel=2)
             self.order = max_order
 
         # Set initial poles.
         n_poles = self.order
-        self.n_poles_ = n_poles
-        poles_init = 0.9*np.exp(1j*np.pi*np.arange(1, n_poles//2+1)/(n_poles//2+1))
-        poles_init = _Poles(imag=poles_init)
+        if self.poles is None:
+            poles = 0.9*np.exp(1j*np.pi*np.arange(1, n_poles//2+1)/(n_poles//2+1))
+            poles = _Poles(cx=poles)
+            if self.order % 2 == 1:
+                poles.real = [0.9]
+        elif isinstance(self.poles, tuple):
+            if len(self.poles) == 2:
+                poles = _Poles(real=self.poles[0], cx=self.poles[1])
+            else:
+                msg = f'Expected a tuple of length 2 for poles, got a tuple of length {len(self.poles)} instead.'
+                raise ValueError(msg)
+        else:
+            poles = _Poles.from_raw(self.poles)
 
-        weights = self._get_weights(y, parity, poles_init)
-        poles = self._get_poles(*weights, poles_init)
+        if 2*len(poles.cx) + len(poles.real) != self.order:
+            msg = f'Expected {self.order} poles, got {2*len(poles.cx) + len(poles.real)} instead.'
+            raise ValueError(msg)
+
+        for _ in range(self.niter):
+            weights = self._get_weights(y, parity, poles)
+            poles = self._get_poles(*weights, poles)
         self.poles_ = poles
+
+        if self.prune_tol > 0.:
+            self.r_ = _get_residues(
+                y, parity, poles, cond=self.cond, lapack_driver=self.lapack_driver)
+            self.poles_ = _pole_pruning(self.poles_, self.r_, self.prune_tol)
+
+        if self.compute_r:
+            self.r_ = _get_residues(
+                y, parity, self.poles_,
+                cond=self.cond, lapack_driver=self.lapack_driver)
+        else:
+            self.r_ = None
 
         return self
 
+    def predict(self, X):
+        if self.r_ is None:
+            msg = 'Cannot compute rational function values without residues. \
+                Set compute_r=True when initializing the estimator.'
+            raise ValueError(msg)
+
+        return rational(
+            self.poles_.full(), self.r_.full(), X)
 
 
 # ===============================
