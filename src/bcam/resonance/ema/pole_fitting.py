@@ -19,7 +19,45 @@ logger = logging.getLogger(__name__)
 # Rational Approximation
 # ========================
 
-def rational_function(poles, residues, z):
+def pos_imag(x):
+    x = np.asarray(x, dtype=complex)
+    x[np.imag(x) < 0] = np.conj(x[np.imag(x) < 0])
+    return x
+
+@attrs.define
+class _Poles:
+    real = attrs.field(converter=lambda x: np.asarray(x, dtype=float), default=np.array([]))
+    imag = attrs.field(converter=pos_imag, default=np.array([]))
+
+    @classmethod
+    def from_raw(cls, poles):
+        poles = np.asarray(poles, dtype=complex)
+
+        # Separate real and complex conjugated poles.
+        poles_u = list(poles[np.imag(poles) >= 0])
+        poles_l = list(poles[np.imag(poles) < 0])
+        poles_r, poles_c = [], []
+        while (len(poles_u) > 0) and (len(poles_l) > 0):
+            distances = np.abs([p - np.conj(poles_u[-1]) for p in poles_l])
+            idx = np.argmin(distances)
+            if distances[idx] < 1e-8:
+                poles_c.append(poles_u.pop())
+                poles_l.pop(idx)
+            else:
+                # If a pole does not have a conjugate, we consider it as a real pole.
+                poles_r.append(poles_u.pop())
+
+        poles_r.extend(poles_u)
+        poles_r.extend(poles_l)
+        poles_r = np.real(poles_r)
+        poles_c = np.array(poles_c, dtype=complex)
+
+        return cls(real=poles_r, imag=poles_c)
+
+    def full(self):
+        return np.concatenate((self.real, self.imag, np.conj(self.imag)))
+
+def rational(poles, residues, z):
     '''
     Parameters
     ----------
@@ -57,44 +95,6 @@ def rational_function(poles, residues, z):
         raise ValueError(msg)
     
     return (1 / (z[:, np.newaxis] - poles[np.newaxis, :])) @ residues
-
-def pos_imag(x):
-    x = np.asarray(x, dtype=complex)
-    x[np.imag(x) < 0] = np.conj(x[np.imag(x) < 0])
-    return x
-
-@attrs.define
-class Poles:
-    real = attrs.field(converter=lambda x: np.asarray(x, dtype=float), default=np.array([]))
-    imag = attrs.field(converter=pos_imag, default=np.array([]))
-
-    @classmethod
-    def from_raw(cls, poles):
-        poles = np.asarray(poles, dtype=complex)
-
-        # Separate real and complex conjugated poles.
-        poles_u = list(poles[np.imag(poles) >= 0])
-        poles_l = list(poles[np.imag(poles) < 0])
-        poles_r, poles_c = [], []
-        while (len(poles_u) > 0) and (len(poles_l) > 0):
-            distances = np.abs([p - np.conj(poles_u[-1]) for p in poles_l])
-            idx = np.argmin(distances)
-            if distances[idx] < 1e-8:
-                poles_c.append(poles_u.pop())
-                poles_l.pop(idx)
-            else:
-                # If a pole does not have a conjugate, we consider it as a real pole.
-                poles_r.append(poles_u.pop())
-
-        poles_r.extend(poles_u)
-        poles_r.extend(poles_l)
-        poles_r = np.real(poles_r)
-        poles_c = np.array(poles_c, dtype=complex)
-
-        return cls(real=poles_r, imag=poles_c)
-
-    def full(self):
-        return np.concatenate((self.real, self.imag, np.conj(self.imag)))
 
 def _get_max_order(shape):
     ns, rank = shape
@@ -478,7 +478,7 @@ class AAA(BaseEstimator):
         return self
 
     def predict(self, X):
-        return rational_function(
+        return rational(
             self.poles_,
             self.residues_,
             X
@@ -490,7 +490,7 @@ class VF(BaseEstimator):
         self,
         *,
         order:int=None,
-        compute_r:bool=False,
+        compute_r:bool=True,
         prune_tol:float=0.,
         cond:float=None,
         lapack_driver:str=None
@@ -508,7 +508,7 @@ class VF(BaseEstimator):
         u = np.exp(2j*np.pi/ns)
         # Compute Cauchy matrix.
         Cr = 1/(u**np.arange(N)[:, np.newaxis] - poles.real[np.newaxis, :])
-        Cr = np.concatenate((Cr, np.ones(shape=(N, 1), dtype=float)), axis=1)
+        Cr = np.concatenate((Cr, np.ones(shape=(N, 1))), axis=1)
         C1 = 1/(u**np.arange(N)[:, np.newaxis] - poles.imag[np.newaxis, :])
         C2 = 1/(u**np.arange(N)[:, np.newaxis] - np.conj(poles.imag)[np.newaxis, :])
         
@@ -517,28 +517,30 @@ class VF(BaseEstimator):
             (Cr, C1 + C2, 1j*(C1 - C2)),
             dtype=complex, axis=1)
 
-        # Constraint vector.
-        const_r = np.sum(Cr[ends], axis=0) + 2*np.real(np.sum(Cr[1:last], axis=0))
-        const_c = np.sum(C1[ends], axis=0)
-        const_c_r = const_c + np.sum(C1[1:last] + C2[1:last], axis=0)
-        const_c_r = 2*np.real(const_c_r)
-        const_c_i = const_c + np.sum(C1[1:last] - C2[1:last], axis=0)
-        const_c_i = -2*np.imag(const_c_i)
-        const = np.concatenate((const_r, const_c_r, const_c_i), axis=1)/ns
-        In = scipy.linalg.qr(const.T, pivoting=True)[0]
-        In = In[:, 1:]
-        del Cr, C1, C2, const
-
-        # Construct right-most columns of system matrix. Shape = (ns, n_poles, rank).
-        R = -y[:, np.newaxis, :] * C[..., np.newaxis]
-        R = np.einsum('ijk,jl->ilk', R, In)
-
-        # Separate real and imaginary parts.
+        # Auxiliary indices for separating real and imaginary parts.
         ends = [0]
         if parity == 0:
             ends.append(N-1)
         ends = np.array(ends, dtype=np.int64)
         last = N-1+parity
+
+        # Constraint vector.
+        const_r = np.sum(Cr[ends], axis=0) + 2*np.sum(Cr[1:last], axis=0)
+        const_r = np.real(const_r)
+        const_c = np.sum(C1[ends], axis=0)
+        const_c_r = const_c + np.sum(C1[1:last] + C2[1:last], axis=0)
+        const_c_r = 2*np.real(const_c_r)
+        const_c_i = const_c + np.sum(C1[1:last] - C2[1:last], axis=0)
+        const_c_i = -2*np.imag(const_c_i)
+        const = np.concatenate((const_r, const_c_r, const_c_i))/ns
+        In = scipy.linalg.qr(const[:, np.newaxis], pivoting=True)[0]
+        In = In[:, 1:]
+        del Cr, C1, C2, const
+
+        # Construct right-most columns of system matrix. Shape = (ns, n_poles, rank).
+        R = -y[:, np.newaxis, :] * (C@In)[..., np.newaxis]
+
+        # Separate real and imaginary parts.
         C = np.concatenate(
             (np.real(C[ends]), np.sqrt(2)*np.real(C[1:last]), np.sqrt(2)*np.imag(C[1:last])),
             axis=0, dtype=float
@@ -563,21 +565,22 @@ class VF(BaseEstimator):
             C, Rb, cond=self.cond, lapack_driver=self.lapack_driver)[0]
         Rb = Rb - C@normals
         del C, normals
-        Rb = Rb.reshape((ns, self.n_poles_, rank))
+        Rb = Rb.reshape((ns, self.n_poles_+1, rank))
         R_tilde, b_tilde = Rb[:, :-1, :], Rb[:, -1, :]
         del Rb
-        R_tilde = np.concatenate((R_tilde[..., k] for k in range(rank)), axis=0)
+        R_tilde = R_tilde.transpose(1, 2, 0).reshape((-1, ns*rank)).T
         b_tilde = b_tilde.T.reshape((1, -1)).T
 
         # Solve reduced LS problem.
         t = scipy.linalg.lstsq(
             R_tilde, b_tilde, cond=self.cond, lapack_driver=self.lapack_driver)[0]
         t = In @ t
+        t = t[:, 0]
 
         n_real = len(poles.real) + 1 # +1 for the constant term.
         n_complex = len(poles.imag)
         w_r = t[:n_real-1]
-        d = t[n_real-1]
+        d = t[n_real-1] + 1
         w_c = t[n_real:n_real+n_complex] + 1j*t[n_real+n_complex:]
 
         return w_r, w_c, d
@@ -585,11 +588,15 @@ class VF(BaseEstimator):
     def _get_poles(self, w_r, w_c, d, poles):
         w = np.concatenate((w_r, w_c, np.conj(w_c)), dtype=complex)
         M = np.diag(poles.full())
-        M += -np.ones_like(w, dtype=float) @ w / d
+        M += -np.repeat(w[:, np.newaxis], M.shape[0], axis=1)/d
 
         # Compute poles as eigenvalues of M.
         poles = scipy.linalg.eigvals(M, overwrite_a=True)
-        poles = Poles.from_raw(poles)
+        poles = _Poles.from_raw(poles)
+
+        if 2*len(poles.imag) + len(poles.real) != self.n_poles_:
+            msg = f'Expected {self.n_poles_} poles, got {2*len(poles.imag) + len(poles.real)} instead.'
+            raise ValueError(msg)
 
         return poles
 
@@ -617,8 +624,8 @@ class VF(BaseEstimator):
         # Set initial poles.
         n_poles = self.order
         self.n_poles_ = n_poles
-        poles_init = 0.9*np.exp(1j*np.pi*np.arange(1, n_poles+1)/(n_poles+1))
-        poles_init = Poles(imag=poles_init)
+        poles_init = 0.9*np.exp(1j*np.pi*np.arange(1, n_poles//2+1)/(n_poles//2+1))
+        poles_init = _Poles(imag=poles_init)
 
         weights = self._get_weights(y, parity, poles_init)
         poles = self._get_poles(*weights, poles_init)
@@ -668,121 +675,6 @@ def exp_sum(poles, amplitudes, t, fs=1):
         raise ValueError(msg)
 
     return (poles[np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amplitudes
-
-
-class ExpVF(BaseEstimator):
-
-    def __init__(
-            self,
-            *,
-            order:int=None,
-            damping:float=0.,
-            fs:float=1,
-            tol:float=0.,
-            compute_amps:bool=True
-        ):
-        self.order = order
-        self.damping = damping
-        self.fs = fs
-        self.tol = tol
-        self.compute_amps = compute_amps
-
-    @property
-    def r_resonances_(self):
-        return np.log(self.r_poles_.astype(complex))*self.fs
-
-    @property
-    def c_resonances_(self):
-        return np.log(self.c_poles_)*self.fs
-
-    @property
-    def resonances_(self):
-        return np.concatenate(
-            [self.r_resonances_, self.c_resonances_, np.conj(self.c_resonances_)],
-            dtype=complex)
-
-    @property
-    def amps_(self):
-        if self.r_amps_ is None:
-            return None
-        else:
-            return np.concatenate(
-                [self.r_amps_, self.c_amps_, np.conj(self.c_amps_)],
-                axis=0, dtype=complex)
-
-    def _get_amps(self, y, parity):
-        N = y.shape[0]
-        ns = 2*(N-1)+parity
-        x = np.fft.irfft(y, n=ns, axis=0)
-        poles = [self.r_poles_, self.c_poles_]
-
-        # Construct Cauchy matrix.
-        Vr = poles[0][np.newaxis, :]**(np.arange(ns)[:, np.newaxis])
-        Vi = poles[1][np.newaxis, :]**(np.arange(ns)[:, np.newaxis])
-        V = np.concatenate(
-            (Vr, 2*np.real(Vi), -2*np.imag(Vi)),
-            axis=1, dtype=float
-        )
-
-        # Solve for amplitudes.
-        a = scipy.linalg.lstsq(
-            V, x, overwrite_a=True, overwrite_b=True)[0]
-        lr, lc = len(poles[0]), len(poles[1])
-        amps = [a[:lr], a[lr:lr+lc] + 1j*a[lr+lc:]]
-
-        return amps
-
-    def fit(self, y, parity:bool=None, seed_freqs=None):
-        y = np.asarray(y)
-        N = y.shape[0]
-
-        # Determine parity if not given.
-        if parity is None:
-            eps = np.finfo(y.dtype).eps
-            tiny = np.imag(y[-1, :])
-            parity = int(np.max(np.abs(tiny)) > 100*eps)
-        parity = int(parity)
-        ns = 2*(N-1)+parity
-
-        if hasattr(self, '_rational'):
-            rational = self._rational
-        else:
-            rational = VF()
-            self._rational = rational
-        rational.set_params(order=self.order)
-
-        ωN = np.exp(-2j*np.pi/ns)
-        rational.fit(
-            y*(ωN**np.arange(N))[:, np.newaxis],
-            parity=parity,
-            seed_freqs=seed_freqs)
-
-        self.r_poles_ = np.copy(rational.r_poles_)
-        self.c_poles_ = np.copy(rational.c_poles_)
-
-        poles = [self.r_poles_, self.c_poles_]
-         # Remove unstable poles.
-        for i in [0, 1]:
-            idxs = np.nonzero(np.abs(poles[i]) < 1+1e-10)[0]
-            poles[i] = poles[i][idxs]
-        self.r_poles_ = poles[0]
-        self.c_poles_ = poles[1]
-        if self.compute_amps is True:
-            amps = self._get_amps(y, parity)
-            self.r_amps_ = amps[0]
-            self.c_amps_ = amps[1]
-        else:
-            self.r_amps_ = None
-            self.c_amps_ = None
-
-        return self
-
-    def predict(self, X):
-        return np.real(exp_sum(
-            np.concatenate([self.r_poles_, self.c_poles_, np.conj(self.c_poles_)]),
-            np.concatenate([self.r_amps_, self.c_amps_, np.conj(self.c_amps_)], axis=0),
-            X
-        ))
 
 
 class SuperResolution(BaseEstimator):

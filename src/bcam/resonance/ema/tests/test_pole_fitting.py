@@ -10,9 +10,9 @@ from bcam.resonance.ema import pole_fitting
 # ============================
 
 
-class Test_RatAppSym:
+class Test_AAA:
 
-    def test_symmetric_fit_complex(self):
+    def test_complex(self):
         # Test only complex poles
         # ------------------------
         rng = np.random.default_rng()
@@ -32,12 +32,11 @@ class Test_RatAppSym:
         residues_ = np.concatenate((residues, np.conj(residues)), axis=0)
 
         # Construct signal.
-        y = pole_fitting.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
+        y = pole_fitting.rational(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
         # Fit the signal.
-        model = pole_fitting.Rational(order=2*M)
+        model = pole_fitting.AAA(order=2*M)
         model.fit(y, N%2)
-        model.pole_pruning(tol=1e-5)
 
         poles_fit = [model.r_poles_, model.c_poles_]
         residues_fit = [model.r_residues_, model.c_residues_]
@@ -76,10 +75,10 @@ class Test_RatAppSym:
         residues_ = np.concatenate((residues_R, residues_C, np.conj(residues_C)), axis=0)
 
         # Construct signal.
-        y = pole_fitting.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
+        y = pole_fitting.rational(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
         # Fit the signal.
-        model = pole_fitting.Rational(order=2*MC + MR)
+        model = pole_fitting.AAA(order=2*MC + MR)
         model.fit(y, N%2)
         model.pole_pruning(tol=1e-5)
 
@@ -117,10 +116,10 @@ class Test_RatAppSym:
         residues_ = np.concatenate((residues, np.conj(residues)), axis=0)
 
         # Construct signal.
-        y = pole_fitting.rational_function(poles_, residues_, ωN**(-np.arange(N//2+1)))
+        y = pole_fitting.rational(poles_, residues_, ωN**(-np.arange(N//2+1)))
 
         # Fit the signal.
-        model = pole_fitting.Rational(order=2*M)
+        model = pole_fitting.AAA(order=2*M)
         model.fit(y, N%2)
         model.pole_pruning(tol=1e-5)
 
@@ -135,11 +134,50 @@ class Test_RatAppSym:
         assert np.allclose(poles_fit[1], poles)
         assert np.allclose(residues_fit[1], residues)
 
+
+class Test_VF:
+
+    def test_complex(self):
+        # Test only complex poles
+        # ------------------------
+        rng = np.random.default_rng(21685)
+        M = 6
+        N = 2 * (2*M + 1) + 10 + rng.integers(0, 2)
+        ωN = np.exp(-2j * np.pi / N)
+
+        # Create complex frequencies and residues.
+        r = rng.uniform(0.8, 0.95, M)
+        phase = rng.uniform(0.01, 0.49, M)
+        poles = r * np.exp(2j * np.pi * phase)
+        residues = rng.normal(0, 2, (M, 1)) + 1j * rng.normal(0, 2, (M, 1))
+        idxs = np.argsort(poles)
+        poles = poles[idxs]
+        residues = residues[idxs]
+        poles_ = np.concatenate((poles, np.conj(poles)))
+        residues_ = np.concatenate((residues, np.conj(residues)), axis=0)
+
+        # Construct signal.
+        y = pole_fitting.rational(poles_, residues_, ωN**(-np.arange(N//2+1)))
+
+        # Fit the signal.
+        model = pole_fitting.VF(order=2*M)
+        model.fit(y, N%2)
+        poles_fit = model.poles_
+        # residues_fit = [model.r_residues_, model.c_residues_]
+
+        idxs = np.argsort(poles_fit.imag)
+        poles_fit.imag = poles_fit.imag[idxs]
+        # residues_fit[1] = residues_fit[1][idxs]
+
+        assert (len(poles_fit.real) == 0) and (len(poles_fit.imag) == M)
+        assert np.allclose(poles_fit.imag, poles)
+        # assert np.allclose(residues_fit[1], residues)
+
 # ============
-# Test ESPIRA
+# Test SuperResolution
 # ============
 
-class Test_ESPIRA:
+class Test_SuperResolution:
 
     def test_espira_real(self):
         # Create a random generator.
