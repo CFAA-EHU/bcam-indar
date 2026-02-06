@@ -10,8 +10,6 @@ import pandas as pd
 from sklearn.base import BaseEstimator
 import matplotlib.pyplot as plt
 
-from . import vectfit3 as vf
-
 logger = logging.getLogger(__name__)
 
 
@@ -57,6 +55,9 @@ class _Poles:
     def full(self):
         return np.concatenate((self.real, self.cx, np.conj(self.cx)))
 
+    def count(self):
+        return len(self.real) + 2*len(self.cx)
+
 
 @attrs.define
 class _HCoeffs:
@@ -67,30 +68,31 @@ class _HCoeffs:
         return np.concatenate((self.real, self.cx, np.conj(self.cx)))
 
 
-def rational(poles, r, z):
+def rational(poles, r, d, X):
     '''
     Parameters
     ----------
     poles : (M,) array_like
     r : (M, L) array_like
-    z : scalar or (N, ) array_like
+    d : scalar
+    X : scalar or (N, ) array_like
 
     Return
     ------
     out : (N, L) complex ndarray
-        The values of the rational function at the points z.
-        If z is scalar, N = 1.
+        The values of the rational function at the points X.
+        If X is scalar, N = 1.
     '''
     poles = np.asarray(poles)
     if poles.ndim != 1:
         msg = f'Expected a 1D array for poles, got an array of dimension {poles.ndim}.'
         raise ValueError(msg)
 
-    z = np.asarray(z)
-    if z.ndim == 0:
-        z = np.expand_dims(z, axis=0)
-    elif z.ndim > 1:
-        msg = f'Expected a 1D array for z, got an array of dimension {z.ndim}.'
+    X = np.asarray(X)
+    if X.ndim == 0:
+        X = np.expand_dims(X, axis=0)
+    elif X.ndim > 1:
+        msg = f'Expected a 1D array for X, got an array of dimension {X.ndim}.'
         raise ValueError(msg)
 
     r = np.asarray(r)
@@ -104,7 +106,10 @@ def rational(poles, r, z):
         msg = f'The number of poles and residues must be the same, got {poles.shape[0]} and {r.shape[0]} instead.'
         raise ValueError(msg)
     
-    return (1 / (z[:, np.newaxis] - poles[np.newaxis, :])) @ r
+    return (1 / (X[:, np.newaxis] - poles[np.newaxis, :])) @ r + d
+
+
+# Define helpers for rational fitting.
 
 def _get_residues(y, parity, poles, cond=None, lapack_driver=None):
     N = y.shape[0]
@@ -141,9 +146,10 @@ def _get_residues(y, parity, poles, cond=None, lapack_driver=None):
         C, y, overwrite_a=True, overwrite_b=True,
         cond=cond, lapack_driver=lapack_driver)[0]
     lr, lc = len(poles.real), len(poles.cx)
+    d = r[lr]
     r = _HCoeffs(real=r[:lr], cx=r[lr+1:lr+1+lc] + 1j*r[lr+1+lc:])
 
-    return r
+    return r, d
 
 def _pole_pruning(poles:_Poles, r:_HCoeffs, tol:float):
     for part in ['real', 'cx']:
@@ -152,6 +158,15 @@ def _pole_pruning(poles:_Poles, r:_HCoeffs, tol:float):
         setattr(poles, part, getattr(poles, part)[idxs])
 
     return poles
+
+def _predict_rational(poles, r, d, X):
+    if r is None:
+        msg = 'Cannot compute rational function values without residues. \
+            Set compute_r=True when initializing the estimator.'
+        raise ValueError(msg)
+
+    return rational(
+        poles.full(), r.full(), d, X)
 
 def _get_max_order(ns, rank):
     # Counting complex paramaters in a complex time series
@@ -173,87 +188,28 @@ class AAA(BaseEstimator):
             self,
             *,
             order:int=None,
-            tol:float=0.,
-            compute_residues:bool=True):
+            compute_r:bool=True,
+            prune_tol:float=0.,
+            lapack_driver:str=None,
+            cond:float=None
+        ):
         self.order = order
-        self.tol = tol
-        self.compute_residues = compute_residues
+        self.compute_r = compute_r
+        self.prune_tol = prune_tol
+        self.lapack_driver = lapack_driver
+        self.cond = cond
 
     @staticmethod
-    def count_freqs(idxs, ns, parity):
+    def count_freqs(idxs, N, parity):
         idxs = np.array(idxs)
         idxs = np.sort(idxs)
         n_freqs = 0
         if idxs[0] == 0:
             n_freqs += 1
-        if parity == 0 and (idxs[-1] == ns-1):
+        if parity == 0 and (idxs[-1] == N-1):
             n_freqs += 1
         n_freqs = 2*len(idxs) - n_freqs
         return n_freqs
-
-    def set_seed_freqs(self, y, parity, seed_freqs=None):
-        '''Set initial frequencies for the algorithm.
-
-        Parameters
-        ----------
-        freqs : 1darray
-            They must be ordered in decreasing order of importance,
-            and the indices must be unique.
-        '''
-        N, rank = y.shape
-        if seed_freqs is None:
-            # Choose rank + 1 peaks as initial frequencies.
-            abs_v = np.linalg.norm(y, axis=1)
-            abs_v = np.concatenate((abs_v, abs_v[-2+parity:0:-1]))
-            abs_v = np.concatenate((abs_v, abs_v))
-            peaks, h = scipy.signal.find_peaks(
-                abs_v,
-                height=np.max(abs_v)/5,
-                distance=np.max((N/(4*(rank+1)), 2))
-            )
-            idxs = np.argsort(h['peak_heights'])[::-1]
-            peaks = peaks[idxs]%(len(abs_v)//2)
-            _, idxs = np.unique(peaks, return_index=True)
-            peaks = peaks[np.sort(idxs)]
-            freqs = peaks[peaks < N]
-        else:
-            freqs = np.asarray(seed_freqs)
-
-        if freqs.ndim != 1:
-            raise ValueError('freqs must be a 1D array.')
-        if not (np.all(freqs >= 0) and np.all(freqs < N)):
-            raise ValueError('freqs must be in the range [0, N).')
-        if len(freqs) != len(np.unique(freqs)):
-            raise ValueError('freqs must be unique.')
-
-        freqs = list(freqs)
-        freqs.reverse()
-        freqs_ = []
-        c = 0
-        while (c < rank+1) and (len(freqs) > 0):
-            p = freqs.pop()
-            freqs_.append(p)
-            if (p == 0) or (parity == 0 and p == N-1):
-                c += 1
-            else:
-                c += 2
-        # Generate additional random indices if c < rank + 1.
-        if c < rank + 1:
-            logger.warning(
-                'Not enough freqs found. Adding random indices.', stacklevel=2)
-            diff = np.setdiff1d(np.arange(N), freqs_, assume_unique=True)
-            rng = np.random.default_rng()
-            rng.shuffle(diff)
-            diff = list(diff)
-            while c < rank+1:
-                p = diff.pop()
-                freqs_.append(p)
-                if (p == 0) or (parity == 0 and p == N-1):
-                    c += 1
-                else:
-                    c += 2
-
-        return np.array(freqs_)
 
     def _initialize_sets(self, y, freqs):
         N = y.shape[0]
@@ -273,35 +229,39 @@ class AAA(BaseEstimator):
         G_, gG_ = np.array(gG['index']), np.array(gG['data'])
         idxs = np.argsort(S_)
         S_, gS_ = S_[idxs], gS_[idxs]
-        n_S, rank = gS_.shape
+        n_S, _ = gS_.shape
         n_G = gG_.shape[0]
 
         N = n_S + n_G
-        N_ = 2*(N-1) + parity
-        ωN = np.exp(-2j * np.pi / N_)
+        ns = 2*(N-1) + parity
+        ωN = np.exp(-2j * np.pi / ns)
 
         # Locate zero and N-1 in S_ and G_.
-        e = []
+        eS, eG = [], []
         innS, innG = [0, len(S_)], [0, len(G_)]
         if S_[0] == 0:
-            e.append(0)
+            eS.append(0)
             innS[0] = 1
         else:
+            eG.append(0)
             innG[0] = 1
+
         if parity == 1:
             pass
         elif S_[-1] == N-1:
-            e.append(n_S-1)
+            eS.append(n_S-1)
             innS[1] = n_S - 1
         else:
+            eG.append(n_G-1)
             innG[1] = n_G - 1
         innS, innG = np.s_[innS[0]:innS[1]], np.s_[innG[0]:innG[1]]
-        e = np.array(e, dtype=np.int64)
-        M = 2*len(S_) - len(e)
+        eS = np.array(eS, dtype=np.int64)
+        eG = np.array(eG, dtype=np.int64)
+        M = 2*len(S_) - len(eS)
 
         # Construct Loewner matrix L.
-        Cr = 1/(ωN**(-S_[e])[:, np.newaxis]-ωN**(-G_)[np.newaxis, :])
-        Lr = (gS_[e][:, np.newaxis] - gG_[np.newaxis, :]) * Cr[..., np.newaxis]
+        Cr = 1/(ωN**(-S_[eS])[:, np.newaxis]-ωN**(-G_)[np.newaxis, :])
+        Lr = (gS_[eS][:, np.newaxis] - gG_[np.newaxis, :]) * Cr[..., np.newaxis]
         C1 = 1/(ωN**(-S_[innS])[:, np.newaxis]-ωN**(-G_)[np.newaxis, :])
         L1 = (gS_[innS][:, np.newaxis] - gG_[np.newaxis, :]) * C1[..., np.newaxis]
         C2 = 1/(ωN**(S_[innS])[:, np.newaxis]-ωN**(-G_)[np.newaxis, :])
@@ -311,39 +271,32 @@ class AAA(BaseEstimator):
 
         # Separate real and imaginary parts.
         L = np.concatenate(
-            (np.real(L), np.imag(L[:, innG])), axis=1, dtype=float
+            (np.real(L[:, eG]), np.sqrt(2)*np.real(L[:, innG]), np.sqrt(2)*np.imag(L[:, innG])),
+            axis=1, dtype=float
         )
         L = L.reshape(M, -1).T
 
-        # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
-        tmpS = np.concatenate(
-            (np.real(gS_[e]), 2*np.real(gS_[innS]), -2*np.imag(gS_[innS])),
-            axis=0, dtype=float
-        )
-        In = scipy.linalg.qr(tmpS, pivoting=True)[0]
-        In = In[:, rank:]
-
         # Compute weights to find best rational approximation.
-        L = L @ In
         eigval, w = scipy.linalg.svd(
             L,
             overwrite_a=True,
             full_matrices=False)[1:]
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
-        w = In @ w[-1]
+        w = w[-1]
         w_ = np.zeros_like(S_, dtype=complex)
-        w_[innS] = w[len(e):len(S_)] + 1j*w[len(S_):]
-        w_[e] = w[:len(e)]
+        w_[innS] = w[len(eS):len(S_)] + 1j*w[len(S_):]
+        w_[eS] = w[:len(eS)]
         w = w_
 
         # Compute rational function at G frequencies.
         rp = w[:, np.newaxis] * gS_
-        p = Cr.T@rp[e] + C1.T@rp[innS] + C2.T@np.conj(rp[innS])
-        q = Cr.T@w[e] + C1.T@w[innS] + C2.T@np.conj(w[innS])
+        p = Cr.T@rp[eS] + C1.T@rp[innS] + C2.T@np.conj(rp[innS])
+        q = Cr.T@w[eS] + C1.T@w[innS] + C2.T@np.conj(w[innS])
+
         return p/(q[:, np.newaxis]), w
 
     def _get_poles(self, barycentric, N, parity):
-        N_ = 2*(N-1) + parity
+        ns = 2*(N-1) + parity
         S, w = barycentric
         S = np.sort(S)
         # No need to sort w as it comes sorted from _get_weights.
@@ -357,7 +310,7 @@ class AAA(BaseEstimator):
             e[1] = len(S)-1
             c += 1
         M = 2*len(S) - c - 1
-        ωN = np.exp(-2j * np.pi / N_)
+        ωN = np.exp(-2j * np.pi / ns)
 
         w = np.concatenate((w, np.conj(w[e[0]:e[1]])))
         a = np.zeros((M+2, M+2), dtype=np.complex128)
@@ -371,7 +324,9 @@ class AAA(BaseEstimator):
         poles = scipy.linalg.eigvals(a, b, overwrite_a=True)
         poles = poles[2:]
 
-        dim = 2*len(poles[1]) + len(poles[0])
+        poles = _Poles.from_raw(poles)
+
+        dim = poles.count()
         # Check that the number of poles is correct.
         if dim != M:
             msg = f'Expected {M} poles, got {dim} instead.'
@@ -413,20 +368,7 @@ class AAA(BaseEstimator):
 
         return poles
 
-    @property
-    def poles_(self):
-        return np.concatenate([self.r_poles_, self.c_poles_, np.conj(self.c_poles_)])
-
-    @property
-    def residues_(self):
-        if self.r_residues_ is None:
-            return None
-        else:
-            return np.concatenate(
-            [self.r_residues_, self.c_residues_, np.conj(self.c_residues_)],
-            axis=0)
-
-    def fit(self, y, parity:bool=None, seed_freqs=None):
+    def fit(self, y, parity:bool=None):
         y = np.asarray(y)
 
         # Determine parity if not given.
@@ -441,12 +383,12 @@ class AAA(BaseEstimator):
         max_order = _get_max_order(ns, rank)
         if self.order is None:
             self.order = rank
-        elif rank > self.order:
-            msg = f'The minimum order is {rank}, which is greater than the set order {self.order}.'
-            raise ValueError(msg)
+        elif self.order > max_order:
+            msg = f'The order exceeds the maximum recommended order {max_order}.'
+            logger.warning(msg, stacklevel=2)
 
+        # If there are already indices from a previous fit, we reuse them.
         if hasattr(self, 'indices_'):
-            # Ignores seed_freqs and reuse previous indices.
             indices = self.indices_
             n_freqs = 0
             i = 0
@@ -458,7 +400,7 @@ class AAA(BaseEstimator):
                 i += 1
             indices = indices[:i]
         else:
-            indices = self.set_seed_freqs(y, parity, seed_freqs=seed_freqs)
+            indices = [np.argmax(np.linalg.norm(y, axis=1))]
             self.indices_ = indices
 
         if self.order > max_order:
@@ -466,30 +408,24 @@ class AAA(BaseEstimator):
             raise ValueError(msg)
 
         poles = self._fit(y, parity, indices)
+        self.poles_ = poles
 
-        self.r_poles_ = np.array(poles[0])
-        self.c_poles_ = np.array(poles[1])
-        if self.compute_residues is True:
-            residues = self._get_residues(y, parity)
-            self.r_residues_ = residues[0]
-            self.c_residues_ = residues[1]
-            if self.tol > 0.:
-                self._pole_pruning()
-                residues = self._get_residues(y, parity)
-                self.r_residues_ = residues[0]
-                self.c_residues_ = residues[1]
+        if self.prune_tol > 0.:
+            self.r_, self.d_ = _get_residues(
+                y, parity, poles, cond=self.cond, lapack_driver=self.lapack_driver)
+            self.poles_ = _pole_pruning(self.poles_, self.r_, self.prune_tol)
+
+        if self.compute_r:
+            self.r_, self.d_ = _get_residues(
+                y, parity, self.poles_,
+                cond=self.cond, lapack_driver=self.lapack_driver)
         else:
-            self.r_residues_ = None
-            self.c_residues_ = None
+            self.r_, self.d_ = None, None
 
         return self
 
     def predict(self, X):
-        return rational(
-            self.poles_,
-            self.residues_,
-            X
-        )
+        return _predict_rational(self.poles_, self.r_, self.d_, X)
 
 class VF(BaseEstimator):
 
@@ -625,15 +561,13 @@ class VF(BaseEstimator):
         parity = int(parity)
 
         max_order = _get_max_order(ns, rank)
-        if self.order is None:
-            self.order = rank
-        elif self.order > max_order:
+        if self.order > max_order:
             msg = f'The order exceeds the maximum recommended order {max_order}.'
-            logging.warning(msg, stacklevel=2)
-            self.order = max_order
+            logger.warning(msg, stacklevel=2)
 
         # Set initial poles.
         n_poles = self.order
+        self.n_poles_ = n_poles # For compatibility with AAA.
         if self.poles is None:
             poles = 0.9*np.exp(1j*np.pi*np.arange(1, n_poles//2+1)/(n_poles//2+1))
             poles = _Poles(cx=poles)
@@ -658,27 +592,21 @@ class VF(BaseEstimator):
         self.poles_ = poles
 
         if self.prune_tol > 0.:
-            self.r_ = _get_residues(
+            self.r_, self.d_ = _get_residues(
                 y, parity, poles, cond=self.cond, lapack_driver=self.lapack_driver)
             self.poles_ = _pole_pruning(self.poles_, self.r_, self.prune_tol)
 
         if self.compute_r:
-            self.r_ = _get_residues(
+            self.r_, self.d_ = _get_residues(
                 y, parity, self.poles_,
                 cond=self.cond, lapack_driver=self.lapack_driver)
         else:
-            self.r_ = None
+            self.r_, self.d_ = None, None
 
         return self
 
     def predict(self, X):
-        if self.r_ is None:
-            msg = 'Cannot compute rational function values without residues. \
-                Set compute_r=True when initializing the estimator.'
-            raise ValueError(msg)
-
-        return rational(
-            self.poles_.full(), self.r_.full(), X)
+        return _predict_rational(self.poles_, self.r_, self.d_, X)
 
 
 # ===============================
