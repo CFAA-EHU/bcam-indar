@@ -936,14 +936,14 @@ class StablePoles:
         return clusters
 
     def fit(self, y, parity:bool=None):
-        N = y.shape[0]
+        N, rank = y.shape
         ns = 2*(N-1) + parity
         self._ns = ns
 
         # Validate orders.
         max_order = self.max_order
         min_order = 2
-        max_order_ = _get_max_order((ns, y.shape[1]))
+        max_order_ = _get_max_order(ns, rank)
         if (max_order is None) or (max_order > max_order_):
             max_order = max_order_
 
@@ -952,10 +952,10 @@ class StablePoles:
         for order in range(min_order, max_order+1, 2):
             self.model.rational_fitter.set_params(order=order)
             self.model.fit(y, parity)
-            n_poles = self.model._rational.n_poles_
+            n_poles = self.model.rational_fitter.n_poles_
 
             amps_ = np.concatenate(
-                (self.model.amps.real, self.model.amps.cx),
+                (self.model.amps_.real, self.model.amps_.cx),
                 dtype=complex,
                 axis=0)
             amps_ = np.linalg.norm(amps_, axis=1)
