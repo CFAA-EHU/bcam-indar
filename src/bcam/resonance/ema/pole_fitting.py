@@ -648,7 +648,7 @@ def exp_sum(poles, amplitudes, t, fs=1):
         msg = f'Expected a 1D or 2D array for amplitudes, got an array of dimension {amplitudes.ndim}.'
         raise ValueError(msg)
 
-    return (poles[np.newaxis, :]**(t[:, np.newaxis] * fs)) @ amplitudes
+    return (poles[np.newaxis, :]**(t[:, np.newaxis]*fs)) @ amplitudes
 
 
 class SuperResolution(BaseEstimator):
@@ -656,64 +656,64 @@ class SuperResolution(BaseEstimator):
     def __init__(
             self,
             *,
-            order:int=None,
+            rational_fitter=None,
             damping:float=0.,
-            fs:float=1,
-            tol:float=0.,
+            fs:float=1.,
+            prune_tol:float=0.,
             compute_amps:bool=True
         ):
-        self.order = order
+        self.rational_fitter = rational_fitter
         self.damping = damping
         self.fs = fs
-        self.tol = tol
+        self.prune_tol = prune_tol
         self.compute_amps = compute_amps
 
     @property
-    def r_resonances_(self):
-        return np.log(self.r_poles_.astype(complex))*self.fs
-
-    @property
-    def c_resonances_(self):
-        return np.log(self.c_poles_)*self.fs
-
-    @property
     def resonances_(self):
+        res = _HCoeffs(
+            real=np.log(self.poles_.real)*self.fs,
+            cx=np.log(self.poles_.cx)*self.fs)
+        return res
+    
+    @property
+    def nat_freqs_(self):
+        res = self.resonances_
         return np.concatenate(
-            [self.r_resonances_, self.c_resonances_, np.conj(self.c_resonances_)],
-            dtype=complex)
+            (np.abs(res.real), np.abs(res.cx)),
+            axis=0, dtype=float
+        )
 
     @property
-    def amps_(self):
-        if self.r_amps_ is None:
-            return None
-        else:
-            return np.concatenate(
-                [self.r_amps_, self.c_amps_, np.conj(self.c_amps_)],
-                axis=0, dtype=complex)
+    def dampings_(self):
+        res = self.resonances_
+        return np.concatenate(
+            (-res.real/self.nat_freqs_, -res.cx/self.nat_freqs_),
+            axis=0, dtype=float
+        )
 
     def _get_amps(self, y, parity):
         N = y.shape[0]
         ns = 2*(N-1)+parity
-        x = np.fft.irfft(y, n=ns, axis=0)
-        poles = [self.r_poles_, self.c_poles_]
+        x = np.fft.irfft(y, n=ns, axis=0)[1:]
 
         # Construct Cauchy matrix.
-        Vr = poles[0][np.newaxis, :]**(np.arange(ns)[:, np.newaxis])
-        Vi = poles[1][np.newaxis, :]**(np.arange(ns)[:, np.newaxis])
+        Vr = self.poles_.real[np.newaxis, :]**(np.arange(1, ns)[:, np.newaxis])
+        Vr = np.concatenate((Vr, np.ones(shape=(ns-1, 1))), axis=1)
+        Vi = self.poles_.cx[np.newaxis, :]**(np.arange(1, ns)[:, np.newaxis])
         V = np.concatenate(
             (Vr, 2*np.real(Vi), -2*np.imag(Vi)),
-            axis=1, dtype=float
-        )
+            axis=1, dtype=float)
 
         # Solve for amplitudes.
         a = scipy.linalg.lstsq(
             V, x, overwrite_a=True, overwrite_b=True)[0]
-        lr, lc = len(poles[0]), len(poles[1])
-        amps = [a[:lr], a[lr:lr+lc] + 1j*a[lr+lc:]]
+        lr, lc = len(self.poles_.real), len(self.poles_.cx)
+        amps = _HCoeffs(real=a[:lr], cx=a[lr+1:lr+1+lc] + 1j*a[lr+1+lc:])
+        d = a[lr]
 
-        return amps
+        return amps, d
 
-    def fit(self, y, parity:bool=None, seed_freqs=None):
+    def fit(self, y, parity:bool=None):
         y = np.asarray(y)
         N = y.shape[0]
 
@@ -725,12 +725,9 @@ class SuperResolution(BaseEstimator):
         parity = int(parity)
         ns = 2*(N-1)+parity
 
-        if hasattr(self, '_rational'):
-            rational = self._rational
-        else:
-            rational = Rational(compute_residues=False)
-            self._rational = rational
-        rational.set_params(order=self.order)
+        if self.rational_fitter is None:
+            self.rational_fitter = AAA()
+        self.rational_fitter.set_params(compute_r=False)
 
         ωN = np.exp(-2j*np.pi/ns)
         if self.damping > 0.:
@@ -738,59 +735,42 @@ class SuperResolution(BaseEstimator):
             x *= np.pow(self.damping, np.arange(ns)/(ns-1))[:, np.newaxis]
             y = np.fft.rfft(x, axis=0)
             del x
-        rational.fit(
+        self.rational_fitter.fit(
             y*(ωN**np.arange(N))[:, np.newaxis],
-            parity=parity,
-            seed_freqs=seed_freqs)
+            parity=parity)
 
-        self.r_poles_ = np.copy(rational.r_poles_)
-        self.c_poles_ = np.copy(rational.c_poles_)
+        self.poles_ = self.rational_fitter.poles_
         if self.damping > 0.:
-            self.r_poles_ *= np.pow(self.damping, -1/(ns-1))
-            self.c_poles_ *= np.pow(self.damping, -1/(ns-1))
+            self.poles_.real *= np.pow(self.damping, -1/(ns-1))
+            self.poles_.cx *= np.pow(self.damping, -1/(ns-1))
 
-        poles = [self.r_poles_, self.c_poles_]
          # Remove unstable poles.
-        for i in [0, 1]:
-            idxs = np.nonzero(np.abs(poles[i]) < 1+1e-10)[0]
-            poles[i] = poles[i][idxs]
-        self.r_poles_ = poles[0]
-        self.c_poles_ = poles[1]
-        if self.compute_amps is True:
-            amps = self._get_amps(y, parity)
-            self.r_amps_ = amps[0]
-            self.c_amps_ = amps[1]
-            if self.tol > 0.:
-                self._pole_pruning()
-                amps = self._get_amps()
-                self.r_amps_ = amps[0]
-                self.c_amps_ = amps[1]
+        for part in ['real', 'cx']:
+            p_ = getattr(self.poles_, part)
+            idxs = np.nonzero(np.abs(p_) < 1+1e-10)[0]
+            setattr(self.poles_, part, p_[idxs])
+
+        if self.prune_tol > 0.:
+            self.amps_, self.d_ = self._get_amps(
+                y, parity)
+            self.poles_ = _pole_pruning(self.poles_, self.amps_, self.prune_tol)
+
+        if self.compute_amps:
+            self.amps_, self.d_ = self._get_amps(
+                y, parity)
         else:
-            self.r_amps_ = None
-            self.c_amps_ = None
-
-        return self
-
-    def _pole_pruning(self):
-        poles = [self.r_poles_, self.c_poles_]
-        amps = [self.r_amps_, self.c_amps_]
-
-        for i in range(2):
-            idxs = np.nonzero(
-                np.linalg.norm(amps[i], axis=1) > self.tol)[0]
-            poles[i] = poles[i][idxs]
-
-        self.r_poles_ = poles[0]
-        self.c_poles_ = poles[1]
+            self.amps_, self.d_ = None, None
 
         return self
 
     def predict(self, X):
+        if self.amps_ is None:
+            msg = 'Cannot compute exponential sum values without amplitudes. \
+                Set compute_amps=True when initializing the estimator.'
+            raise ValueError(msg)
+
         return np.real(exp_sum(
-            np.concatenate([self.r_poles_, self.c_poles_, np.conj(self.c_poles_)]),
-            np.concatenate([self.r_amps_, self.c_amps_, np.conj(self.c_amps_)], axis=0),
-            X
-        ))
+            self.poles_.full(), self.amps_.full(), X))
 
 # Stabilization algorithm
 
@@ -955,42 +935,37 @@ class StablePoles:
 
         return clusters
 
-    def fit(self, y, parity, seed_freqs=None):
+    def fit(self, y, parity:bool=None):
         N = y.shape[0]
         ns = 2*(N-1) + parity
         self._ns = ns
 
         # Validate orders.
         max_order = self.max_order
-        min_order = y.shape[1]
+        min_order = 2
         max_order_ = _get_max_order((ns, y.shape[1]))
         if (max_order is None) or (max_order > max_order_):
             max_order = max_order_
 
-        real_order = -1
+        n_poles = -1
         amps_set, poles_set = {}, {}
-        for order in range(min_order, max_order+1):
-            if order <= real_order:
-                continue
-            self.model.set_params(order=order)
-            if order == min_order:
-                self.model.fit(y, parity, seed_freqs=seed_freqs)
-            else:
-                self.model.fit(y, parity)
-            real_order = self.model._rational.n_poles_
+        for order in range(min_order, max_order+1, 2):
+            self.model.rational_fitter.set_params(order=order)
+            self.model.fit(y, parity)
+            n_poles = self.model._rational.n_poles_
 
             amps_ = np.concatenate(
-                (self.model.r_amps_, self.model.c_amps_),
+                (self.model.amps.real, self.model.amps.cx),
                 dtype=complex,
                 axis=0)
             amps_ = np.linalg.norm(amps_, axis=1)
             poles_ = np.concatenate(
-                (self.model.r_poles_, self.model.c_poles_), dtype=complex)
+                (self.model.poles_.real, self.model.poles_.cx), dtype=complex)
             idxs = np.argsort(amps_)[::-1]
             amps_ = amps_[idxs]
             poles_ = poles_[idxs]
-            amps_set[real_order] = amps_
-            poles_set[real_order] = poles_
+            amps_set[n_poles] = amps_
+            poles_set[n_poles] = poles_
 
         # Reverse order of keys.
         amps_set = {order: amps_set[order] for order in sorted(amps_set.keys(), reverse=True)}
