@@ -251,9 +251,8 @@ def random_exp_sum(
     # Construct signal.
     x = pole_fitting.exp_sum(poles, amps, np.arange(ns), fs=1)
     x = np.real(x)
-    y = np.fft.rfft(x, axis=0)
 
-    return (poles_r, poles_cx), (amps_r, amps_cx), (y, ns%2)
+    return (poles_r, poles_cx), (amps_r, amps_cx), (x, ns)
 
 class Test_SuperResolution:
 
@@ -265,15 +264,20 @@ class Test_SuperResolution:
         for rng in children:
             M = rng.integers(2, 5)
             L = rng.integers(1, 5)
-            poles, amps, y = random_exp_sum(
+            poles, amps, x = random_exp_sum(
                 n_real_poles=L, n_complex_pairs=M, rank=3, ns=None, rng=rng)
 
             # ==== Fit exponential sum ====
             model = pole_fitting.SuperResolution(
-                rational_fitter=pole_fitting.AAA(order=2*M+L),
+                order=2*M+L,
+                rational_fitter={'method': 'AAA'},
                 prune_tol=1e-5
             )
-            model.fit(*y)
+            ns = x[1]
+            model.fit(
+                np.fft.rfft(x[0], axis=0),
+                ns%2
+            )
 
             for part in ['real', 'cx']:
                 p_ = getattr(model.poles_, part)
@@ -281,8 +285,11 @@ class Test_SuperResolution:
                 setattr(model.poles_, part, p_[idxs])
                 setattr(model.amps_, part, getattr(model.amps_, part)[idxs])
 
+            x_pred = model.predict(np.arange(ns))
+
             assert (len(model.poles_.real) == L) and (len(model.poles_.cx) == M)
             assert np.allclose(model.poles_.real, poles[0])
             assert np.allclose(model.poles_.cx, poles[1])
             assert np.allclose(model.amps_.real, amps[0])
             assert np.allclose(model.amps_.cx, amps[1])
+            assert np.allclose(x_pred, x[0], atol=1e-5)

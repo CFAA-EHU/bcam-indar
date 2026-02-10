@@ -344,9 +344,10 @@ class AAA(BaseEstimator):
             logger.debug(f'==== step: {step} ====')
             r, w = self._get_weights(gS, gG, parity)
             idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
+            fr = gG['index'][idx]
             _update_sets(gS, gG, idx)
 
-            if (gS['index'][-1] == 0) or (parity == 0 and gS['index'][-1] == N-1):
+            if (fr == 0) or (parity == 0 and fr == N-1):
                 n_freqs += 1
             else:
                 n_freqs += 2
@@ -355,11 +356,16 @@ class AAA(BaseEstimator):
         logger.debug(f'==== step: {step} ====')
         r, w = self._get_weights(gS, gG, parity)
         idx = np.argmax(np.linalg.norm(gG['data'] - r, axis=1))
+        fr = gG['index'][idx]
+        if (fr == 0) or (parity == 0 and fr == N-1):
+            n_freqs += 1
+        else:
+            n_freqs += 2
 
         # Store indices for reuse.
         if len(gS['index'])+1 > len(self.indices_):
             self.indices_ = gS['index'].copy()
-            self.indices_.append(gG['index'][idx])
+            self.indices_.append(fr)
             self.indices_ = np.array(self.indices_)
 
         # Find poles and residues.
@@ -390,15 +396,19 @@ class AAA(BaseEstimator):
         # If there are already indices from a previous fit, we reuse them.
         if hasattr(self, 'indices_'):
             indices = self.indices_
-            n_freqs = 0
-            i = 0
-            while n_freqs-1 < self.order:
-                if (indices[i] == 0) or (parity == 0 and indices[i] == N-1):
-                    n_freqs += 1
-                else:
-                    n_freqs += 2
-                i += 1
-            indices = indices[:i]
+            n_freqs = self.count_freqs(indices, N, parity)
+            if n_freqs-1 > self.order:
+                n_freqs = 0
+                i = 0
+                for idx in indices:
+                    if (idx == 0) or (parity == 0 and idx == N-1):
+                        n_freqs += 1
+                    else:
+                        n_freqs += 2
+                    i += 1
+                    if n_freqs-1 >= self.order:
+                        break
+                indices = indices[:i]
         else:
             indices = [np.argmax(np.linalg.norm(y, axis=1))]
             self.indices_ = indices
@@ -656,12 +666,14 @@ class SuperResolution(BaseEstimator):
     def __init__(
             self,
             *,
-            rational_fitter=None,
+            order:int=2,
+            rational_fitter={'method': 'AAA'},
             damping:float=0.,
             fs:float=1.,
             prune_tol:float=0.,
             compute_amps:bool=True
         ):
+        self.order = order
         self.rational_fitter = rational_fitter
         self.damping = damping
         self.fs = fs
@@ -669,27 +681,38 @@ class SuperResolution(BaseEstimator):
         self.compute_amps = compute_amps
 
     @property
-    def resonances_(self):
+    def n_poles_(self):
+        return self._rational_fitter.n_poles_
+
+    @property
+    def roots_(self):
+        r = self.poles_.real.copy()
+        cx_ = (np.log(-r[r < 0]) + 1j*np.pi)*self.fs
+        cx = np.log(self.poles_.cx)*self.fs
+        cx = np.concatenate((cx_, cx), dtype=complex)
+
+        r = r[r > 0]
+        r = np.log(r)*self.fs
+
         res = _HCoeffs(
-            real=np.log(self.poles_.real)*self.fs,
-            cx=np.log(self.poles_.cx)*self.fs)
+            real=r,
+            cx=cx)
         return res
-    
+
     @property
     def nat_freqs_(self):
-        res = self.resonances_
+        res = self.roots_
         return np.concatenate(
             (np.abs(res.real), np.abs(res.cx)),
             axis=0, dtype=float
-        )
+        )/(2*np.pi)
 
     @property
     def dampings_(self):
-        res = self.resonances_
-        return np.concatenate(
-            (-res.real/self.nat_freqs_, -res.cx/self.nat_freqs_),
-            axis=0, dtype=float
-        )
+        r = self.roots_
+        r = np.concatenate((r.real, r.cx), axis=0, dtype=complex)
+        nat_freqs = self.nat_freqs_
+        return -np.real(r) / (2*np.pi*nat_freqs)
 
     def _get_amps(self, y, parity):
         N = y.shape[0]
@@ -698,7 +721,6 @@ class SuperResolution(BaseEstimator):
 
         # Construct Cauchy matrix.
         Vr = self.poles_.real[np.newaxis, :]**(np.arange(1, ns)[:, np.newaxis])
-        Vr = np.concatenate((Vr, np.ones(shape=(ns-1, 1))), axis=1)
         Vi = self.poles_.cx[np.newaxis, :]**(np.arange(1, ns)[:, np.newaxis])
         V = np.concatenate(
             (Vr, 2*np.real(Vi), -2*np.imag(Vi)),
@@ -708,10 +730,9 @@ class SuperResolution(BaseEstimator):
         a = scipy.linalg.lstsq(
             V, x, overwrite_a=True, overwrite_b=True)[0]
         lr, lc = len(self.poles_.real), len(self.poles_.cx)
-        amps = _HCoeffs(real=a[:lr], cx=a[lr+1:lr+1+lc] + 1j*a[lr+1+lc:])
-        d = a[lr]
+        amps = _HCoeffs(real=a[:lr], cx=a[lr:lr+lc] + 1j*a[lr+lc:lr+2*lc])
 
-        return amps, d
+        return amps
 
     def fit(self, y, parity:bool=None):
         y = np.asarray(y)
@@ -725,21 +746,31 @@ class SuperResolution(BaseEstimator):
         parity = int(parity)
         ns = 2*(N-1)+parity
 
-        if self.rational_fitter is None:
-            self.rational_fitter = AAA()
-        self.rational_fitter.set_params(compute_r=False)
+        if not hasattr(self, '_rational_fitter'):
+            method = self.rational_fitter.get('method')
+            r_dict = {k: item for k, item in self.rational_fitter.items() if k != 'method'}
+            if method == 'AAA':
+                self._rational_fitter = AAA(**r_dict)
+            elif method == 'VF':
+                self._rational_fitter = VF(**r_dict)
+            else:
+                msg = f'Unknown rational fitting method {method}.'
+                raise ValueError(msg)
+        self._rational_fitter.set_params(
+            order=self.order, compute_r=False, prune_tol=0.)
 
-        ωN = np.exp(-2j*np.pi/ns)
         if self.damping > 0.:
             x = np.fft.irfft(y, n=ns, axis=0)
             x *= np.pow(self.damping, np.arange(ns)/(ns-1))[:, np.newaxis]
             y = np.fft.rfft(x, axis=0)
             del x
-        self.rational_fitter.fit(
+
+        ωN = np.exp(-2j*np.pi/ns)
+        self._rational_fitter.fit(
             y*(ωN**np.arange(N))[:, np.newaxis],
             parity=parity)
 
-        self.poles_ = self.rational_fitter.poles_
+        self.poles_ = self._rational_fitter.poles_
         if self.damping > 0.:
             self.poles_.real *= np.pow(self.damping, -1/(ns-1))
             self.poles_.cx *= np.pow(self.damping, -1/(ns-1))
@@ -751,15 +782,15 @@ class SuperResolution(BaseEstimator):
             setattr(self.poles_, part, p_[idxs])
 
         if self.prune_tol > 0.:
-            self.amps_, self.d_ = self._get_amps(
+            self.amps_= self._get_amps(
                 y, parity)
             self.poles_ = _pole_pruning(self.poles_, self.amps_, self.prune_tol)
 
         if self.compute_amps:
-            self.amps_, self.d_ = self._get_amps(
+            self.amps_ = self._get_amps(
                 y, parity)
         else:
-            self.amps_, self.d_ = None, None
+            self.amps_ = None
 
         return self
 
@@ -770,7 +801,7 @@ class SuperResolution(BaseEstimator):
             raise ValueError(msg)
 
         return np.real(exp_sum(
-            self.poles_.full(), self.amps_.full(), X))
+            self.poles_.full(), self.amps_.full(), X, fs=self.fs))
 
 # Stabilization algorithm
 
@@ -986,9 +1017,9 @@ class StablePoles:
         n_poles = -1
         amps_set, poles_set = {}, {}
         for order in range(min_order, max_order+1, 2):
-            self.model.rational_fitter.set_params(order=order)
+            self.model.set_params(order=order)
             self.model.fit(y, parity)
-            n_poles = self.model.rational_fitter.n_poles_
+            n_poles = self.model.n_poles_
 
             amps_ = np.concatenate(
                 (self.model.amps_.real, self.model.amps_.cx),
