@@ -52,7 +52,7 @@ def _validate_dims(M, C, K, check_symmetry=True):
 
 def _sum_exp_weighted(a, fs:float, ns:int):
     z = np.exp(a/fs)
-    sl = np.abs(z-1)>1e-4
+    sl = np.abs(z-1)>1e-2
     z[sl] = (z[sl]*((z[sl]**ns)-ns-1)+ns)/((z[sl]-1)**2)
     sl = ~sl
     z[sl] = sum((ns-i)*(z[sl]**i) for i in range(ns))

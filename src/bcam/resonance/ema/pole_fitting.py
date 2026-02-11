@@ -774,19 +774,55 @@ class SuperResolution(BaseEstimator):
 
 # Stabilization algorithm
 
+def _geometric_sum(r:float, ns:int):
+    if ns <= 5:
+        return np.sum(r**k for k in range(ns))
+
+    delta = 1e-2
+    eta = 1e-5
+
+    # For r away from 1.
+    idxs = np.nonzero(np.abs(1-r) > delta)[0]
+    r[idxs] = (1 - r[idxs]**ns) / (1 - r[idxs])
+
+    # For r**ns large.
+    idxs = np.setdiff1d(
+        np.arange(len(r)), idxs, assume_unique=True)
+    if len(idxs) == 0:
+        return r
+
+    sub_idxs = np.nonzero(np.abs(r[idxs])**ns > eta)[0]
+    l = np.log(r[idxs[sub_idxs]])
+    r[idxs[sub_idxs]] = np.sqrt(r[idxs[sub_idxs]]**(ns-1))
+    r[idxs[sub_idxs]] *= np.sinh(ns*l/2) / np.sinh(l/2)
+
+    # For r close to 1 and r**ns small.
+    r_idxs = np.setdiff1d(
+        np.arange(len(idxs)), sub_idxs, assume_unique=True)
+    if len(r_idxs) == 0:
+        return r
+
+    L = int(np.floor(np.sqrt(ns)))
+    M = ns//L
+    r_ = r[idxs[r_idxs]].copy()
+    r[idxs[r_idxs]] = _geometric_sum(r_.copy()**L, M)
+    r[idxs[r_idxs]] *= _geometric_sum(r_.copy(), L)
+    r[idxs[r_idxs]] += (r_**(M*L))*_geometric_sum(r_, ns%L)
+
+    return r
+
 def _inner_prod(ns:int, x, y=None):
     if y is None:
         r = np.abs(x)**2
     else:
         r = x*np.conj(y)
-    idxs = np.nonzero(np.abs(1-r) > 0.1)
-    r[idxs] = (1 - r[idxs]**ns) / (ns*(1 - r[idxs]))
-    idxs = np.nonzero((np.abs(1-r) > 1e-10) & (np.abs(1-r) <= 0.1))
-    eta = np.log(r[idxs])
-    r[idxs] = np.sqrt(r[idxs]**(ns-1))
-    r[idxs] *= np.sinh(ns*eta/2) / (ns*np.sinh(eta/2))
-    idxs = np.nonzero(np.abs(1-r) <= 1e-10)
-    r[idxs] = 1.
+    shape = r.shape
+    r = r.flatten()
+
+    # Evaluate geometric sum recursively.
+    r = _geometric_sum(r, ns) / ns
+
+    r = r.reshape(shape)
     return r
 
 def dist(x, y, ns:int):
@@ -1103,3 +1139,16 @@ class StablePoles:
 
         if show:
             plt.show()
+
+if __name__ == '__main__':
+    N = 3543
+    r = np.array([[0., 0.54], [0.999, 0.99995]])
+
+    true = np.sum(r**(2*k) for k in range(N))/N
+    print(f'True: {true}')
+    test = _inner_prod(N, r)
+    print(f'Test: {test}')
+
+    print(f'relative error: {np.abs(true-test)/np.abs(true)}')
+    print('end')
+    
