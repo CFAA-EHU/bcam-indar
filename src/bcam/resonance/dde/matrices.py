@@ -1,4 +1,6 @@
-#!/usr/bin/env python
+'''
+Finite dimensional approximations of Differential Delay Equations (DDEs)
+'''
 
 # ==== Imports ====
 from itertools import product

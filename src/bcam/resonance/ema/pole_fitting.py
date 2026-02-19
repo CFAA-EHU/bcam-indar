@@ -190,12 +190,14 @@ class AAA(BaseEstimator):
             order:int=None,
             compute_r:bool=True,
             prune_tol:float=0.,
+            seeds=None,
             lapack_driver:str=None,
             cond:float=None
         ):
         self.order = order
         self.compute_r = compute_r
         self.prune_tol = prune_tol
+        self.seeds = seeds
         self.lapack_driver = lapack_driver
         self.cond = cond
 
@@ -392,6 +394,9 @@ class AAA(BaseEstimator):
         elif self.order > max_order:
             msg = f'The order exceeds the maximum recommended order {max_order}.'
             logger.warning(msg, stacklevel=2)
+
+        if self.seeds is not None:
+            self.indices_ = np.array(self.seeds, dtype=np.int64)
 
         # If there are already indices from a previous fit, we reuse them.
         if hasattr(self, 'indices_'):
@@ -650,7 +655,7 @@ def exp_sum(poles, amplitudes, t, fs=1):
     elif t.ndim > 1:
         msg = f'Expected a 1D array for t, got an array of dimension {t.ndim}.'
         raise ValueError(msg)
-    
+
     amplitudes = np.asarray(amplitudes)
     if amplitudes.ndim == 1:
         amplitudes = np.expand_dims(amplitudes, axis=1)
@@ -807,7 +812,7 @@ class SuperResolution(BaseEstimator):
 
 def _geometric_sum(r:float, ns:int):
     if ns <= 5:
-        return np.sum(r**k for k in range(ns))
+        return sum(r**k for k in range(ns))
 
     delta = 1e-2
     eta = 1e-5
@@ -863,13 +868,12 @@ def dist(x, y, ns:int):
     abs_x = np.sqrt(np.real(_inner_prod(ns, x)))
     abs_y = np.sqrt(np.real(_inner_prod(ns, y)))
     t1 = (abs_x - abs_y)**2
-    t2 = 2*abs_x*abs_y
-    t2 *= (1 - np.real(_inner_prod(ns, x, y)) / (abs_x*abs_y))
+    t2 = 2*((abs_x*abs_y) - np.real(_inner_prod(ns, x, y)))
 
     if floats:
-        return (t1 + t2)[0]
+        return np.sqrt(t1 + t2)[0]
     else:
-        return t1 + t2
+        return np.sqrt(t1 + t2)
 
 def _std_new(x, ns):
     x = np.asarray(x)
@@ -894,7 +898,7 @@ class StablePoles:
     def _add_poles(
         self, clusters, new_set, order, ns):
         radius = self.radius
-        radius = dist(0., 0.9, ns) if radius is None else radius
+        radius = dist(0., 0.5, ns) if radius is None else radius
 
         def mean_weighted(c):
             l = len(c) if len(c) < 4 else 4
@@ -1170,16 +1174,3 @@ class StablePoles:
 
         if show:
             plt.show()
-
-if __name__ == '__main__':
-    N = 3543
-    r = np.array([[0., 0.54], [0.999, 0.99995]])
-
-    true = np.sum(r**(2*k) for k in range(N))/N
-    print(f'True: {true}')
-    test = _inner_prod(N, r)
-    print(f'Test: {test}')
-
-    print(f'relative error: {np.abs(true-test)/np.abs(true)}')
-    print('end')
-    

@@ -1,5 +1,5 @@
 '''
-Essential functions for the resonance package.
+Experimental Modal Analysis.
 '''
 
 from .lti import *

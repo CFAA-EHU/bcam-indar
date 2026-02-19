@@ -242,25 +242,12 @@ def reshape_projection(x):
     return x_
 
 
-def kernel(times, resonances, amps, fs, response='a'):
-    dof = len(resonances)
-    ns = len(times)
-    K = 2*fs*np.exp(resonances/(2*fs)) * np.sinh(resonances/(2*fs))
-    if response == 'a':
-        K *= resonances
-    K = amps * K.reshape(1, dof)
-    K = np.expand_dims(K, axis=2)
-    K = K * np.exp(resonances[np.newaxis, :]*times[:, np.newaxis]).reshape(1, 1, ns, dof)
-    K = np.imag(np.sum(K, axis=-1))
-
-    return K
-
 class Amplitudes(BaseEstimator):
 
     def __init__(
         self,
         *,
-        fs:float=1,
+        fs:float=1.,
         response:str='a',
         penalty:float=0.,
     ):
@@ -522,7 +509,7 @@ class Amplitudes(BaseEstimator):
             return K
         else:
             return np.nan
-    
+
     def residual(self, X):
         _, c_freqs, r_freqs = list(self._freqs.values())
         X = np.atleast_1d(X)

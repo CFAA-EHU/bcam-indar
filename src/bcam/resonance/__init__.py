@@ -2,3 +2,5 @@
 Resonance
 =========
 '''
+
+from .core import *
