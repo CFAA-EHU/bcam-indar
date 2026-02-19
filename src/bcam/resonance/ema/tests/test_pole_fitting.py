@@ -3,6 +3,7 @@ import pytest
 import numpy as np
 
 from bcam.resonance.ema import pole_fitting
+from bcam.resonance import Rational, ExpSum
 
 
 # ============================
@@ -40,7 +41,8 @@ def random_rational(
     r = np.concatenate((r_r, r_cx, np.conj(r_cx)), axis=0)
 
     # Construct signal.
-    y = pole_fitting.rational(poles, r, 0., u**np.arange(ns//2+1))
+    rational = Rational(poles, r.T)
+    y = rational(u**np.arange(ns//2+1)).T
 
     return (poles_r, poles_cx), (r_r, r_cx), (y, ns%2)
 
@@ -124,13 +126,17 @@ class Test_AAA:
                 idxs = np.argsort(p_)
                 setattr(model.poles_, part, p_[idxs])
                 setattr(model.r_, part, getattr(model.r_, part)[idxs])
+            
+            ns = 2*(y[0].shape[0]-1)+y[1]
+            u = np.exp(2j * np.pi / ns)
+            y_pred = model.predict(u**np.arange(ns//2+1))
 
             assert (len(model.poles_.real) == L) and (len(model.poles_.cx) == M)
             assert np.allclose(model.poles_.real, poles[0])
             assert np.allclose(model.poles_.cx, poles[1])
             assert np.allclose(model.r_.real, r[0])
             assert np.allclose(model.r_.cx, r[1])
-
+            assert np.allclose(y_pred, y[0])
 
 class Test_VF:
 
@@ -249,8 +255,9 @@ def random_exp_sum(
     amps = np.concatenate((amps_r, amps_cx, np.conj(amps_cx)), axis=0)
 
     # Construct signal.
-    x = pole_fitting.exp_sum(poles, amps, np.arange(ns), fs=1)
-    x = np.real(x)
+    exp_sum = ExpSum(np.emath.log(poles), amps.T)
+    x = exp_sum(np.arange(ns))
+    x = np.real(x).T
 
     return (poles_r, poles_cx), (amps_r, amps_cx), (x, ns)
 

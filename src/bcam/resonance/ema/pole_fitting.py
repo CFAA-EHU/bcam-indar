@@ -2,7 +2,6 @@
 
 import logging
 import bisect
-import attrs
 
 import numpy as np
 import scipy
@@ -10,104 +9,15 @@ import pandas as pd
 from sklearn.base import BaseEstimator
 import matplotlib.pyplot as plt
 
+from .helpers import Poles, HCoeffs
+from bcam.resonance import Rational, ExpSum
+
 logger = logging.getLogger(__name__)
 
 
 # ========================
 # Rational Approximation
 # ========================
-
-def pos_imag(x):
-    x = np.asarray(x, dtype=complex)
-    x[np.imag(x) < 0] = np.conj(x[np.imag(x) < 0])
-    return x
-
-@attrs.define
-class _Poles:
-    real = attrs.field(converter=lambda x: np.asarray(x, dtype=float), default=np.array([]))
-    cx = attrs.field(converter=pos_imag, default=np.array([]))
-
-    @classmethod
-    def from_raw(cls, poles):
-        poles = np.asarray(poles, dtype=complex)
-
-        # Separate real and complex conjugated poles.
-        poles_u = list(poles[np.imag(poles) >= 0])
-        poles_l = list(poles[np.imag(poles) < 0])
-        poles_r, poles_c = [], []
-        while (len(poles_u) > 0) and (len(poles_l) > 0):
-            distances = np.abs([p - np.conj(poles_u[-1]) for p in poles_l])
-            idx = np.argmin(distances)
-            if distances[idx] < 1e-8:
-                poles_c.append(poles_u.pop())
-                poles_l.pop(idx)
-            else:
-                # If a pole does not have a conjugate, we consider it as a real pole.
-                poles_r.append(poles_u.pop())
-
-        poles_r.extend(poles_u)
-        poles_r.extend(poles_l)
-        poles_r = np.real(poles_r)
-        poles_c = np.array(poles_c, dtype=complex)
-
-        return cls(real=poles_r, cx=poles_c)
-
-    def full(self):
-        return np.concatenate((self.real, self.cx, np.conj(self.cx)))
-
-    def count(self):
-        return len(self.real) + 2*len(self.cx)
-
-
-@attrs.define
-class _HCoeffs:
-    real = attrs.field(converter=lambda x: np.asarray(x, dtype=float), default=np.array([]))
-    cx = attrs.field(converter=lambda x: np.asarray(x, dtype=complex), default=np.array([]))
-
-    def full(self):
-        return np.concatenate((self.real, self.cx, np.conj(self.cx)))
-
-
-def rational(poles, r, d, X):
-    '''
-    Parameters
-    ----------
-    poles : (M,) array_like
-    r : (M, L) array_like
-    d : scalar
-    X : scalar or (N, ) array_like
-
-    Return
-    ------
-    out : (N, L) complex ndarray
-        The values of the rational function at the points X.
-        If X is scalar, N = 1.
-    '''
-    poles = np.asarray(poles)
-    if poles.ndim != 1:
-        msg = f'Expected a 1D array for poles, got an array of dimension {poles.ndim}.'
-        raise ValueError(msg)
-
-    X = np.asarray(X)
-    if X.ndim == 0:
-        X = np.expand_dims(X, axis=0)
-    elif X.ndim > 1:
-        msg = f'Expected a 1D array for X, got an array of dimension {X.ndim}.'
-        raise ValueError(msg)
-
-    r = np.asarray(r)
-    if r.ndim == 1:
-        r = np.expand_dims(r, axis=1)
-    elif r.ndim > 2:
-        msg = f'Expected a 1D or 2D array for residues, got an array of dimension {r.ndim}.'
-        raise ValueError(msg)
-    
-    if poles.shape[0] != r.shape[0]:
-        msg = f'The number of poles and residues must be the same, got {poles.shape[0]} and {r.shape[0]} instead.'
-        raise ValueError(msg)
-    
-    return (1 / (X[:, np.newaxis] - poles[np.newaxis, :])) @ r + d
-
 
 # Define helpers for rational fitting.
 
@@ -147,26 +57,17 @@ def _get_residues(y, parity, poles, cond=None, lapack_driver=None):
         cond=cond, lapack_driver=lapack_driver)[0]
     lr, lc = len(poles.real), len(poles.cx)
     d = r[lr]
-    r = _HCoeffs(real=r[:lr], cx=r[lr+1:lr+1+lc] + 1j*r[lr+1+lc:])
+    r = HCoeffs(real=r[:lr], cx=r[lr+1:lr+1+lc] + 1j*r[lr+1+lc:])
 
     return r, d
 
-def _pole_pruning(poles:_Poles, r:_HCoeffs, tol:float):
+def _pole_pruning(poles:Poles, r:HCoeffs, tol:float):
     for part in ['real', 'cx']:
         idxs = np.nonzero(
             np.linalg.norm(getattr(r, part), axis=1) > tol)[0]
         setattr(poles, part, getattr(poles, part)[idxs])
 
     return poles
-
-def _predict_rational(poles, r, d, X):
-    if r is None:
-        msg = 'Cannot compute rational function values without residues. \
-            Set compute_r=True when initializing the estimator.'
-        raise ValueError(msg)
-
-    return rational(
-        poles.full(), r.full(), d, X)
 
 def _get_max_order(ns, rank):
     # Counting complex paramaters in a complex time series
@@ -326,7 +227,7 @@ class AAA(BaseEstimator):
         poles = scipy.linalg.eigvals(a, b, overwrite_a=True)
         poles = poles[2:]
 
-        poles = _Poles.from_raw(poles)
+        poles = Poles.from_raw(poles)
 
         dim = poles.count()
         # Check that the number of poles is correct.
@@ -434,13 +335,21 @@ class AAA(BaseEstimator):
             self.r_, self.d_ = _get_residues(
                 y, parity, self.poles_,
                 cond=self.cond, lapack_driver=self.lapack_driver)
+            self._predict = Rational(
+                self.poles_.full(), self.r_.full().T, self.d_)
         else:
             self.r_, self.d_ = None, None
+            self._predict = lambda x : np.nan
 
         return self
 
     def predict(self, X):
-        return _predict_rational(self.poles_, self.r_, self.d_, X)
+        if self.r_ is None:
+            msg = 'Cannot compute rational function values without residues. \
+                Set compute_r=True when initializing the estimator.'
+            logger.warning(msg)
+        
+        return self._predict(X).T
 
 class VF(BaseEstimator):
 
@@ -554,7 +463,7 @@ class VF(BaseEstimator):
 
         # Compute poles as eigenvalues of M.
         poles = scipy.linalg.eigvals(M, overwrite_a=True)
-        poles = _Poles.from_raw(poles)
+        poles = Poles.from_raw(poles)
 
         if 2*len(poles.cx) + len(poles.real) != self.order:
             msg = f'Problems during computation of poles. \
@@ -585,17 +494,17 @@ class VF(BaseEstimator):
         self.n_poles_ = n_poles # For compatibility with AAA.
         if self.poles is None:
             poles = 0.9*np.exp(1j*np.pi*np.arange(1, n_poles//2+1)/(n_poles//2+1))
-            poles = _Poles(cx=poles)
+            poles = Poles(cx=poles)
             if self.order % 2 == 1:
                 poles.real = [0.9]
         elif isinstance(self.poles, tuple):
             if len(self.poles) == 2:
-                poles = _Poles(real=self.poles[0], cx=self.poles[1])
+                poles = Poles(real=self.poles[0], cx=self.poles[1])
             else:
                 msg = f'Expected a tuple of length 2 for poles, got a tuple of length {len(self.poles)} instead.'
                 raise ValueError(msg)
         else:
-            poles = _Poles.from_raw(self.poles)
+            poles = Poles.from_raw(self.poles)
 
         if 2*len(poles.cx) + len(poles.real) != self.order:
             msg = f'Expected {self.order} poles, got {2*len(poles.cx) + len(poles.real)} instead.'
@@ -615,56 +524,26 @@ class VF(BaseEstimator):
             self.r_, self.d_ = _get_residues(
                 y, parity, self.poles_,
                 cond=self.cond, lapack_driver=self.lapack_driver)
+            self._predict = Rational(
+                self.poles_.full(), self.r_.full().T, self.d_)
         else:
             self.r_, self.d_ = None, None
+            self._predict = lambda x : np.nan
 
         return self
 
     def predict(self, X):
-        return _predict_rational(self.poles_, self.r_, self.d_, X)
+        if self.r_ is None:
+            msg = 'Cannot compute rational function values without residues. \
+                Set compute_r=True when initializing the estimator.'
+            logger.warning(msg)
+        
+        return self._predict(X).T
 
 
 # ===============================
 # Exponential Sums Decomposition
 # ===============================
-
-def exp_sum(poles, amplitudes, t, fs=1):
-    '''
-    Parameters
-    ----------
-    poles : (M,) array_like
-    amplitudes : (M, L) array_like
-    t : scalar or (N, ) array_like
-    fs : scalar, default=1
-        Sampling frequency.
-
-    Return
-    ------
-    out : (N, L) complex ndarray
-        The values of the rational function at the points z.
-        If z is scalar, N = 1.
-    '''
-    poles = np.asarray(poles)
-    if poles.ndim != 1:
-        msg = f'Expected a 1D array for poles, got an array of dimension {poles.ndim}.'
-        raise ValueError(msg)
-
-    t = np.asarray(t)
-    if t.ndim == 0:
-        t = np.expand_dims(t, axis=0)
-    elif t.ndim > 1:
-        msg = f'Expected a 1D array for t, got an array of dimension {t.ndim}.'
-        raise ValueError(msg)
-
-    amplitudes = np.asarray(amplitudes)
-    if amplitudes.ndim == 1:
-        amplitudes = np.expand_dims(amplitudes, axis=1)
-    elif amplitudes.ndim > 2:
-        msg = f'Expected a 1D or 2D array for amplitudes, got an array of dimension {amplitudes.ndim}.'
-        raise ValueError(msg)
-
-    return (poles[np.newaxis, :]**(t[:, np.newaxis]*fs)) @ amplitudes
-
 
 class SuperResolution(BaseEstimator):
 
@@ -690,34 +569,8 @@ class SuperResolution(BaseEstimator):
         return self._rational_fitter.n_poles_
 
     @property
-    def roots_(self):
-        r = self.poles_.real.copy()
-        cx_ = (np.log(-r[r < 0]) + 1j*np.pi)*self.fs
-        cx = np.log(self.poles_.cx)*self.fs
-        cx = np.concatenate((cx_, cx), dtype=complex)
-
-        r = r[r > 0]
-        r = np.log(r)*self.fs
-
-        res = _HCoeffs(
-            real=r,
-            cx=cx)
-        return res
-
-    @property
-    def nat_freqs_(self):
-        res = self.roots_
-        return np.concatenate(
-            (np.abs(res.real), np.abs(res.cx)),
-            axis=0, dtype=float
-        )/(2*np.pi)
-
-    @property
-    def dampings_(self):
-        r = self.roots_
-        r = np.concatenate((r.real, r.cx), axis=0, dtype=complex)
-        nat_freqs = self.nat_freqs_
-        return -np.real(r) / (2*np.pi*nat_freqs)
+    def exps_(self):
+        return np.emath.log(self.poles_.full())*self.fs
 
     def _get_amps(self, y, parity):
         N = y.shape[0]
@@ -735,7 +588,7 @@ class SuperResolution(BaseEstimator):
         a = scipy.linalg.lstsq(
             V, x, overwrite_a=True, overwrite_b=True)[0]
         lr, lc = len(self.poles_.real), len(self.poles_.cx)
-        amps = _HCoeffs(real=a[:lr], cx=a[lr:lr+lc] + 1j*a[lr+lc:lr+2*lc])
+        amps = HCoeffs(real=a[:lr], cx=a[lr:lr+lc] + 1j*a[lr+lc:lr+2*lc])
 
         return amps
 
@@ -794,8 +647,11 @@ class SuperResolution(BaseEstimator):
         if self.compute_amps:
             self.amps_ = self._get_amps(
                 y, parity)
+            self._exp_sum = ExpSum(
+                np.emath.log(self.poles_.full()), self.amps_.full().T)
         else:
             self.amps_ = None
+            self._exp_sum = lambda x: np.nan
 
         return self
 
@@ -803,10 +659,9 @@ class SuperResolution(BaseEstimator):
         if self.amps_ is None:
             msg = 'Cannot compute exponential sum values without amplitudes. \
                 Set compute_amps=True when initializing the estimator.'
-            raise ValueError(msg)
+            logger.warning(msg)
 
-        return np.real(exp_sum(
-            self.poles_.full(), self.amps_.full(), X, fs=self.fs))
+        return np.real(self._exp_sum(X*self.fs)).T
 
 # Stabilization algorithm
 
@@ -821,23 +676,26 @@ def _geometric_sum(r:float, ns:int):
     idxs = np.nonzero(np.abs(1-r) > delta)[0]
     r[idxs] = (1 - r[idxs]**ns) / (1 - r[idxs])
 
-    # For r**ns large.
     idxs = np.setdiff1d(
         np.arange(len(r)), idxs, assume_unique=True)
     if len(idxs) == 0:
         return r
 
+    # For r**ns large.
+    eps = np.finfo(r.dtype).eps
+
     sub_idxs = np.nonzero(np.abs(r[idxs])**ns > eta)[0]
     l = np.log(r[idxs[sub_idxs]])
+    l = np.where(l == 0, eps, l)
     r[idxs[sub_idxs]] = np.sqrt(r[idxs[sub_idxs]]**(ns-1))
     r[idxs[sub_idxs]] *= np.sinh(ns*l/2) / np.sinh(l/2)
 
-    # For r close to 1 and r**ns small.
     r_idxs = np.setdiff1d(
         np.arange(len(idxs)), sub_idxs, assume_unique=True)
     if len(r_idxs) == 0:
         return r
 
+    # For r close to 1 and r**ns small.
     L = int(np.floor(np.sqrt(ns)))
     M = ns//L
     r_ = r[idxs[r_idxs]].copy()

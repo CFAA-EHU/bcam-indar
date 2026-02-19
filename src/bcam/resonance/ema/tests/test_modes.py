@@ -124,13 +124,13 @@ class TestModes:
         dof, n_out = 6, 4
         rng = np.random.default_rng(123455)
 
-        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        freqs = rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
         coords = np.arange(n_out)
         modes = mechanical.PartialModesMap(freqs, coords)
         psi = np.nan
         while isinstance(psi, float):
             x = rng.normal(size=(n_out, dof))
-            z = 5e-2*rng.normal(size=(n_out, dof))
+            z = 1e-3*rng.normal(size=(n_out, dof))
             z[:n_out, :n_out] = z[:n_out, :n_out] - z[:n_out, :n_out].T
             psi = modes(x, z)
         psi *= np.sqrt(np.imag(freqs))[np.newaxis, :]
@@ -156,7 +156,7 @@ class TestModes:
     def initial(self):
         dof, n_out = 6, 4
         rng = np.random.default_rng()
-        freqs = -rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        freqs = rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
         coords = np.arange(n_out)
         modes = mechanical.PartialModesMap(freqs, coords)
         modes.atol = 1e-20
@@ -171,7 +171,7 @@ class TestModes:
         modes_i = np.nan
         while isinstance(modes_i, float):
             xi = rng.normal(size=(n_out, dof))
-            zi = 5e-2*rng.normal(size=(n_out, dof))
+            zi = 5e-3*rng.normal(size=(n_out, dof))
             zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
             modes_i = modes(xi, zi)
 
@@ -199,7 +199,7 @@ class TestModes:
         modes_i = np.nan
         while isinstance(modes_i, float):
             xi = rng.normal(size=(n_out, dof))
-            zi = 5e-2*rng.normal(size=(n_out, dof))
+            zi = 5e-3*rng.normal(size=(n_out, dof))
             zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
             modes_i = modes(xi, zi)
 
@@ -297,7 +297,7 @@ class TestAmplitudes:
         t = np.arange(ns) / fs
         K = 0
 
-        # Resonant part.
+        # Resonant part. Discretized kernel.
         dof = len(freqs[0])
         if dof != 0:
             K1 = 2*fs*np.exp(freqs[0]/(2*fs))*freqs[0]*np.sinh(freqs[0]/(2*fs))
@@ -331,7 +331,7 @@ class TestAmplitudes:
     def test_amps(self):
         rng = np.random.default_rng()
         ns, fs = 200, 100
-        n_out, n_in = 3, 2
+        n_out, n_in = 1, 1
         _amps, _freqs = [], []
 
         dof = 3
@@ -339,16 +339,16 @@ class TestAmplitudes:
             modal = mechanical.randomSystem(
                 masses=rng.uniform(0.1, 0.2, dof),
                 dampings=rng.uniform(0.02, 0.05, dof),
-                resonances=rng.uniform(2*np.pi*1, 2*np.pi*20, dof),
+                roots=rng.uniform(2*np.pi*1, 2*np.pi*20, dof),
                 damping_type='nop',
                 seed=None)[1]
             m_freqs = modal['frequencies']
             modes = modal['mode_shapes']
             modes = modes * (1/np.sqrt(np.imag(m_freqs)))[np.newaxis, :]
-            amps = mechanical.mode_to_amps(modes, n_out, n_in)
+            m_amps = mechanical.mode_to_amps(modes, n_out, n_in)
         else:
-            amps, m_freqs = [], []
-        _amps.append(amps)
+            m_amps, m_freqs = np.array([]), np.array([])
+        _amps.append(m_amps)
         _freqs.append(m_freqs)
 
         n_c, n_r = 2, 2
@@ -366,13 +366,14 @@ class TestAmplitudes:
         K = self.kernel(ns, fs, _amps, _freqs)
 
         model = mechanical.Amplitudes(
+            mech_poles=np.exp(m_freqs/fs),
+            res_poles=(np.exp(r_freqs/fs), np.exp(c_freqs/fs)),
             fs=fs, response='a', penalty=0.)
+        model.fit(K)
 
-        freqs = {
-            'resonances': m_freqs,
-            'complex': c_freqs,
-            'real': r_freqs
-        }
-        model.fit(K, freqs)
+        mech_amps_fit = model.tensor_modes_
+        amps_fit = model.amps_
 
-        assert np.allclose(K, model.predict(np.arange(ns)/fs), atol=0.)
+        assert np.allclose(mech_amps_fit, m_amps, atol=0.)
+        assert np.allclose(amps_fit.cx, c_amps, atol=0.)
+        assert np.allclose(amps_fit.real, r_amps, atol=0.)

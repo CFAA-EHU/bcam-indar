@@ -11,6 +11,8 @@ from sklearn.base import BaseEstimator
 import scipy
 
 from . import derivatives
+from .helpers import Poles, HCoeffs
+from bcam.resonance import Kernel, ExpSum
 
 
 logger = logging.getLogger(__name__)
@@ -50,8 +52,7 @@ def _validate_dims(M, C, K, check_symmetry=True):
 # Amplitudes
 # =================================
 
-def _sum_exp_weighted(a, fs:float, ns:int):
-    z = np.exp(a/fs)
+def _sum_exp_weighted(z, ns:int):
     sl = np.abs(z-1)>1e-2
     z[sl] = (z[sl]*((z[sl]**ns)-ns-1)+ns)/((z[sl]-1)**2)
     sl = ~sl
@@ -92,39 +93,32 @@ def trig_ifft(x):
     x_inv = np.fft.irfft(x_inv, N, axis=-1, norm='ortho')
     return x_inv
 
-def metric_amps(freqs, fs, ns, response='a'):
+
+def _metric_amps(mech_poles:Poles, res_poles:Poles, fs, ns, response='a'):
     '''
     Compute the metric for amplitude coefficients.
 
     This matrix is the product A^TA, where A represents the components
-    of a exponential sum with three components:
-    - resonances: complex frequencies of the modes.
-    - c_freqs: complex frequencies not attached to mode shapes.
-    - r_freqs: real frequencies not attached to mode shapes.
+    of a exponential sum with three components ...
     '''
-    g_freqs = 3*[0]
-    c = 0
-    for k in ['resonances', 'complex', 'real']:
-        tmp = freqs.get(k)
-        g_freqs[c] = np.array(tmp) if tmp is not None else np.array([])
-        c += 1
-    resonances, c_freqs, r_freqs = g_freqs
-    dof, n_c, n_r = len(resonances), len(c_freqs), len(r_freqs)
+    dof = len(mech_poles.cx)
+    n_c, n_r = len(res_poles.cx), len(res_poles.real)
 
     if response not in ['a', 'v']:
         raise ValueError(f'Unknown response type: {response}')
 
-    # Model resonances block.
+    # Model roots block.
     def _mult(x, y):
-        r = x[np.newaxis, :] + y[:, np.newaxis]
-        r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
-        r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs))*np.sinh(y[:, np.newaxis]/(2*fs))
+        exp_x, exp_y = np.log(x), np.log(y)
+        r = x[np.newaxis, :] * y[:, np.newaxis]
+        r = _sum_exp_weighted(r, ns)
+        r *= (fs**2)*(x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
         if response == 'a':
-            r *= x[np.newaxis, :]*y[:, np.newaxis]
+            r *= (fs**2)*exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
         return r
 
-    m1 = _mult(resonances, np.conj(resonances))
-    m2 = _mult(resonances, resonances)
+    m1 = _mult(mech_poles.cx, np.conj(mech_poles.cx))
+    m2 = _mult(mech_poles.cx, mech_poles.cx)
 
     dim_c = 2*dof - 1 if dof > 0 else 0
     m_r_r = np.zeros((dim_c, dim_c))
@@ -134,17 +128,18 @@ def metric_amps(freqs, fs, ns, response='a'):
     m_r_r[dof:, dof:] = trig_fft(trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
     m_r_r *= 0.5
 
-    # Block (c_freqs, resonances).
+    # Block (exps, roots).
     def _mult(x, y):
-        r = x[np.newaxis, :] + y[:, np.newaxis]
-        r = np.exp(x[np.newaxis, :]/(2*fs)) * _sum_exp_weighted(r, fs, ns)
-        r *= (2*fs)*np.sinh(x[np.newaxis, :]/(2*fs))
+        exp_x = np.log(x)
+        r = x[np.newaxis, :] * y[:, np.newaxis]
+        r = _sum_exp_weighted(r, ns)
+        r *= fs*(x[np.newaxis, :]-1)
         if response == 'a':
-            r *= x[np.newaxis, :]
+            r *= fs*exp_x[np.newaxis, :]
         return r
 
-    m1 = _mult(resonances, c_freqs)
-    m2 = _mult(resonances, np.conj(c_freqs))
+    m1 = _mult(mech_poles.cx, res_poles.cx)
+    m2 = _mult(mech_poles.cx, np.conj(res_poles.cx))
 
     m_r_f = np.zeros((2*n_c, dim_c))
     m_r_f[:n_c, :dof] = np.imag(m1 + m2)
@@ -153,21 +148,21 @@ def metric_amps(freqs, fs, ns, response='a'):
     m_r_f[n_c:, dof:] = trig_fft(np.imag(-m1 + m2))[..., 1:]
     m_r_f *= 0.5
 
-    # Block (r_freqs, resonances).
-    m1 = _mult(resonances, r_freqs)
+    # Block (reals, roots).
+    m1 = _mult(mech_poles.cx, res_poles.real)
 
     m_r_fr = np.zeros((n_r, dim_c))
     m_r_fr[:, :dof] = np.imag(m1)
     m_r_fr[:, dof:] = trig_fft(np.real(m1))[..., 1:]
 
-    # Block (c_freqs, c_freqs).
+    # Block (exps, exps).
     def _mult(x, y):
-        r = x[np.newaxis, :] + y[:, np.newaxis]
-        r = _sum_exp_weighted(r, fs, ns)
+        r = x[np.newaxis, :] * y[:, np.newaxis]
+        r = _sum_exp_weighted(r, ns)
         return r
 
-    m1 = _mult(c_freqs, c_freqs)
-    m2 = _mult(c_freqs, np.conj(c_freqs))
+    m1 = _mult(res_poles.cx, res_poles.cx)
+    m2 = _mult(res_poles.cx, np.conj(res_poles.cx))
 
     m_f_f = np.zeros((2*n_c, 2*n_c))
     m_f_f[:n_c, :n_c] = np.real(m1 + m2)
@@ -176,15 +171,15 @@ def metric_amps(freqs, fs, ns, response='a'):
     m_f_f[n_c:, n_c:] = np.real(-m1 + m2)
     m_f_f *= 0.5
 
-    # Block (r_freqs, c_freqs).
-    m1 = _mult(c_freqs, r_freqs)
+    # Block (r_freqs, exps).
+    m1 =_mult(res_poles.cx, res_poles.real)
 
     m_fr_f = np.zeros((n_r, 2*n_c))
     m_fr_f[:, :n_c] = np.real(m1)
     m_fr_f[:, n_c:] = -np.imag(m1)
 
     # Block (r_freqs, r_freqs).
-    m1 = _mult(r_freqs, r_freqs)
+    m1 = _mult(res_poles.real, res_poles.real)
 
     m_fr_fr = m1
 
@@ -247,32 +242,25 @@ class Amplitudes(BaseEstimator):
     def __init__(
         self,
         *,
+        mech_poles=(),
+        res_poles=(),
         fs:float=1.,
         response:str='a',
         penalty:float=0.,
     ):
+        self.mech_poles = mech_poles
+        self.res_poles = res_poles
         self.fs = fs
         self.response = response
         self.penalty = penalty
 
-    @property
-    def all_amps_(self):
-        if not hasattr(self, 'tensor_modes_'):
-            msg = 'Call fit() before accessing all_amps_.'
-            raise ValueError(msg)
-        return {
-            'resonances': self.tensor_modes_,
-            'complex': self.complex_amps_,
-            'real': self.real_amps_
-        }
+    def _matrix(self, ns):
+        dof = len(self.mech_poles.cx)
+        n_c, n_r = len(self.res_poles.cx), len(self.res_poles.real)
 
-    def _matrix(self, freqs, ns):
-        resonances, c_freqs, r_freqs = list(freqs.values())
-        dof = len(resonances)
-        n_c, n_r = len(c_freqs), len(r_freqs)
-
-        m = metric_amps(
-            freqs, self.fs, ns, response=self.response)
+        m = _metric_amps(
+            self.mech_poles, self.res_poles,
+            self.fs, ns, response=self.response)
 
         if ((n_c == 0) & (n_r == 0)) or (dof == 0):
             m += self.penalty * np.eye(m.shape[0])
@@ -292,27 +280,25 @@ class Amplitudes(BaseEstimator):
             m_[:s, :s] += m
             return m, m_
 
-    def _rhs(self, y, freqs):
+    def _rhs(self, y):
         fs = self.fs
         n_out, n_in, ns = y.shape
-        resonances, c_freqs, r_freqs = list(freqs.values())
 
         # Resonances.
         def prod(t):
-            freqs_ = 2*fs*np.exp(resonances/(2*fs))*np.sinh(resonances/(2*fs))
+            ft = fs*(self.mech_poles.cx-1)
             if self.response == 'a':
-                freqs_ *= resonances
-            T = ns/fs
+                ft *= np.log(self.mech_poles.cx)*fs
             t = t.reshape(1, -1)
-            r_ = np.exp(resonances[:, np.newaxis]*t)*(1-t/T)
-            r_ *= freqs_[:, np.newaxis]
+            r_ = (self.mech_poles.cx[:, np.newaxis]**t)*(1-t/ns)
+            r_ *= ft[:, np.newaxis]
             return r_
 
-        dof = len(resonances)
+        dof = len(self.mech_poles.cx)
         if dof != 0:
             r1 = np.einsum(
                 'ijt,kt->ijk',
-                y, prod(np.arange(ns)/fs))
+                y, prod(np.arange(ns)))
             r1 = np.concatenate(
                 [np.imag(r1), trig_fft(np.real(r1))[..., 1:]],
                 axis=-1)
@@ -320,17 +306,16 @@ class Amplitudes(BaseEstimator):
             r1 = np.zeros((n_out, n_in, 0), dtype=y.dtype)
 
         # Complex frequencies.
-        def prod(t, freqs):
-            T = ns / fs
+        def prod(t, p):
             t = t.reshape(1, -1)
-            r_ = np.exp(freqs[:, np.newaxis]*t)*(1-t/T)
+            r_ = (p[:, np.newaxis]**t)*(1-t/ns)
             return r_
 
-        n_c = len(c_freqs)
+        n_c = len(self.res_poles.cx)
         if n_c != 0:
             r2 = np.einsum(
                 'ijt,kt->ijk',
-                y, prod(np.arange(ns)/fs, c_freqs))
+                y, prod(np.arange(ns), self.res_poles.cx))
             r2 = np.concatenate(
                 [np.real(r2), -np.imag(r2)],
                 axis=-1)
@@ -338,11 +323,11 @@ class Amplitudes(BaseEstimator):
             r2 = np.zeros((n_out, n_in, 0), dtype=y.dtype)
 
         # Real frequencies.
-        n_r = len(r_freqs)
+        n_r = len(self.res_poles.real)
         if n_r != 0:
             r3 = np.einsum(
                 'ijt,kt->ijk',
-                y, prod(np.arange(ns)/fs, r_freqs))
+                y, prod(np.arange(ns), self.res_poles.real))
         else:
             r3 = np.zeros((n_out, n_in, 0), dtype=y.dtype)
 
@@ -351,9 +336,9 @@ class Amplitudes(BaseEstimator):
             # Project to space of 'symmetric' matrices.
             return reshape_projection(r1).T
         elif dof == 0:
-            r2 = r2.reshape(-1, 2*n_c)
-            r3 = r3.reshape(-1, n_r)
-            return np.concatenate([r2, r3], axis=1).T
+            r = np.concatenate([r2, r3], axis=-1)
+            r = r.reshape(-1, 2*n_c+n_r)
+            return r.T
         else:
             r = np.concatenate([r1, r2, r3], axis=-1)
             dim = (2*dof-1)+2*n_c+n_r
@@ -381,38 +366,37 @@ class Amplitudes(BaseEstimator):
 
             return rd.T, roff.T
 
-    def fit(self, y, freqs):
+    def fit(self, y):
         n_out, n_in, ns = y.shape
-        _freqs = {}
-        for k in ['resonances', 'complex', 'real']:
-            tmp = freqs.get(k)
-            _freqs[k] = np.array(tmp) if tmp is not None else np.array([])
-        self._freqs = _freqs
 
-        dof = len(self._freqs['resonances'])
+        self.mech_poles = Poles(cx=self.mech_poles)
+        if len(self.res_poles) > 0:
+            self.res_poles = Poles(real=self.res_poles[0], cx=self.res_poles[1])
+
+        dof = len(self.mech_poles.cx)
         dim_c = 2*dof-1 if dof > 0 else 0
-        n_c, n_r = len(self._freqs['complex']), len(self._freqs['real'])
+        n_c, n_r = len(self.res_poles.cx), len(self.res_poles.real)
 
         if (n_c == 0) and (n_r == 0):
             r = scipy.linalg.solve(
-                self._matrix(self._freqs, ns),
-                self._rhs(y, self._freqs),
+                self._matrix(ns),
+                self._rhs(y),
                 assume_a='pos').T
 
             r1 = reshape_injection(r[:, :dim_c], n_out, n_in)
             r2, r3 = None, None
         elif dof == 0:
             r = scipy.linalg.solve(
-                self._matrix(self._freqs, ns),
-                self._rhs(y, self._freqs),
+                self._matrix(ns),
+                self._rhs(y),
                 assume_a='pos').T
 
             r1 = None
             r2 = r[:, :2*n_c].reshape(n_out, n_in, 2*n_c)
             r3 = r[:, 2*n_c:].reshape(n_out, n_in, n_r)
         else:
-            md, moff = self._matrix(self._freqs, ns)
-            rhs_d, rhs_off = self._rhs(y, self._freqs)
+            md, moff = self._matrix(ns)
+            rhs_d, rhs_off = self._rhs(y)
 
             # Diagonal elements or without symmetric pair.
             rd = scipy.linalg.solve(
@@ -455,7 +439,7 @@ class Amplitudes(BaseEstimator):
                 c = cn
             del roff
 
-        # Recover amplitudes.
+        # Store amplitudes of mechanical poles.
         if r1 is None:
             self.tensor_modes_ = np.array([])
         else:
@@ -464,66 +448,67 @@ class Amplitudes(BaseEstimator):
             r = trig_ifft(r).astype(np.complex128)
             self.tensor_modes_ = r1[..., :dof] + 1j*r
 
-        if r2 is None:
-            self.complex_amps_ = np.array([])
-        else:
-            self.complex_amps_ = r2[..., :n_c] + 1j*r2[..., n_c:]
+        # Store amplitudes for residual poles.
+        self.amps_ = HCoeffs()
+        if r2 is not None:
+            self.amps_.cx = r2[..., :n_c] + 1j*r2[..., n_c:]
 
-        if r3 is None:
-            self.real_amps_ = np.array([])
-        else:
-            self.real_amps_ = r3
+        if r3 is not None:
+            self.amps_.real = r3
+
+        # Define functions for predictions
+        self._kernel = Kernel(
+            roots=np.log(self.mech_poles.cx)*self.fs,
+            amps=self.tensor_modes_,
+            response=self.response
+        )
+
+        amps_ = np.concatenate(
+            [self.amps_.real, self.amps_.cx, np.conj(self.amps_.cx)], axis=-1)
+        self._exp_sum = ExpSum(
+            np.emath.log(self.res_poles.full())*self.fs,
+            amps_)
 
         return self
 
     def predict(self, X):
-        resonances, c_freqs, r_freqs = list(self._freqs.values())
+        n_out, n_in = self.tensor_modes_.shape[:2]
+
         X = np.atleast_1d(X)
         ns = X.shape[0]
-        fs = self.fs
-        K = 0
+        K = np.zeros((n_out, n_in, ns), dtype=float)
 
-        dof = len(resonances)
-        if dof > 0:
-            K = kernel(X, resonances, self.tensor_modes_, fs, self.response)
+        if len(self.roots) > 0:
+            K += self._kernel(X)
 
-        freqs = np.concatenate([c_freqs, r_freqs], dtype=complex)
-        amps = np.concatenate([self.complex_amps_, self.real_amps_], axis=-1)
-        nf = len(freqs)
-        if nf > 0:
-            K2 = np.expand_dims(amps, axis=2)
-            K2 = K2 * np.exp(freqs[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, nf)
-            K2 = np.real(np.sum(K2, axis=-1))
-            K += K2
+        nt = len(self.res_poles.cx) + len(self.res_poles.real)
+        if nt > 0:
+            K += np.real(self._exp_sum(X))
 
         return K
-    
+
     def mech_part(self, X):
-        resonances = self._freqs['resonances']
-        X = np.atleast_1d(X)
-        fs = self.fs
+        n_out, n_in = self.tensor_modes_.shape[:2]
 
-        dof = len(resonances)
-        if dof > 0:
-            K = kernel(X, resonances, self.tensor_modes_, fs, self.response)
-            return K
-        else:
-            return np.nan
-
-    def residual(self, X):
-        _, c_freqs, r_freqs = list(self._freqs.values())
         X = np.atleast_1d(X)
         ns = X.shape[0]
+        K = np.zeros((n_out, n_in, ns), dtype=float)
 
-        freqs = np.concatenate([c_freqs, r_freqs], dtype=complex)
-        amps = np.concatenate([self.complex_amps_, self.real_amps_], axis=-1)
-        nf = len(freqs)
-        if nf > 0:
-            K = np.expand_dims(amps, axis=2)
-            K = K * np.exp(freqs[np.newaxis, :]*X[:, np.newaxis]).reshape(1, 1, ns, nf)
-            K = np.real(np.sum(K, axis=-1))
-        else:
-            K = 0
+        if len(self.roots) > 0:
+            K += self._kernel(X)
+
+        return K
+
+    def residual(self, X):
+        n_out, n_in = self.tensor_modes_.shape[:2]
+
+        X = np.atleast_1d(X)
+        ns = X.shape[0]
+        K = np.zeros((n_out, n_in, ns), dtype=float)
+
+        nt = len(self.res_poles.cx) + len(self.res_poles.real)
+        if nt > 0:
+            K += np.real(self._exp_sum(X))
 
         return K
 
@@ -947,16 +932,16 @@ class PartialModesMap:
         return hessp_fun
 
 
-def _metric_amps_modes(resonances, fs, ns, response='a'):
+def _metric_amps_modes(roots, fs, ns, response='a'):
     '''
     Compute the metric for amplitude coefficients.
     '''
-    dof = len(resonances)
+    dof = len(roots)
 
     if response not in ['a', 'v']:
         raise ValueError(f'Unknown response type: {response}')
 
-    # Model resonances block.
+    # Model roots block.
     def _mult(x, y):
         r = x[np.newaxis, :] + y[:, np.newaxis]
         r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
@@ -965,8 +950,8 @@ def _metric_amps_modes(resonances, fs, ns, response='a'):
             r *= x[np.newaxis, :]*y[:, np.newaxis]
         return r
 
-    m1 = _mult(resonances, np.conj(resonances))
-    m2 = _mult(resonances, resonances)
+    m1 = _mult(roots, np.conj(roots))
+    m2 = _mult(roots, roots)
 
     m_r_r = np.zeros((2*dof, 2*dof))
     m_r_r[:dof, :dof] = np.real(m1 - m2)
@@ -981,20 +966,20 @@ class RealModes:
 
     def __init__(
         self,
-        resonances,
+        roots,
         amps,
         ns:int,
         response:str='a',
         fs:int=1,
     ):
-        assert resonances.ndim == 1, 'Expected a 1D-array for frequencies.'
+        assert roots.ndim == 1, 'Expected a 1D-array for frequencies.'
         assert amps.ndim == 3, 'Expected a 3D-array for amplitudes.'
         n_out, n_in, dof = amps.shape
         assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
-        assert dof == len(resonances), 'The last dimension of amplitudes must match the number of frequencies.'
+        assert dof == len(roots), 'The last dimension of amplitudes must match the number of frequencies.'
         assert dof >= n_out, 'dof must be greater than or equal to n_out.'
 
-        self.resonances = resonances
+        self.roots = roots
         self.amps = amps
         self.fs = fs
         self.ns = ns
@@ -1009,7 +994,7 @@ class RealModes:
 
     def _get_metric(self):
         self._metric = _metric_amps_modes(
-            self.resonances, self.fs, self.ns, response=self.response)
+            self.roots, self.fs, self.ns, response=self.response)
 
     def _fun(self, x):
         n_out, n_in, dof = self.amps.shape
@@ -1124,7 +1109,7 @@ class RealModes:
 
         n_out, n_in = self.amps.shape[:2]
         amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
-        K = kernel(X, self.resonances, amps_fit, self.fs, response=response)
+        K = kernel(X, self.roots, amps_fit, self.fs, response=response)
 
         return K
 
@@ -1223,26 +1208,26 @@ class ComplexModes:
 
     def __init__(
         self,
-        resonances,
+        roots,
         coords,
         amps,
         fs:int,
         ns:int,
         response:str='a',
     ):
-        self.resonances = resonances
-        assert resonances.ndim == 1, 'Expected 1D array for frequencies.'
+        self.roots = roots
+        assert roots.ndim == 1, 'Expected 1D array for frequencies.'
 
         self.amps = amps
         assert amps.ndim == 3, 'Expected 3D array for amplitudes.'
-        assert amps.shape[2] == len(resonances), 'Incompatible shapes for frequencies and amplitudes.'
+        assert amps.shape[2] == len(roots), 'Incompatible shapes for frequencies and amplitudes.'
 
         self.fs = fs
         self.ns = ns
         self.response = response
         PartialModesMap.atol = 1e-10
         PartialModesMap.rtol = 1e-8
-        self._modes_map = PartialModesMap(resonances, coords)
+        self._modes_map = PartialModesMap(roots, coords)
 
         self._rescale = np.max(np.abs(amps))
         self._get_metric()
@@ -1260,7 +1245,7 @@ class ComplexModes:
 
     def _get_metric(self):
         self._metric = _metric_amps_modes(
-            self.resonances, self.fs, self.ns, response=self.response)
+            self.roots, self.fs, self.ns, response=self.response)
 
     def _fun(self, x):
         n_out, n_in, dof = self.amps.shape
@@ -1419,7 +1404,7 @@ class ComplexModes:
     def predict(self, X, response:str=None):
         X = np.atleast_1d(X)
         ns = X.shape[0]
-        dof = len(self.resonances)
+        dof = len(self.roots)
         response = self.response if response is None else response
         K = np.zeros((ns, self.amps.shape[0]), dtype=float)
 
@@ -1429,7 +1414,7 @@ class ComplexModes:
 
         n_out, n_in = self.amps.shape[:2]
         amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
-        K = kernel(X, self.resonances, amps_fit, self.fs, response=response)
+        K = kernel(X, self.roots, amps_fit, self.fs, response=response)
 
         return K
 
@@ -1523,7 +1508,7 @@ def system_to_modal(M, C, K):
 # =================================
 
 def randomSystem(
-    masses, dampings, resonances,
+    masses, dampings, roots,
     damping_type='prop', seed=None):
     '''Generate a random linear vibrating system.
 
@@ -1535,7 +1520,7 @@ def randomSystem(
         Range for mass values.
     dampings : tuple, optional
         Range for damping ratios.
-    resonances : tuple, optional
+    roots : tuple, optional
         Range for natural frequencies.
     damping_type : str, optional
         Type of damping ('prop' for proportional, 'nop' for non-proportional).
@@ -1547,15 +1532,15 @@ def randomSystem(
     mechanical : dict
         Dictionary containing mass, damping, and stiffness matrices.
     modal : dict
-        Dictionary containing mode shapes (mass normalized) and resonances.
+        Dictionary containing mode shapes (mass normalized) and roots.
     '''
     m = np.asarray(masses)
     zeta = np.asarray(dampings)
-    freqs = np.asarray(resonances)
+    freqs = np.asarray(roots)
     dofs = len(freqs)
     # Raise an exception if the lengths are different.
     if (len(m) != dofs) or (len(zeta) != dofs):
-        msg = 'Incompatible lengths for masses, dampings, and resonances.'
+        msg = 'Incompatible lengths for masses, dampings, and roots.'
         raise ValueError(msg)
 
     # Generate rotation matrices.

@@ -1,6 +1,48 @@
 import numpy as np
 
 
+class Rational:
+
+    def __init__(
+        self,
+        poles,
+        a,
+        d=None
+    ):
+        self.poles = np.atleast_1d(poles)
+        self.a = np.atleast_2d(a)
+        self.d = np.atleast_1d(d) if d is not None else None
+
+        if poles.ndim > 1:
+            msg = 'Expected a 1D-array for poles.'
+            raise ValueError(msg)
+
+        if a.shape[-1] != len(poles):
+            msg = 'The last dimension of a should match the length of poles.'
+            raise ValueError(msg)
+        
+        if (d is not None) and (d.shape != a.shape[:-1]):
+            msg = 'The shape of d should match the shape of a without the last dimension.'
+            raise ValueError(msg)
+
+    def __call__(self, z):
+        z = np.atleast_1d(z)
+        if z.ndim > 1:
+            msg = f'Expected a 1D array for z, got an array of dimension {z.ndim}.'
+            raise ValueError(msg)
+
+        r = np.einsum(
+            '...j,kj->...k',
+            self.a,
+            1 / (z[:, np.newaxis] - self.poles[np.newaxis, :]),
+            dtype=complex)
+
+        if self.d is not None:
+            return r + self.d[..., np.newaxis]
+        else:
+            return r
+
+
 class ExpSum:
 
     def __init__(
@@ -29,8 +71,7 @@ class ExpSum:
             '...j,tj->...t',
             self.amps,
             np.exp(self.exps[np.newaxis, :]*t[:, np.newaxis]),
-            dtype=complex
-        )
+            dtype=complex)
 
         return r
 
@@ -55,7 +96,7 @@ class Kernel:
             msg = 'The last dimension of amps should match the length of roots.'
             raise ValueError(msg)
 
-        self._factor = np.array([1.])
+        self._factor = np.ones_like(self.roots)
         if response == 'd':
             pass
         elif response == 'v':
