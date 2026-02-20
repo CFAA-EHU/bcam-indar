@@ -932,26 +932,27 @@ class PartialModesMap:
         return hessp_fun
 
 
-def _metric_amps_modes(roots, fs, ns, response='a'):
+def _metric_amps_modes(poles, fs, ns, response='a'):
     '''
     Compute the metric for amplitude coefficients.
     '''
-    dof = len(roots)
+    dof = len(poles)
 
     if response not in ['a', 'v']:
         raise ValueError(f'Unknown response type: {response}')
 
-    # Model roots block.
+    # Model poles block.
     def _mult(x, y):
-        r = x[np.newaxis, :] + y[:, np.newaxis]
-        r = np.exp(r/(2*fs)) * _sum_exp_weighted(r, fs, ns)
-        r *= (4*fs**2)*np.sinh(x[np.newaxis, :]/(2*fs))*np.sinh(y[:, np.newaxis]/(2*fs))
+        exp_x, exp_y = np.log(x), np.log(y)
+        r = x[np.newaxis, :] * y[:, np.newaxis]
+        r = _sum_exp_weighted(r, ns)
+        r *= (fs**2)*(x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
         if response == 'a':
-            r *= x[np.newaxis, :]*y[:, np.newaxis]
+            r *= (fs**2)*exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
         return r
 
-    m1 = _mult(roots, np.conj(roots))
-    m2 = _mult(roots, roots)
+    m1 = _mult(poles, np.conj(poles))
+    m2 = _mult(poles, poles)
 
     m_r_r = np.zeros((2*dof, 2*dof))
     m_r_r[:dof, :dof] = np.real(m1 - m2)
@@ -966,20 +967,20 @@ class RealModes:
 
     def __init__(
         self,
-        roots,
+        poles,
         amps,
         ns:int,
         response:str='a',
-        fs:int=1,
+        fs:float=1.,
     ):
-        assert roots.ndim == 1, 'Expected a 1D-array for frequencies.'
+        assert poles.ndim == 1, 'Expected a 1D-array for frequencies.'
         assert amps.ndim == 3, 'Expected a 3D-array for amplitudes.'
         n_out, n_in, dof = amps.shape
         assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
-        assert dof == len(roots), 'The last dimension of amplitudes must match the number of frequencies.'
+        assert dof == len(poles), 'The last dimension of amplitudes must match the number of frequencies.'
         assert dof >= n_out, 'dof must be greater than or equal to n_out.'
 
-        self.roots = roots
+        self.poles = poles
         self.amps = amps
         self.fs = fs
         self.ns = ns
@@ -994,7 +995,7 @@ class RealModes:
 
     def _get_metric(self):
         self._metric = _metric_amps_modes(
-            self.roots, self.fs, self.ns, response=self.response)
+            self.poles, self.fs, self.ns, response=self.response)
 
     def _fun(self, x):
         n_out, n_in, dof = self.amps.shape
@@ -1109,7 +1110,7 @@ class RealModes:
 
         n_out, n_in = self.amps.shape[:2]
         amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
-        K = kernel(X, self.roots, amps_fit, self.fs, response=response)
+        K = kernel(X, self.poles, amps_fit, self.fs, response=response)
 
         return K
 
@@ -1208,25 +1209,26 @@ class ComplexModes:
 
     def __init__(
         self,
-        roots,
+        poles,
         coords,
         amps,
         fs:int,
         ns:int,
         response:str='a',
     ):
-        self.roots = roots
-        assert roots.ndim == 1, 'Expected 1D array for frequencies.'
+        self.poles = poles
+        assert poles.ndim == 1, 'Expected 1D array for frequencies.'
 
         self.amps = amps
         assert amps.ndim == 3, 'Expected 3D array for amplitudes.'
-        assert amps.shape[2] == len(roots), 'Incompatible shapes for frequencies and amplitudes.'
+        assert amps.shape[2] == len(poles), 'Incompatible shapes for frequencies and amplitudes.'
 
         self.fs = fs
         self.ns = ns
         self.response = response
         PartialModesMap.atol = 1e-10
         PartialModesMap.rtol = 1e-8
+        roots = np.emath.log(poles)*fs
         self._modes_map = PartialModesMap(roots, coords)
 
         self._rescale = np.max(np.abs(amps))
@@ -1245,7 +1247,7 @@ class ComplexModes:
 
     def _get_metric(self):
         self._metric = _metric_amps_modes(
-            self.roots, self.fs, self.ns, response=self.response)
+            self.poles, self.fs, self.ns, response=self.response)
 
     def _fun(self, x):
         n_out, n_in, dof = self.amps.shape
@@ -1404,7 +1406,7 @@ class ComplexModes:
     def predict(self, X, response:str=None):
         X = np.atleast_1d(X)
         ns = X.shape[0]
-        dof = len(self.roots)
+        dof = len(self.poles)
         response = self.response if response is None else response
         K = np.zeros((ns, self.amps.shape[0]), dtype=float)
 
@@ -1414,7 +1416,7 @@ class ComplexModes:
 
         n_out, n_in = self.amps.shape[:2]
         amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
-        K = kernel(X, self.roots, amps_fit, self.fs, response=response)
+        K = kernel(X, self.poles, amps_fit, self.fs, response=response)
 
         return K
 
