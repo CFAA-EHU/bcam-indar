@@ -478,7 +478,7 @@ class Amplitudes(BaseEstimator):
         ns = X.shape[0]
         K = np.zeros((n_out, n_in, ns), dtype=float)
 
-        if len(self.roots) > 0:
+        if len(self.mech_poles.cx) > 0:
             K += self._kernel(X)
 
         nt = len(self.res_poles.cx) + len(self.res_poles.real)
@@ -494,7 +494,7 @@ class Amplitudes(BaseEstimator):
         ns = X.shape[0]
         K = np.zeros((n_out, n_in, ns), dtype=float)
 
-        if len(self.roots) > 0:
+        if len(self.mech_poles.cx) > 0:
             K += self._kernel(X)
 
         return K
@@ -1068,7 +1068,7 @@ class RealModes:
         return (Ap + Bx).flatten()
 
     def fit(self, options_ncg:dict=None):
-        n_out, _, dof = self.amps.shape
+        n_out, n_in, dof = self.amps.shape
         options_ncg = {} if options_ncg is None else options_ncg
         if 'gtol' not in options_ncg.keys():
             options_ncg['gtol'] = 1e-2
@@ -1096,23 +1096,23 @@ class RealModes:
         self.success_ = res.success
         self.message_ = res.message
 
+        # Define functions for predictions
+        amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
+        self._kernel = Kernel(
+            roots=np.log(self.poles)*self.fs,
+            amps=amps_fit,
+            response=self.response
+        )
+
         return self
 
-    def predict(self, X, response:str=None):
-        X = np.atleast_1d(X)
-        ns = X.shape[0]
-        response = self.response if response is None else response
-        K = np.zeros((ns, self.amps.shape[0]), dtype=float)
-
+    def predict(self, X):
         if self.modes_fit_ is None:
             msg = 'Call fit() before accessing modes_fit_.'
             raise ValueError(msg)
 
-        n_out, n_in = self.amps.shape[:2]
-        amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
-        K = kernel(X, self.poles, amps_fit, self.fs, response=response)
-
-        return K
+        X = np.atleast_1d(X)
+        return self._kernel(X)
 
 
 
@@ -1397,28 +1397,27 @@ class ComplexModes:
             options=options,
             callback=callback
         )
-        n_out, _, dof = self.amps.shape
+        n_out, n_in, dof = self.amps.shape
         self._raw_modes_fit = reshape_modes_input(res.x, dof, n_out)
         self.optRes_ = res
 
+        # Define functions for predictions
+        amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
+        self._kernel = Kernel(
+            roots=np.log(self.poles)*self.fs,
+            amps=amps_fit,
+            response=self.response
+        )
+
         return self
 
-    def predict(self, X, response:str=None):
-        X = np.atleast_1d(X)
-        ns = X.shape[0]
-        dof = len(self.poles)
-        response = self.response if response is None else response
-        K = np.zeros((ns, self.amps.shape[0]), dtype=float)
-
+    def predict(self, X):
         if self.modes_fit_ is None:
             msg = 'Call fit() before accessing modes_fit_.'
             raise ValueError(msg)
 
-        n_out, n_in = self.amps.shape[:2]
-        amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
-        K = kernel(X, self.poles, amps_fit, self.fs, response=response)
-
-        return K
+        X = np.atleast_1d(X)
+        return self._kernel(X)
 
 
 def modal_to_system(mode_shapes, Z):
