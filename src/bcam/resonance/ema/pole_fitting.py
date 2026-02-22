@@ -138,7 +138,7 @@ class AAA(BaseEstimator):
         G_, gG_ = np.array(gG['index']), np.array(gG['data'])
         idxs = np.argsort(S_)
         S_, gS_ = S_[idxs], gS_[idxs]
-        n_S, _ = gS_.shape
+        n_S, rank = gS_.shape
         n_G = gG_.shape[0]
 
         N = n_S + n_G
@@ -185,13 +185,30 @@ class AAA(BaseEstimator):
         )
         L = L.reshape(M, -1).T
 
+        if (not self.d) and (M > rank):
+            # Construct inclusion matrix into the space that satisfies (3.14) of [From ESPRIT to ESPIRA].
+            tmpS = np.concatenate(
+                (np.real(gS_[eS]), 2*np.real(gS_[innS]), -2*np.imag(gS_[innS])),
+                axis=0, dtype=float
+            )
+            In = scipy.linalg.qr(tmpS, pivoting=True)[0]
+            In = In[:, rank:]
+
+            # Compute weights to find best rational approximation.
+            L = L @ In
+
         # Compute weights to find best rational approximation.
         eigval, w = scipy.linalg.svd(
             L,
             overwrite_a=True,
             full_matrices=False)[1:]
         logger.debug(f'Lowest eigenvalue: {eigval[-1]}')
-        w = w[-1]
+
+        if (self.d) or (M <= rank):
+            w = w[-1]
+        else:
+            w = In @ w[-1]
+
         w_ = np.zeros_like(S_, dtype=complex)
         w_[innS] = w[len(eS):len(S_)] + 1j*w[len(S_):]
         w_[eS] = w[:len(eS)]
@@ -587,11 +604,11 @@ class SuperResolution(BaseEstimator):
     def _get_amps(self, y, parity):
         N = y.shape[0]
         ns = 2*(N-1)+parity
-        x = np.fft.irfft(y, n=ns, axis=0)[1:]
+        x = np.fft.irfft(y, n=ns, axis=0)
 
         # Construct Cauchy matrix.
-        Vr = self.poles_.real[np.newaxis, :]**(np.arange(1, ns)[:, np.newaxis])
-        Vi = self.poles_.cx[np.newaxis, :]**(np.arange(1, ns)[:, np.newaxis])
+        Vr = self.poles_.real[np.newaxis, :]**(np.arange(ns)[:, np.newaxis])
+        Vi = self.poles_.cx[np.newaxis, :]**(np.arange(ns)[:, np.newaxis])
         V = np.concatenate(
             (Vr, 2*np.real(Vi), -2*np.imag(Vi)),
             axis=1, dtype=float)
