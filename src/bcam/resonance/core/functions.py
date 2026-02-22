@@ -20,8 +20,8 @@ class Rational:
         if a.shape[-1] != len(poles):
             msg = 'The last dimension of a should match the length of poles.'
             raise ValueError(msg)
-        
-        if (d is not None) and (d.shape != a.shape[:-1]):
+
+        if (self.d is not None) and (self.d.shape != a.shape[:-1]):
             msg = 'The shape of d should match the shape of a without the last dimension.'
             raise ValueError(msg)
 

@@ -21,14 +21,16 @@ logger = logging.getLogger(__name__)
 
 # Define helpers for rational fitting.
 
-def _get_residues(y, parity, poles, cond=None, lapack_driver=None):
-    N = y.shape[0]
+def _get_residues(
+        y, parity, poles, d:bool=False, cond=None, lapack_driver=None):
+    N, rank = y.shape
     ns = 2*(N-1) + parity
 
     u = np.exp(-2j*np.pi/ns)
     # Construct Cauchy matrix.
     Cr = 1/(u**(-np.arange(N)[:, np.newaxis]) - poles.real[np.newaxis, :])
-    Cr = np.concatenate((Cr, np.ones(shape=(N, 1))), axis=1)
+    if d:
+        Cr = np.concatenate((Cr, np.ones(shape=(N, 1))), axis=1)
     Ci1 = 1/(u**(-np.arange(N)[:, np.newaxis]) - poles.cx[np.newaxis, :])
     Ci2 = 1/(u**(-np.arange(N)[:, np.newaxis]) - np.conj(poles.cx)[np.newaxis, :])
     C = np.concatenate(
@@ -56,8 +58,12 @@ def _get_residues(y, parity, poles, cond=None, lapack_driver=None):
         C, y, overwrite_a=True, overwrite_b=True,
         cond=cond, lapack_driver=lapack_driver)[0]
     lr, lc = len(poles.real), len(poles.cx)
-    d = r[lr]
-    r = HCoeffs(real=r[:lr], cx=r[lr+1:lr+1+lc] + 1j*r[lr+1+lc:])
+    if d:
+        d = r[lr]
+        r = HCoeffs(real=r[:lr], cx=r[lr+1:lr+1+lc] + 1j*r[lr+1+lc:])
+    else:
+        d = np.zeros(rank)
+        r = HCoeffs(real=r[:lr], cx=r[lr:lr+lc] + 1j*r[lr+lc:lr+2*lc])
 
     return r, d
 
@@ -91,14 +97,14 @@ class AAA(BaseEstimator):
             order:int=None,
             compute_r:bool=True,
             prune_tol:float=0.,
-            seeds=None,
+            d:bool=False,
             lapack_driver:str=None,
             cond:float=None
         ):
         self.order = order
         self.compute_r = compute_r
         self.prune_tol = prune_tol
-        self.seeds = seeds
+        self.d = d
         self.lapack_driver = lapack_driver
         self.cond = cond
 
@@ -296,9 +302,6 @@ class AAA(BaseEstimator):
             msg = f'The order exceeds the maximum recommended order {max_order}.'
             logger.warning(msg, stacklevel=2)
 
-        if self.seeds is not None:
-            self.indices_ = np.array(self.seeds, dtype=np.int64)
-
         # If there are already indices from a previous fit, we reuse them.
         if hasattr(self, 'indices_'):
             indices = self.indices_
@@ -328,12 +331,13 @@ class AAA(BaseEstimator):
 
         if self.prune_tol > 0.:
             self.r_, self.d_ = _get_residues(
-                y, parity, poles, cond=self.cond, lapack_driver=self.lapack_driver)
+                y, parity, poles, self.d,
+                cond=self.cond, lapack_driver=self.lapack_driver)
             self.poles_ = _pole_pruning(self.poles_, self.r_, self.prune_tol)
 
         if self.compute_r:
             self.r_, self.d_ = _get_residues(
-                y, parity, self.poles_,
+                y, parity, self.poles_, self.d,
                 cond=self.cond, lapack_driver=self.lapack_driver)
             self._predict = Rational(
                 self.poles_.full(), self.r_.full().T, self.d_)
@@ -360,6 +364,7 @@ class VF(BaseEstimator):
         poles:np.typing.ArrayLike=None,
         niter:int=1,
         compute_r:bool=True,
+        d:bool=False,
         prune_tol:float=0.,
         cond:float=None,
         lapack_driver:str=None
@@ -368,6 +373,7 @@ class VF(BaseEstimator):
         self.poles = poles
         self.niter = niter
         self.compute_r = compute_r
+        self.d = d
         self.prune_tol = prune_tol
         self.cond = cond
         self.lapack_driver = lapack_driver
@@ -382,7 +388,7 @@ class VF(BaseEstimator):
         Cr = np.concatenate((Cr, np.ones(shape=(N, 1))), axis=1)
         C1 = 1/(u**np.arange(N)[:, np.newaxis] - poles.cx[np.newaxis, :])
         C2 = 1/(u**np.arange(N)[:, np.newaxis] - np.conj(poles.cx)[np.newaxis, :])
-        
+
         # Add constraint that rational function is symmetric.
         C = np.concatenate(
             (Cr, C1 + C2, 1j*(C1 - C2)),
@@ -410,6 +416,11 @@ class VF(BaseEstimator):
 
         # Construct right-most columns of system matrix. Shape = (ns, n_poles, rank).
         R = -y[:, np.newaxis, :] * (C@In)[..., np.newaxis]
+
+        if not self.d:
+            n_real = len(poles.real)
+            idxs = list(range(n_real)) + list(range(n_real+1, C.shape[1]))
+            C = C[:, np.array(idxs)]
 
         # Separate real and imaginary parts.
         C = np.concatenate(
@@ -517,12 +528,13 @@ class VF(BaseEstimator):
 
         if self.prune_tol > 0.:
             self.r_, self.d_ = _get_residues(
-                y, parity, poles, cond=self.cond, lapack_driver=self.lapack_driver)
+                y, parity, poles, self.d,
+                cond=self.cond, lapack_driver=self.lapack_driver)
             self.poles_ = _pole_pruning(self.poles_, self.r_, self.prune_tol)
 
         if self.compute_r:
             self.r_, self.d_ = _get_residues(
-                y, parity, self.poles_,
+                y, parity, self.poles_, self.d,
                 cond=self.cond, lapack_driver=self.lapack_driver)
             self._predict = Rational(
                 self.poles_.full(), self.r_.full().T, self.d_)
@@ -615,7 +627,8 @@ class SuperResolution(BaseEstimator):
                 msg = f'Unknown rational fitting method {method}.'
                 raise ValueError(msg)
         self._rational_fitter.set_params(
-            order=self.order, compute_r=False, prune_tol=0.)
+            order=self.order, compute_r=False,
+            prune_tol=0., d=False)
 
         if self.damping > 0.:
             x = np.fft.irfft(y, n=ns, axis=0)
