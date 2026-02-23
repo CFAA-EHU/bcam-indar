@@ -109,12 +109,14 @@ def _metric_amps(mech_poles:Poles, res_poles:Poles, fs, ns, response='a'):
 
     # Model roots block.
     def _mult(x, y):
-        exp_x, exp_y = np.log(x), np.log(y)
+        exp_x, exp_y = np.log(x)*fs, np.log(y)*fs
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
         r *= (fs**2)*(x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
-        if response == 'a':
-            r *= (fs**2)*exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
+        if response == 'd':
+            r *= 1/(exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
+        elif response == 'a':
+            r *= exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
         return r
 
     m1 = _mult(mech_poles.cx, np.conj(mech_poles.cx))
@@ -130,12 +132,14 @@ def _metric_amps(mech_poles:Poles, res_poles:Poles, fs, ns, response='a'):
 
     # Block (exps, roots).
     def _mult(x, y):
-        exp_x = np.log(x)
+        exp_x = np.log(x)*fs
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
         r *= fs*(x[np.newaxis, :]-1)
-        if response == 'a':
-            r *= fs*exp_x[np.newaxis, :]
+        if response == 'd':
+            r *= 1/(exp_x[np.newaxis, :])
+        elif response == 'a':
+            r *= exp_x[np.newaxis, :]
         return r
 
     m1 = _mult(mech_poles.cx, res_poles.cx)
@@ -287,7 +291,9 @@ class Amplitudes(BaseEstimator):
         # Resonances.
         def prod(t):
             ft = fs*(self.mech_poles.cx-1)
-            if self.response == 'a':
+            if self.response == 'd':
+                ft *= 1/(np.log(self.mech_poles.cx)*fs)
+            elif self.response == 'a':
                 ft *= np.log(self.mech_poles.cx)*fs
             t = t.reshape(1, -1)
             r_ = (self.mech_poles.cx[:, np.newaxis]**t)*(1-t/ns)
@@ -938,17 +944,19 @@ def _metric_amps_modes(poles, fs, ns, response='a'):
     '''
     dof = len(poles)
 
-    if response not in ['a', 'v']:
+    if response not in ['a', 'v', 'd']:
         raise ValueError(f'Unknown response type: {response}')
 
     # Model poles block.
     def _mult(x, y):
-        exp_x, exp_y = np.log(x), np.log(y)
+        exp_x, exp_y = np.log(x)*fs, np.log(y)*fs
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
         r *= (fs**2)*(x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
-        if response == 'a':
-            r *= (fs**2)*exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
+        if response == 'd':
+            r *= 1/(exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
+        elif response == 'a':
+            r *= exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
         return r
 
     m1 = _mult(poles, np.conj(poles))
