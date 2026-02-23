@@ -601,10 +601,8 @@ class SuperResolution(BaseEstimator):
     def exps_(self):
         return np.emath.log(self.poles_.full())*self.fs
 
-    def _get_amps(self, y, parity):
-        N = y.shape[0]
-        ns = 2*(N-1)+parity
-        x = np.fft.irfft(y, n=ns, axis=0)
+    def _get_amps(self, y):
+        ns = y.shape[0]
 
         # Construct Cauchy matrix.
         Vr = self.poles_.real[np.newaxis, :]**(np.arange(ns)[:, np.newaxis])
@@ -615,23 +613,16 @@ class SuperResolution(BaseEstimator):
 
         # Solve for amplitudes.
         a = scipy.linalg.lstsq(
-            V, x, overwrite_a=True, overwrite_b=True)[0]
+            V, y, overwrite_a=True, overwrite_b=True)[0]
         lr, lc = len(self.poles_.real), len(self.poles_.cx)
         amps = HCoeffs(real=a[:lr], cx=a[lr:lr+lc] + 1j*a[lr+lc:lr+2*lc])
 
         return amps
 
-    def fit(self, y, parity:bool=None):
+    def fit(self, y):
         y = np.asarray(y)
-        N = y.shape[0]
-
-        # Determine parity if not given.
-        if parity is None:
-            eps = np.finfo(y.dtype).eps
-            tiny = np.imag(y[-1, :])
-            parity = int(np.max(np.abs(tiny)) > 100*eps)
-        parity = int(parity)
-        ns = 2*(N-1)+parity
+        ns = y.shape[0]
+        N = ns//2+1
 
         if not hasattr(self, '_rational_fitter'):
             method = self.rational_fitter.get('method')
@@ -648,15 +639,12 @@ class SuperResolution(BaseEstimator):
             prune_tol=0., d=False)
 
         if self.damping > 0.:
-            x = np.fft.irfft(y, n=ns, axis=0)
-            x *= np.pow(self.damping, np.arange(ns)/(ns-1))[:, np.newaxis]
-            y = np.fft.rfft(x, axis=0)
-            del x
+            y *= np.pow(self.damping, np.arange(ns)/(ns-1))[:, np.newaxis]
 
         ωN = np.exp(-2j*np.pi/ns)
         self._rational_fitter.fit(
-            y*(ωN**np.arange(N))[:, np.newaxis],
-            parity=parity)
+            np.fft.rfft(y, axis=0)*(ωN**np.arange(N))[:, np.newaxis],
+            parity=ns%2)
 
         self.poles_ = self._rational_fitter.poles_
         if self.damping > 0.:
@@ -670,13 +658,11 @@ class SuperResolution(BaseEstimator):
             setattr(self.poles_, part, p_[idxs])
 
         if self.prune_tol > 0.:
-            self.amps_= self._get_amps(
-                y, parity)
+            self.amps_= self._get_amps(y)
             self.poles_ = _pole_pruning(self.poles_, self.amps_, self.prune_tol)
 
         if self.compute_amps:
-            self.amps_ = self._get_amps(
-                y, parity)
+            self.amps_ = self._get_amps(y)
             self._exp_sum = ExpSum(
                 np.emath.log(self.poles_.full()), self.amps_.full().T)
         else:
@@ -894,9 +880,8 @@ class StablePoles:
 
         return clusters
 
-    def fit(self, y, parity:bool=None):
-        N, rank = y.shape
-        ns = 2*(N-1) + parity
+    def fit(self, y):
+        ns, rank = y.shape
         self._ns = ns
 
         # Validate orders.
@@ -910,7 +895,7 @@ class StablePoles:
         amps_set, poles_set = {}, {}
         for order in range(min_order, max_order+1, 2):
             self.model.set_params(order=order)
-            self.model.fit(y, parity)
+            self.model.fit(y)
             n_poles = self.model.n_poles_
 
             amps_ = np.concatenate(

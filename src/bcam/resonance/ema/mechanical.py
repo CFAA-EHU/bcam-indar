@@ -1494,6 +1494,10 @@ def system_to_modal(M, C, K):
     eigvals, eigvecs = scipy.linalg.eig(
         a, b,
         overwrite_a=True, overwrite_b=True)
+
+    if np.any(np.abs(np.imag(eigvals)) < 1e-8):
+        msg = 'Overdamping detected. Real eigenvalues found in the spectrum.'
+        logger.warning(msg)
     Z = eigvals[::2]
     mode_shapes = eigvecs[:N, ::2]
     
