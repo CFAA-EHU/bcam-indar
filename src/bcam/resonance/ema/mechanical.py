@@ -89,7 +89,7 @@ def trig_ifft(x):
     if N % 2 == 0:
         c[-1] = 1
     x_inv = x[..., :N//2+1].astype(np.complex128)/np.sqrt(c)
-    x_inv[..., 1:(N-1)//2+1] = x_inv[..., 1:(N-1)//2+1] - 1j*x[..., N//2 + 1:]/np.sqrt(2)
+    x_inv[..., 1:(N-1)//2+1] = x_inv[..., 1:(N-1)//2+1] - 1j*x[..., N//2+1:]/np.sqrt(2)
     x_inv = np.fft.irfft(x_inv, N, axis=-1, norm='ortho')
     return x_inv
 
@@ -242,6 +242,50 @@ def reshape_projection(x):
 
 
 class Amplitudes(BaseEstimator):
+
+    def __init__(
+        self,
+        *,
+        mech_poles=(),
+        res_poles=(),
+        fs:float=1.,
+        response:str='a'
+    ):
+        self.mech_poles = mech_poles
+        self.res_poles = res_poles
+        self.fs = fs
+        self.response = response
+
+    def fit(self, y):
+        n_out, n_in, ns = y.shape
+        dof = len(self.mech_poles)
+        roots = np.log(self.mech_poles)*self.fs
+        v = self.fs * (self.mech_poles - 1)
+        if self.response == 'd':
+            v /= roots
+        elif self.response == 'a':
+            v *= roots
+
+        V = (self.mech_poles[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
+        V *= v[np.newaxis, :]
+        V *= np.sqrt(1 - np.arange(ns)[:, np.newaxis]/ns)
+        V = np.concatenate(
+            (np.imag(V), trig_fft(np.real(V))[:, 1:]), axis=1)
+
+        y *= np.sqrt(1 - np.arange(ns)[np.newaxis, np.newaxis, :]/ns)
+
+        r = scipy.linalg.lstsq(
+            V, reshape_projection(y).T,
+            overwrite_a=True, overwrite_b=True)[0].T
+        r = reshape_injection(r, n_out, n_in)
+        imag_r = np.pad(r[..., dof:], pad_width=((0, 0), (0, 0), (1, 0)))
+        r = r[..., :dof] + 1j*trig_ifft(imag_r).astype(np.complex128)
+        self.tensor_modes_ = r
+
+        return self
+
+
+class _Amplitudes(BaseEstimator):
 
     def __init__(
         self,
