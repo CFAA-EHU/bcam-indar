@@ -19,6 +19,32 @@ logger = logging.getLogger(__name__)
 # Rational Approximation
 # ========================
 
+def pairing(A, B, ns:int, delta:float=None):
+
+    delta = 0.8 if delta is None else delta
+
+    # Compute distance matrix.
+    if len(A) == 0 or len(B) == 0:
+        return {}
+    Pa, Pb = np.meshgrid(A, B, indexing='ij')
+    D = dist(Pa, Pb, ns)
+    del Pa, Pb
+
+    closests = {}
+    while np.min(D) < np.inf:
+        # Get index of minimum distance without flattening.
+        idx = np.unravel_index(np.argmin(D), D.shape)
+        if D[idx] < dist(0., delta, ns):
+            p_ = B[idx[1]]
+            closests[idx[0]] = p_
+
+            D[idx[0], :] = np.inf
+            D[:, idx[1]] = np.inf
+        else:
+            D[idx[0], :] = np.inf
+
+    return closests
+
 # Define helpers for rational fitting.
 
 def _get_residues(
@@ -566,7 +592,7 @@ class VF(BaseEstimator):
             msg = 'Cannot compute rational function values without residues. \
                 Set compute_r=True when initializing the estimator.'
             logger.warning(msg)
-        
+
         return self._predict(X).T
 
 
