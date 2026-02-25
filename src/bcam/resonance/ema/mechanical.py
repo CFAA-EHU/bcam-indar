@@ -257,30 +257,55 @@ class Amplitudes(BaseEstimator):
         self.response = response
 
     def fit(self, y):
+        y = np.asarray(y, copy=True)
+        mech_poles = np.asarray(self.mech_poles)
+        res_poles = Poles(real=self.res_poles[0], cx=self.res_poles[1]) \
+            if len(self.res_poles) > 0 else Poles()
+
         n_out, n_in, ns = y.shape
         dof = len(self.mech_poles)
-        roots = np.log(self.mech_poles)*self.fs
-        v = self.fs * (self.mech_poles - 1)
-        if self.response == 'd':
-            v /= roots
-        elif self.response == 'a':
-            v *= roots
+        n_r, n_c = len(res_poles.real), len(res_poles.cx)
+        # roots = np.log(self.mech_poles)*self.fs
+        # v = self.fs * (self.mech_poles - 1)
+        # if self.response == 'd':
+        #     v /= roots
+        # elif self.response == 'a':
+        #     v *= roots
 
-        V = (self.mech_poles[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
-        V *= v[np.newaxis, :]
-        V *= np.sqrt(1 - np.arange(ns)[:, np.newaxis]/ns)
+        Vr = (res_poles.real[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
+        Vcx = (res_poles.cx[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
         V = np.concatenate(
-            (np.imag(V), trig_fft(np.real(V))[:, 1:]), axis=1)
+            (Vr, np.real(Vcx), -np.imag(Vcx)), axis=1)
+        V *= np.sqrt(1 - np.arange(ns)[:, np.newaxis]/ns)
+        del Vr, Vcx
 
-        y *= np.sqrt(1 - np.arange(ns)[np.newaxis, np.newaxis, :]/ns)
+        # Vm = (mech_poles[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
+        # Vm *= v[np.newaxis, :]
+        # Vm *= np.sqrt(1 - np.arange(ns)[:, np.newaxis]/ns)
+        # Vm = np.concatenate(
+        #     (np.imag(Vm), trig_fft(np.real(Vm))[:, 1:]), axis=1)
+
+        y = y.reshape(-1, ns)
+        y *= np.sqrt(1 - np.arange(ns)[np.newaxis, :]/ns)
 
         r = scipy.linalg.lstsq(
-            V, reshape_projection(y).T,
+            V, y.T,
             overwrite_a=True, overwrite_b=True)[0].T
-        r = reshape_injection(r, n_out, n_in)
-        imag_r = np.pad(r[..., dof:], pad_width=((0, 0), (0, 0), (1, 0)))
-        r = r[..., :dof] + 1j*trig_ifft(imag_r).astype(np.complex128)
-        self.tensor_modes_ = r
+        r = r.reshape(n_out, n_in, -1)
+
+        self.amps_ = HCoeffs(
+            real=r[..., :n_r],
+            cx=r[..., n_r:n_r+n_c] + 1j*r[..., n_r+n_c:])
+
+        # y = reshape_projection(y)
+        # y *= np.sqrt(1 - np.arange(ns)[np.newaxis, :]/ns)
+        # r = scipy.linalg.lstsq(
+        #     Vm, y.T,
+        #     overwrite_a=True, overwrite_b=True)[0].T
+        # r = reshape_injection(r, n_out, n_in)
+        # imag_r = np.pad(r[..., dof:], pad_width=((0, 0), (0, 0), (1, 0)))
+        # r = r[..., :dof] + 1j*trig_ifft(imag_r).astype(np.complex128)
+        # self.tensor_modes_ = r
 
         return self
 

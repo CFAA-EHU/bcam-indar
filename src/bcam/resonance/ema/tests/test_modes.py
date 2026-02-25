@@ -331,10 +331,10 @@ class TestAmplitudes:
     def test_amps(self):
         rng = np.random.default_rng()
         ns, fs = 200, 100
-        n_out, n_in = 1, 1
+        n_out, n_in = 3, 2
         _amps, _freqs = [], []
 
-        dof = 3
+        dof = 0
         if dof > 0:
             modal = mechanical.randomSystem(
                 masses=rng.uniform(0.1, 0.2, dof),
@@ -351,7 +351,7 @@ class TestAmplitudes:
         _amps.append(m_amps)
         _freqs.append(m_freqs)
 
-        n_c, n_r = 0, 0
+        n_c, n_r = 3, 2
         c_freqs = -rng.uniform(0.1, 1, n_c) + 2j*np.pi*rng.uniform(1, 50, n_c)
         c_amps = rng.normal(scale=1., size=(n_out, n_in, n_c)).astype(np.complex128)
         c_amps += 1j * rng.normal(scale=1e-1, size=(n_out, n_in, n_c))
@@ -366,14 +366,14 @@ class TestAmplitudes:
         K = self.kernel(ns, fs, _amps, _freqs)
 
         model = mechanical.Amplitudes(
-            mech_poles=np.exp(m_freqs/fs),
-            # res_poles=(np.exp(r_freqs/fs), np.exp(c_freqs/fs)),
+            # mech_poles=np.exp(m_freqs/fs),
+            res_poles=(np.exp(r_freqs/fs), np.exp(c_freqs/fs)),
             fs=fs, response='a')
         model.fit(K)
 
-        mech_amps_fit = model.tensor_modes_
-        # amps_fit = model.amps_
+        # mech_amps_fit = model.tensor_modes_
+        amps_fit = model.amps_
 
-        assert np.allclose(mech_amps_fit, m_amps, atol=0.)
-        # assert np.allclose(amps_fit.cx, c_amps, atol=0.)
-        # assert np.allclose(amps_fit.real, r_amps, atol=0.)
+        # assert np.allclose(mech_amps_fit, m_amps, atol=0.)
+        assert np.allclose(amps_fit.cx, c_amps, atol=0.)
+        assert np.allclose(amps_fit.real, r_amps, atol=0.)
