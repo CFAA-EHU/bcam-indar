@@ -300,7 +300,7 @@ class TestAmplitudes:
         # Resonant part. Discretized kernel.
         dof = len(freqs[0])
         if dof != 0:
-            K1 = 2*fs*np.exp(freqs[0]/(2*fs))*freqs[0]*np.sinh(freqs[0]/(2*fs))
+            K1 = fs*freqs[0]*(np.exp(freqs[0]/fs) - 1)
             K1 = a[0] * K1.reshape(1, 1, dof)
             K1 = np.expand_dims(K1, axis=2)
             K1 = K1 * np.exp(freqs[0][np.newaxis, :]*t[:, np.newaxis]).reshape(1, 1, ns, dof)
@@ -323,15 +323,15 @@ class TestAmplitudes:
 
         x = rng.normal(
             size=(n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof - 1))
-        ix = mechanical.reshape_injection(x, n_out=n_out, n_in=n_in)
-        pix = mechanical.reshape_projection(ix)
+        ix = mechanical.reshape_injection_sym(x, n_out=n_out, n_in=n_in)
+        pix = mechanical.reshape_projection_sym(ix)
 
         assert np.allclose(x, pix)
 
     def test_amps(self):
         rng = np.random.default_rng()
         ns, fs = 200, 100
-        n_out, n_in = 1, 1
+        n_out, n_in = 3, 2
         _amps, _freqs = [], []
 
         dof = 3
@@ -351,7 +351,7 @@ class TestAmplitudes:
         _amps.append(m_amps)
         _freqs.append(m_freqs)
 
-        n_c, n_r = 2, 2
+        n_c, n_r = 4, 2
         c_freqs = -rng.uniform(0.1, 1, n_c) + 2j*np.pi*rng.uniform(1, 50, n_c)
         c_amps = rng.normal(scale=1., size=(n_out, n_in, n_c)).astype(np.complex128)
         c_amps += 1j * rng.normal(scale=1e-1, size=(n_out, n_in, n_c))
@@ -368,7 +368,7 @@ class TestAmplitudes:
         model = mechanical.Amplitudes(
             mech_poles=np.exp(m_freqs/fs),
             res_poles=(np.exp(r_freqs/fs), np.exp(c_freqs/fs)),
-            fs=fs, response='a', penalty=0.)
+            fs=fs, response='a', solver='gelsd')
         model.fit(K)
 
         mech_amps_fit = model.tensor_modes_

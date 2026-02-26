@@ -89,7 +89,7 @@ def trig_ifft(x):
     if N % 2 == 0:
         c[-1] = 1
     x_inv = x[..., :N//2+1].astype(np.complex128)/np.sqrt(c)
-    x_inv[..., 1:(N-1)//2+1] = x_inv[..., 1:(N-1)//2+1] - 1j*x[..., N//2 + 1:]/np.sqrt(2)
+    x_inv[..., 1:(N-1)//2+1] = x_inv[..., 1:(N-1)//2+1] - 1j*x[..., N//2+1:]/np.sqrt(2)
     x_inv = np.fft.irfft(x_inv, N, axis=-1, norm='ortho')
     return x_inv
 
@@ -193,64 +193,16 @@ def _metric_amps(mech_poles:Poles, res_poles:Poles, fs, ns, response='a'):
          [m_r_fr, m_fr_f, m_fr_fr]]
     ))
 
-
-def reshape_injection(x, n_out:int, n_in:int):
-    '''
-    2darray (n_in*(n_in+1)//2 + (n_out-n_in)*n_in, dof) to 3darray (n_out, n_in, dof).
-
-    The returned slice [:n_in, :n_in] is symmetric.
-    '''
-    assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
-    assert x.ndim == 2, 'Expected a 2D-array.'
-    assert x.shape[0] == n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 'Unexpected array shape.'
-
-    L = x.shape[-1]
-    x_ = np.zeros((n_out, n_in, L), dtype=x.dtype)
-    x_[np.arange(n_in), np.arange(n_in)] = x[:n_in]
-    c = n_in
-    for i in range(1, n_in):
-        cn = c + n_in - i
-        x_[np.arange(n_in-i), i+np.arange(n_in-i)] = x[c:cn]/np.sqrt(2)
-        x_[i+np.arange(n_in-i), np.arange(n_in-i)] = x[c:cn]/np.sqrt(2)
-        c = cn
-    if n_out > n_in:
-        x_[n_in:, :] = x[c: c+(n_out-n_in)*n_in].reshape(n_out-n_in, n_in, -1)
-    return x_
-
-def reshape_projection(x):
-    '''
-    3darray (n_out, n_in, dof) to 2darray (flatten*, dof).
-
-    When the array is flattened, the symmetry of x[:n_in, :n_in] is taken into account.
-    '''
-    assert x.ndim == 3, 'Expected a 3D-array.'
-    n_out, n_in, L = x.shape
-    assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
-
-    x_ = np.zeros((n_in*(n_in+1)//2 + (n_out-n_in)*n_in, L), dtype=x.dtype)
-    x_[:n_in] = x[np.arange(n_in), np.arange(n_in)]
-    c = n_in
-    for i in range(1, n_in):
-        cn = c + n_in - i
-        x_[c:cn] = x[np.arange(n_in-i), i+np.arange(n_in-i)]
-        x_[c:cn] += x[i+np.arange(n_in-i), np.arange(n_in-i)]
-        x_[c:cn] /= np.sqrt(2)
-        c = cn
-    if n_out > n_in:
-        x_[c: c + (n_out - n_in)*n_in] = x[n_in:, :].reshape((n_out - n_in)*n_in, -1)
-    return x_
-
-
-class Amplitudes(BaseEstimator):
+class _AmplitudesNormal:
 
     def __init__(
         self,
         *,
-        mech_poles=(),
-        res_poles=(),
+        mech_poles=None,
+        res_poles=None,
         fs:float=1.,
         response:str='a',
-        penalty:float=0.,
+        penalty:float=0.
     ):
         self.mech_poles = mech_poles
         self.res_poles = res_poles
@@ -340,7 +292,7 @@ class Amplitudes(BaseEstimator):
         r1, r2, r3 = np.real(r1), np.real(r2), np.real(r3)
         if (n_c == 0) and (n_r == 0):
             # Project to space of 'symmetric' matrices.
-            return reshape_projection(r1).T
+            return reshape_projection_sym(r1).T
         elif dof == 0:
             r = np.concatenate([r2, r3], axis=-1)
             r = r.reshape(-1, 2*n_c+n_r)
@@ -389,7 +341,7 @@ class Amplitudes(BaseEstimator):
                 self._rhs(y),
                 assume_a='pos').T
 
-            r1 = reshape_injection(r[:, :dim_c], n_out, n_in)
+            r1 = reshape_injection_sym(r[:, :dim_c], n_out, n_in)
             r2, r3 = None, None
         elif dof == 0:
             r = scipy.linalg.solve(
@@ -477,21 +429,199 @@ class Amplitudes(BaseEstimator):
 
         return self
 
+
+def reshape_injection_sym(x, n_out:int, n_in:int):
+    '''
+    2darray (n_in*(n_in+1)//2 + (n_out-n_in)*n_in, dof) to 3darray (n_out, n_in, dof).
+
+    The returned slice [:n_in, :n_in] is symmetric.
+    '''
+    assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
+    assert x.ndim == 2, 'Expected a 2D-array.'
+    assert x.shape[0] == n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 'Unexpected array shape.'
+
+    L = x.shape[-1]
+    x_ = np.zeros((n_out, n_in, L), dtype=x.dtype)
+    x_[np.arange(n_in), np.arange(n_in)] = x[:n_in]
+    c = n_in
+    for i in range(1, n_in):
+        cn = c + n_in - i
+        x_[np.arange(n_in-i), i+np.arange(n_in-i)] = x[c:cn]/np.sqrt(2)
+        x_[i+np.arange(n_in-i), np.arange(n_in-i)] = x[c:cn]/np.sqrt(2)
+        c = cn
+    if n_out > n_in:
+        x_[n_in:, :] = x[c: c+(n_out-n_in)*n_in].reshape(n_out-n_in, n_in, -1)
+    return x_
+
+def reshape_projection_sym(x):
+    '''
+    3darray (n_out, n_in, dof) to 2darray (flatten*, dof).
+
+    When the array is flattened, the symmetry of x[:n_in, :n_in] is taken into account.
+    '''
+    assert x.ndim == 3, 'Expected a 3D-array.'
+    n_out, n_in, L = x.shape
+    assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
+
+    x_ = np.zeros((n_in*(n_in+1)//2 + (n_out-n_in)*n_in, L), dtype=x.dtype)
+    x_[:n_in] = x[np.arange(n_in), np.arange(n_in)]
+    c = n_in
+    for i in range(1, n_in):
+        cn = c + n_in - i
+        x_[c:cn] = x[np.arange(n_in-i), i+np.arange(n_in-i)]
+        x_[c:cn] += x[i+np.arange(n_in-i), np.arange(n_in-i)]
+        x_[c:cn] /= np.sqrt(2)
+        c = cn
+    if n_out > n_in:
+        x_[c: c + (n_out - n_in)*n_in] = x[n_in:, :].reshape((n_out - n_in)*n_in, -1)
+    return x_
+
+def reshape_projection_anti(x):
+    n_out, n_in, L = x.shape
+    assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
+    x_ = np.zeros((n_in*(n_in-1)//2, L), dtype=x.dtype)
+    c = 0
+    # Upper triangle as reference.
+    for i in range(1, n_in):
+        cn = c + n_in - i
+        x_[c:cn] = x[np.arange(n_in-i), i+np.arange(n_in-i)]
+        x_[c:cn] -= x[i+np.arange(n_in-i), np.arange(n_in-i)]
+        x_[c:cn] /= np.sqrt(2)
+    c = cn
+    return x_
+
+def reshape_injection_anti(x, n_out:int, n_in:int):
+    assert n_out >= n_in, 'n_out must be greater than or equal to n_in.'
+    assert x.ndim == 2, 'Expected a 2D-array.'
+    assert x.shape[0] == n_in*(n_in-1)//2, 'Unexpected array shape.'
+
+    L = x.shape[-1]
+    x_ = np.zeros((n_out, n_in, L), dtype=x.dtype)
+    c = 0
+    for i in range(1, n_in):
+        cn = c + n_in - i
+        x_[np.arange(n_in-i), i+np.arange(n_in-i)] = x[c:cn]/np.sqrt(2)
+        x_[i+np.arange(n_in-i), np.arange(n_in-i)] = -x[c:cn]/np.sqrt(2)
+        c = cn
+    return x_
+
+
+def _fit_amplitudes_stable(
+        y, mech_poles, res_poles, fs, response, cond, lapack_driver):
+
+    y = np.asarray(y, copy=True)
+    res_poles = Poles(real=res_poles[0], cx=res_poles[1])
+
+    n_out, n_in, ns = y.shape
+    dof = len(mech_poles)
+    n_r, n_c = len(res_poles.real), len(res_poles.cx)
+
+    Vr = (res_poles.real[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
+    Vcx = (res_poles.cx[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
+    V = np.concatenate(
+        (Vr, np.real(Vcx), -np.imag(Vcx)), axis=1)
+    V *= np.sqrt(1 - np.arange(ns)[:, np.newaxis]/ns)
+    del Vr, Vcx
+
+    roots = np.log(mech_poles)*fs
+    v = fs * (mech_poles - 1)
+    if response == 'd':
+        v /= roots
+    elif response == 'a':
+        v *= roots
+    Vm = (mech_poles[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
+    Vm *= v[np.newaxis, :]
+    Vm *= np.sqrt(1 - np.arange(ns)[:, np.newaxis]/ns)
+    Vm = np.concatenate(
+        (np.imag(Vm), trig_fft(np.real(Vm))[:, 1:]), axis=1)
+
+    y *= np.sqrt(1 - np.arange(ns)[np.newaxis, :]/ns)
+
+    # Symmetric part.
+    ys = reshape_projection_sym(y)
+    r = scipy.linalg.lstsq(
+        np.concatenate((V, Vm), axis=1), ys.T,
+        overwrite_a=True, overwrite_b=True,
+        cond=cond, lapack_driver=lapack_driver)[0].T
+    del ys
+    r = reshape_injection_sym(r, n_out, n_in)
+
+    # Divide result between mechanical and residual matrices.
+    r_r, r_m = r[..., :2*n_c+n_r], r[..., 2*n_c+n_r:]
+    imag_r = np.pad(r_m[..., dof:], pad_width=((0, 0), (0, 0), (1, 0)))
+    r_m = r_m[..., :dof] + 1j*trig_ifft(imag_r).astype(np.complex128)
+    tensor_modes_ = r_m
+
+    # Antisymmetric part of residue.
+    ya = reshape_projection_anti(y)
+    r = scipy.linalg.lstsq(
+        V, ya.T,
+        overwrite_a=True, overwrite_b=True,
+        cond=cond, lapack_driver=lapack_driver)[0].T
+    del ya
+    r = reshape_injection_anti(r, n_out, n_in)
+    r_r = r_r + r
+    amps_ = HCoeffs(
+        real=r_r[..., :n_r],
+        cx=r_r[..., n_r:n_r+n_c] + 1j*r_r[..., n_r+n_c:])
+
+    return tensor_modes_, amps_
+
+
+class Amplitudes(BaseEstimator):
+
+    def __init__(
+        self,
+        *,
+        mech_poles=None,
+        res_poles=None,
+        fs:float=1.,
+        response:str='a',
+        cond=None,
+        solver:str='gelsd'
+    ):
+        self.mech_poles = mech_poles
+        self.res_poles = res_poles
+        self.fs = fs
+        self.response = response
+        self.cond = cond
+        self.solver = solver
+
+    def fit(self, y):
+
+        mech_poles = np.array([], dtype=complex) if self.mech_poles is None \
+            else np.asarray(self.mech_poles)
+        if self.res_poles is None:
+            res_poles = (np.array([], dtype=float), np.array([], dtype=complex))
+        else:
+            res_poles = (np.asarray(self.res_poles[0]), np.asarray(self.res_poles[1]))
+
+        if self.solver == 'normal':
+            p = 0. if self.cond is None else self.cond
+            obj = _AmplitudesNormal(
+                mech_poles=mech_poles,
+                res_poles=res_poles,
+                fs=self.fs,
+                response=self.response,
+                penalty=p
+            ).fit(y)
+            tensor_modes, amps = obj.tensor_modes_, obj.amps_
+
+        elif self.solver in ['gelsd', 'gelss', 'gelsy']:
+            tensor_modes, amps = _fit_amplitudes_stable(
+                y, mech_poles, res_poles,
+                self.fs, self.response, self.cond, self.solver
+            )
+
+        else:
+            raise ValueError(f'Unknown solver: {self.solver}')
+        
+        self.tensor_modes_ = tensor_modes
+        self.amps_ = amps
+        return self
+
     def predict(self, X):
-        n_out, n_in = self.tensor_modes_.shape[:2]
-
-        X = np.atleast_1d(X)
-        ns = X.shape[0]
-        K = np.zeros((n_out, n_in, ns), dtype=float)
-
-        if len(self.mech_poles.cx) > 0:
-            K += self._kernel(X)
-
-        nt = len(self.res_poles.cx) + len(self.res_poles.real)
-        if nt > 0:
-            K += np.real(self._exp_sum(X))
-
-        return K
+        return self.mech_part(X) + self.residual(X)
 
     def mech_part(self, X):
         n_out, n_in = self.tensor_modes_.shape[:2]
