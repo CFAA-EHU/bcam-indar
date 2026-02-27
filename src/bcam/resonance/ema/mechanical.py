@@ -55,9 +55,8 @@ def _validate_dims(M, C, K, check_symmetry=True):
 def _sum_exp_weighted(z, ns:int):
     sl = np.abs(z-1)>1e-2
     z[sl] = (z[sl]*((z[sl]**ns)-ns-1)+ns)/((z[sl]-1)**2)
-    sl = ~sl
-    z[sl] = sum((ns-i)*(z[sl]**i) for i in range(ns))
-    return z/ns
+    z[~sl] = sum((ns-i)*(z[~sl]**i) for i in range(ns))
+    return z/ns**2
 
 def trig_fft(x):
     '''
@@ -328,8 +327,6 @@ class _AmplitudesNormal:
         n_out, n_in, ns = y.shape
 
         self.mech_poles = Poles(cx=self.mech_poles)
-        if len(self.res_poles) > 0:
-            self.res_poles = Poles(real=self.res_poles[0], cx=self.res_poles[1])
 
         dof = len(self.mech_poles.cx)
         dim_c = 2*dof-1 if dof > 0 else 0
@@ -414,19 +411,6 @@ class _AmplitudesNormal:
         if r3 is not None:
             self.amps_.real = r3
 
-        # Define functions for predictions
-        self._kernel = Kernel(
-            roots=np.log(self.mech_poles.cx)*self.fs,
-            amps=self.tensor_modes_,
-            response=self.response
-        )
-
-        amps_ = np.concatenate(
-            [self.amps_.real, self.amps_.cx, np.conj(self.amps_.cx)], axis=-1)
-        self._exp_sum = ExpSum(
-            np.emath.log(self.res_poles.full())*self.fs,
-            amps_)
-
         return self
 
 
@@ -510,7 +494,6 @@ def _fit_amplitudes_stable(
         y, mech_poles, res_poles, fs, response, cond, lapack_driver):
 
     y = np.asarray(y, copy=True)
-    res_poles = Poles(real=res_poles[0], cx=res_poles[1])
 
     n_out, n_in, ns = y.shape
     dof = len(mech_poles)
@@ -520,7 +503,7 @@ def _fit_amplitudes_stable(
     Vcx = (res_poles.cx[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
     V = np.concatenate(
         (Vr, np.real(Vcx), -np.imag(Vcx)), axis=1)
-    V *= np.sqrt(1 - np.arange(ns)[:, np.newaxis]/ns)
+    V *= np.sqrt((1 - np.arange(ns)[:, np.newaxis]/ns)/ns)
     del Vr, Vcx
 
     roots = np.log(mech_poles)*fs
@@ -531,11 +514,11 @@ def _fit_amplitudes_stable(
         v *= roots
     Vm = (mech_poles[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
     Vm *= v[np.newaxis, :]
-    Vm *= np.sqrt(1 - np.arange(ns)[:, np.newaxis]/ns)
+    Vm *= np.sqrt((1 - np.arange(ns)[:, np.newaxis]/ns)/ns)
     Vm = np.concatenate(
         (np.imag(Vm), trig_fft(np.real(Vm))[:, 1:]), axis=1)
 
-    y *= np.sqrt(1 - np.arange(ns)[np.newaxis, :]/ns)
+    y *= np.sqrt((1 - np.arange(ns)[np.newaxis, np.newaxis, :]/ns)/ns)
 
     # Symmetric part.
     ys = reshape_projection_sym(y)
@@ -568,6 +551,56 @@ def _fit_amplitudes_stable(
     return tensor_modes_, amps_
 
 
+class _Kernel_discrete:
+
+    def __init__(
+        self,
+        roots,
+        amps,
+        fs:float=1.,
+        response:str='a',
+    ):
+        self.roots = np.atleast_1d(roots)
+        self.amps = np.atleast_2d(amps)
+        self.fs = fs
+        self.response = response
+
+        if roots.ndim > 1:
+            msg = 'Expected a 1D-array for roots.'
+            raise ValueError(msg)
+
+        if amps.shape[-1] != len(roots):
+            msg = 'The last dimension of amps should match the length of roots.'
+            raise ValueError(msg)
+
+        self._factor = np.ones_like(self.roots)
+        self._factor *= (np.exp(self.roots/fs) - 1)*fs
+        if response == 'd':
+            self._factor /= self.roots
+        elif response == 'v':
+            pass
+        elif response == 'a':
+            self._factor *= self.roots
+        else:
+            msg = f'Unknown response type: {response}'
+            raise ValueError(msg)
+
+    def __call__(self, t):
+        t = np.atleast_1d(t)
+        if t.ndim > 1:
+            msg = f'Expected a 1D array for times, got an array of dimension {t.ndim}.'
+            raise ValueError(msg)
+
+        K = np.einsum(
+            '...j,tj->...t',
+            self.amps,
+            self._factor[np.newaxis, :]*np.exp(self.roots[np.newaxis, :]*t[:, np.newaxis]),
+            dtype=complex
+        )
+        K = np.imag(K)
+
+        return K
+
 class Amplitudes(BaseEstimator):
 
     def __init__(
@@ -589,18 +622,18 @@ class Amplitudes(BaseEstimator):
 
     def fit(self, y):
 
-        mech_poles = np.array([], dtype=complex) if self.mech_poles is None \
+        self.mech_poles = np.array([], dtype=complex) if self.mech_poles is None \
             else np.asarray(self.mech_poles)
+
         if self.res_poles is None:
-            res_poles = (np.array([], dtype=float), np.array([], dtype=complex))
-        else:
-            res_poles = (np.asarray(self.res_poles[0]), np.asarray(self.res_poles[1]))
+            self.res_poles = (np.array([], dtype=float), np.array([], dtype=complex))
+        self.res_poles = Poles(real=self.res_poles[0], cx=self.res_poles[1])
 
         if self.solver == 'normal':
             p = 0. if self.cond is None else self.cond
             obj = _AmplitudesNormal(
-                mech_poles=mech_poles,
-                res_poles=res_poles,
+                mech_poles=self.mech_poles,
+                res_poles=self.res_poles,
                 fs=self.fs,
                 response=self.response,
                 penalty=p
@@ -609,7 +642,7 @@ class Amplitudes(BaseEstimator):
 
         elif self.solver in ['gelsd', 'gelss', 'gelsy']:
             tensor_modes, amps = _fit_amplitudes_stable(
-                y, mech_poles, res_poles,
+                y, self.mech_poles, self.res_poles,
                 self.fs, self.response, self.cond, self.solver
             )
 
@@ -618,22 +651,40 @@ class Amplitudes(BaseEstimator):
         
         self.tensor_modes_ = tensor_modes
         self.amps_ = amps
+
+        # Define functions for predictions
+        self._kernel = Kernel(
+            roots=np.log(self.mech_poles)*self.fs,
+            amps=self.tensor_modes_,
+            response=self.response
+        )
+        self._kernel_d = _Kernel_discrete(
+            roots=np.log(self.mech_poles)*self.fs,
+            amps=self.tensor_modes_,
+            fs=self.fs,
+            response=self.response
+        )
+
+        amps_ = np.concatenate(
+            [self.amps_.real, self.amps_.cx/2, np.conj(self.amps_.cx)/2],
+            axis=-1)
+        self._exp_sum = ExpSum(
+            np.emath.log(self.res_poles.full())*self.fs,
+            amps_)
+
         return self
 
     def predict(self, X):
-        return self.mech_part(X) + self.residual(X)
-
-    def mech_part(self, X):
         n_out, n_in = self.tensor_modes_.shape[:2]
 
         X = np.atleast_1d(X)
         ns = X.shape[0]
         K = np.zeros((n_out, n_in, ns), dtype=float)
 
-        if len(self.mech_poles.cx) > 0:
-            K += self._kernel(X)
+        if len(self.mech_poles) > 0:
+            K += self._kernel_d(X)
 
-        return K
+        return K + self.residual(X)
 
     def residual(self, X):
         n_out, n_in = self.tensor_modes_.shape[:2]
@@ -647,6 +698,25 @@ class Amplitudes(BaseEstimator):
             K += np.real(self._exp_sum(X))
 
         return K
+
+    def irf_pred(self, X):
+        n_out, n_in = self.tensor_modes_.shape[:2]
+
+        X = np.atleast_1d(X)
+        ns = X.shape[0]
+        K = np.zeros((n_out, n_in, ns), dtype=float)
+
+        if len(self.mech_poles) > 0:
+            K += self._kernel(X)
+
+        return K
+
+    def score(self, X, y):
+        # y must have the same sampling rate.
+        ns = X.shape[0]
+        y_pred = self.predict(X)
+        r = (1-np.arange(ns)/ns)[np.newaxis, np.newaxis, :]
+        return -np.mean(r*(y - y_pred)**2)/np.mean(r*y**2)
 
 # =================================
 # Modal Parameters
