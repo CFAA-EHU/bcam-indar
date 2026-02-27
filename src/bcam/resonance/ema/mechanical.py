@@ -93,7 +93,9 @@ def trig_ifft(x):
     return x_inv
 
 
-def _metric_amps(mech_poles:Poles, res_poles:Poles, fs, ns, response='a'):
+def _metric_amps(
+        mech_poles:Poles, res_poles:Poles, ns, response='a',
+        assume_delta=False):
     '''
     Compute the metric for amplitude coefficients.
 
@@ -108,14 +110,25 @@ def _metric_amps(mech_poles:Poles, res_poles:Poles, fs, ns, response='a'):
 
     # Model roots block.
     def _mult(x, y):
-        exp_x, exp_y = np.log(x)*fs, np.log(y)*fs
+        exp_x, exp_y = np.log(x), np.log(y)
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
-        r *= (fs**2)*(x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
-        if response == 'd':
-            r *= 1/(exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
-        elif response == 'a':
-            r *= exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
+        if assume_delta:
+            if response == 'd':
+                pass
+            elif response == 'v':
+                r *= exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
+            elif response == 'a':
+                r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])**2
+        else:
+            r *= (x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
+            if response == 'd':
+                r *= 1/(exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
+            elif response == 'v':
+                pass
+            elif response == 'a':
+                r *= exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
+
         return r
 
     m1 = _mult(mech_poles.cx, np.conj(mech_poles.cx))
@@ -131,14 +144,24 @@ def _metric_amps(mech_poles:Poles, res_poles:Poles, fs, ns, response='a'):
 
     # Block (exps, roots).
     def _mult(x, y):
-        exp_x = np.log(x)*fs
+        exp_x = np.log(x)
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
-        r *= fs*(x[np.newaxis, :]-1)
-        if response == 'd':
-            r *= 1/(exp_x[np.newaxis, :])
-        elif response == 'a':
-            r *= exp_x[np.newaxis, :]
+        if assume_delta:
+            if response == 'd':
+                pass
+            elif response == 'v':
+                r *= exp_x[np.newaxis, :]
+            elif response == 'a':
+                r *= exp_x[np.newaxis, :]**2
+        else:
+            r *= x[np.newaxis, :]-1
+            if response == 'd':
+                r *= 1/(exp_x[np.newaxis, :])
+            elif response == 'v':
+                pass
+            elif response == 'a':
+                r *= exp_x[np.newaxis, :]
         return r
 
     m1 = _mult(mech_poles.cx, res_poles.cx)
@@ -201,13 +224,15 @@ class _AmplitudesNormal:
         res_poles=None,
         fs:float=1.,
         response:str='a',
-        penalty:float=0.
+        penalty:float=0.,
+        assume_delta:bool=False
     ):
         self.mech_poles = mech_poles
         self.res_poles = res_poles
         self.fs = fs
         self.response = response
         self.penalty = penalty
+        self.assume_delta = assume_delta
 
     def _matrix(self, ns):
         dof = len(self.mech_poles.cx)
@@ -215,7 +240,7 @@ class _AmplitudesNormal:
 
         m = _metric_amps(
             self.mech_poles, self.res_poles,
-            self.fs, ns, response=self.response)
+            ns, response=self.response, assume_delta=self.assume_delta)
 
         if ((n_c == 0) & (n_r == 0)) or (dof == 0):
             m += self.penalty * np.eye(m.shape[0])
@@ -241,11 +266,22 @@ class _AmplitudesNormal:
 
         # Resonances.
         def prod(t):
-            ft = fs*(self.mech_poles.cx-1)
-            if self.response == 'd':
-                ft *= 1/(np.log(self.mech_poles.cx)*fs)
-            elif self.response == 'a':
-                ft *= np.log(self.mech_poles.cx)*fs
+            ft = 1.
+            if self.assume_delta:
+                if self.response == 'd':
+                    pass
+                elif self.response == 'v':
+                    ft *= np.log(self.mech_poles.cx)
+                elif self.response == 'a':
+                    ft *= np.log(self.mech_poles.cx)**2
+            else:
+                ft *= self.mech_poles.cx-1
+                if self.response == 'd':
+                    ft *= 1/(np.log(self.mech_poles.cx))
+                elif self.response == 'v':
+                    pass
+                elif self.response == 'a':
+                    ft *= np.log(self.mech_poles.cx)
             t = t.reshape(1, -1)
             r_ = (self.mech_poles.cx[:, np.newaxis]**t)*(1-t/ns)
             r_ *= ft[:, np.newaxis]
@@ -491,7 +527,8 @@ def reshape_injection_anti(x, n_out:int, n_in:int):
 
 
 def _fit_amplitudes_stable(
-        y, mech_poles, res_poles, response, cond, lapack_driver):
+        y, mech_poles, res_poles, response,
+        cond, lapack_driver, assume_delta):
 
     y = np.asarray(y, copy=True)
 
@@ -508,10 +545,18 @@ def _fit_amplitudes_stable(
 
     roots = np.log(mech_poles)
     v = 1.
-    if response == 'v':
-        v *= roots
-    elif response == 'a':
-        v *= roots**2
+    if assume_delta:
+        if response == 'v':
+            v *= roots
+        elif response == 'a':
+            v *= roots**2
+    else:
+        v *= mech_poles - 1
+        if response == 'd':
+            v /= roots
+        elif response == 'a':
+            v *= roots
+
     Vm = (mech_poles[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
     Vm *= v[np.newaxis, :]
     Vm *= np.sqrt((1 - np.arange(ns)[:, np.newaxis]/ns)/ns)
@@ -611,7 +656,8 @@ class Amplitudes(BaseEstimator):
         fs:float=1.,
         response:str='a',
         cond=None,
-        solver:str='gelsd'
+        solver:str='gelsd',
+        assume_delta:bool=False
     ):
         self.mech_poles = mech_poles
         self.res_poles = res_poles
@@ -619,6 +665,7 @@ class Amplitudes(BaseEstimator):
         self.response = response
         self.cond = cond
         self.solver = solver
+        self.assume_delta = assume_delta
 
     def fit(self, y):
 
@@ -643,7 +690,8 @@ class Amplitudes(BaseEstimator):
         elif self.solver in ['gelsd', 'gelss', 'gelsy']:
             tensor_modes, amps = _fit_amplitudes_stable(
                 y, self.mech_poles, self.res_poles,
-                self.response, self.cond, self.solver
+                self.response, self.cond, self.solver,
+                self.assume_delta
             )
             ft = 1.
             if self.response == 'v':
@@ -664,12 +712,13 @@ class Amplitudes(BaseEstimator):
             amps=self.tensor_modes_,
             response=self.response
         )
-        self._kernel_d = _Kernel_discrete(
-            roots=np.log(self.mech_poles)*self.fs,
-            amps=self.tensor_modes_,
-            fs=self.fs,
-            response=self.response
-        )
+        if not self.assume_delta:
+            self._kernel_d = _Kernel_discrete(
+                roots=np.log(self.mech_poles)*self.fs,
+                amps=self.tensor_modes_,
+                fs=self.fs,
+                response=self.response
+            )
 
         amps_ = np.concatenate(
             [self.amps_.real, self.amps_.cx/2, np.conj(self.amps_.cx)/2],
@@ -681,6 +730,9 @@ class Amplitudes(BaseEstimator):
         return self
 
     def predict(self, X):
+        if self.assume_delta:
+            return self.irf_pred(X)
+
         n_out, n_in = self.tensor_modes_.shape[:2]
 
         X = np.atleast_1d(X)
@@ -1144,7 +1196,7 @@ class PartialModesMap:
         return hessp_fun
 
 
-def _metric_amps_modes(poles, ns, response='a'):
+def _metric_amps_modes(poles, ns, response='a', assume_delta=False):
     '''
     Compute the metric for amplitude coefficients.
     '''
@@ -1158,11 +1210,22 @@ def _metric_amps_modes(poles, ns, response='a'):
         exp_x, exp_y = np.log(x), np.log(y)
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
-        # r *= (x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
-        if response == 'v':
-            r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
-        elif response == 'a':
-            r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])**2
+        if assume_delta:
+            if response == 'd':
+                pass
+            elif response == 'v':
+                r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
+            elif response == 'a':
+                r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])**2
+        else:
+            r *= (x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
+            if response == 'd':
+                r *= 1/(exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
+            elif response == 'v':
+                pass
+            elif response == 'a':
+                r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
+
         return r
 
     m1 = _mult(poles, np.conj(poles))
@@ -1186,6 +1249,7 @@ class RealModes:
         ns:int,
         response:str='a',
         fs:float=1.,
+        assume_delta:bool=False
     ):
         assert poles.ndim == 1, 'Expected a 1D-array for frequencies.'
         assert amps.ndim == 3, 'Expected a 3D-array for amplitudes.'
@@ -1199,6 +1263,7 @@ class RealModes:
         self.fs = fs
         self.ns = ns
         self.response = response
+        self.assume_delta = assume_delta
 
         self._rescale = np.max(np.abs(amps))
         self.modes_fit_ = None
@@ -1209,7 +1274,8 @@ class RealModes:
 
     def _get_metric(self):
         m = _metric_amps_modes(
-            self.poles, self.ns, response=self.response)
+            self.poles, self.ns,
+            response=self.response, assume_delta=self.assume_delta)
         self._metric = m / np.max(m)
 
     def _fun(self, x):
@@ -1318,12 +1384,13 @@ class RealModes:
             amps=amps_fit,
             response=self.response
         )
-        self._kernel_d = _Kernel_discrete(
-            roots=np.log(self.poles)*self.fs,
-            amps=amps_fit,
-            fs=self.fs,
-            response=self.response
-        )
+        if not self.assume_delta:
+            self._kernel_d = _Kernel_discrete(
+                roots=np.log(self.poles)*self.fs,
+                amps=amps_fit,
+                fs=self.fs,
+                response=self.response
+            )
 
         return self
 
@@ -1333,7 +1400,10 @@ class RealModes:
             raise ValueError(msg)
 
         X = np.atleast_1d(X)
-        return self._kernel_d(X)
+        if self.assume_delta:
+            return self._irf(X)
+        else:
+            return self._kernel_d(X)
 
     def irf_pred(self, X):
         if self.modes_fit_ is None:
@@ -1444,6 +1514,7 @@ class ComplexModes:
         fs:int,
         ns:int,
         response:str='a',
+        assume_delta:bool=False
     ):
         self.poles = poles
         assert poles.ndim == 1, 'Expected 1D array for frequencies.'
@@ -1455,6 +1526,8 @@ class ComplexModes:
         self.fs = fs
         self.ns = ns
         self.response = response
+        self.assume_delta = assume_delta
+
         PartialModesMap.atol = 1e-10
         PartialModesMap.rtol = 1e-8
         roots = np.emath.log(poles)*fs
@@ -1476,7 +1549,8 @@ class ComplexModes:
 
     def _get_metric(self):
         m = _metric_amps_modes(
-            self.poles, self.ns, response=self.response)
+            self.poles, self.ns, self.response,
+            self.assume_delta)
         self._metric = m / np.max(m)
 
     def _fun(self, x):
@@ -1636,12 +1710,13 @@ class ComplexModes:
             amps=amps_fit,
             response=self.response
         )
-        self._kernel_d = _Kernel_discrete(
-            roots=np.log(self.poles)*self.fs,
-            amps=amps_fit,
-            fs=self.fs,
-            response=self.response
-        )
+        if not self.assume_delta:
+            self._kernel_d = _Kernel_discrete(
+                roots=np.log(self.poles)*self.fs,
+                amps=amps_fit,
+                fs=self.fs,
+                response=self.response
+            )
 
         return self
 
@@ -1651,7 +1726,10 @@ class ComplexModes:
             raise ValueError(msg)
 
         X = np.atleast_1d(X)
-        return self._kernel_d(X)
+        if self.assume_delta:
+            return self._irf(X)
+        else:
+            return self._kernel_d(X)
 
     def irf_pred(self, X):
         if self.modes_fit_ is None:
