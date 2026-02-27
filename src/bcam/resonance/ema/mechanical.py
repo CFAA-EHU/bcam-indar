@@ -507,11 +507,11 @@ def _fit_amplitudes_stable(
     del Vr, Vcx
 
     roots = np.log(mech_poles)
-    v = mech_poles - 1
-    if response == 'd':
-        v /= roots
-    elif response == 'a':
+    v = 1.
+    if response == 'v':
         v *= roots
+    elif response == 'a':
+        v *= roots**2
     Vm = (mech_poles[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
     Vm *= v[np.newaxis, :]
     Vm *= np.sqrt((1 - np.arange(ns)[:, np.newaxis]/ns)/ns)
@@ -1158,11 +1158,11 @@ def _metric_amps_modes(poles, ns, response='a'):
         exp_x, exp_y = np.log(x), np.log(y)
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
-        r *= (x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
-        if response == 'd':
-            r *= 1/(exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
+        # r *= (x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
+        if response == 'v':
+            r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
         elif response == 'a':
-            r *= exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
+            r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])**2
         return r
 
     m1 = _mult(poles, np.conj(poles))
