@@ -271,7 +271,7 @@ class TestModesFitting:
         modes = mechanical.ComplexModes(
             np.exp(freqs/fs), coords, amps_m,fs=fs, ns=ns, response='a')
         x0 = (modes_real, np.zeros_like(modes_real))
-        modes_fit = modes.fit(x0, options={'verbose': 2, 'gtol': 1.}).modes_fit_
+        modes_fit = modes.fit(x0, options={'verbose': 2, 'gtol': 1.e-9}).modes_fit_
         # The result is unique up to a sign flip in each mode.
         modes_fit *= np.sign(np.real(modes_m[0, :]/modes_fit[0, :]))[np.newaxis, :]
 

@@ -491,7 +491,7 @@ def reshape_injection_anti(x, n_out:int, n_in:int):
 
 
 def _fit_amplitudes_stable(
-        y, mech_poles, res_poles, fs, response, cond, lapack_driver):
+        y, mech_poles, res_poles, response, cond, lapack_driver):
 
     y = np.asarray(y, copy=True)
 
@@ -506,8 +506,8 @@ def _fit_amplitudes_stable(
     V *= np.sqrt((1 - np.arange(ns)[:, np.newaxis]/ns)/ns)
     del Vr, Vcx
 
-    roots = np.log(mech_poles)*fs
-    v = fs * (mech_poles - 1)
+    roots = np.log(mech_poles)
+    v = mech_poles - 1
     if response == 'd':
         v /= roots
     elif response == 'a':
@@ -643,8 +643,14 @@ class Amplitudes(BaseEstimator):
         elif self.solver in ['gelsd', 'gelss', 'gelsy']:
             tensor_modes, amps = _fit_amplitudes_stable(
                 y, self.mech_poles, self.res_poles,
-                self.fs, self.response, self.cond, self.solver
+                self.response, self.cond, self.solver
             )
+            ft = 1.
+            if self.response == 'v':
+                ft /= self.fs
+            elif self.response == 'a':
+                ft /= self.fs**2
+            tensor_modes *= ft
 
         else:
             raise ValueError(f'Unknown solver: {self.solver}')
@@ -1138,7 +1144,7 @@ class PartialModesMap:
         return hessp_fun
 
 
-def _metric_amps_modes(poles, fs, ns, response='a'):
+def _metric_amps_modes(poles, ns, response='a'):
     '''
     Compute the metric for amplitude coefficients.
     '''
@@ -1149,10 +1155,10 @@ def _metric_amps_modes(poles, fs, ns, response='a'):
 
     # Model poles block.
     def _mult(x, y):
-        exp_x, exp_y = np.log(x)*fs, np.log(y)*fs
+        exp_x, exp_y = np.log(x), np.log(y)
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
-        r *= (fs**2)*(x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
+        r *= (x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
         if response == 'd':
             r *= 1/(exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
         elif response == 'a':
@@ -1202,8 +1208,9 @@ class RealModes:
         self._get_metric()
 
     def _get_metric(self):
-        self._metric = _metric_amps_modes(
-            self.poles, self.fs, self.ns, response=self.response)
+        m = _metric_amps_modes(
+            self.poles, self.ns, response=self.response)
+        self._metric = m / np.max(m)
 
     def _fun(self, x):
         n_out, n_in, dof = self.amps.shape
@@ -1279,7 +1286,7 @@ class RealModes:
         n_out, n_in, dof = self.amps.shape
         options_ncg = {} if options_ncg is None else options_ncg
         if 'gtol' not in options_ncg.keys():
-            options_ncg['gtol'] = 1e-2
+            options_ncg['gtol'] = 1.e-4
 
         x0 = np.real(amps_to_modes(self.amps/self._rescale))
         idx = np.nonzero(x0[0] < 0)[0]
@@ -1306,9 +1313,15 @@ class RealModes:
 
         # Define functions for predictions
         amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
-        self._kernel = Kernel(
+        self._irf = Kernel(
             roots=np.log(self.poles)*self.fs,
             amps=amps_fit,
+            response=self.response
+        )
+        self._kernel_d = _Kernel_discrete(
+            roots=np.log(self.poles)*self.fs,
+            amps=amps_fit,
+            fs=self.fs,
             response=self.response
         )
 
@@ -1320,7 +1333,15 @@ class RealModes:
             raise ValueError(msg)
 
         X = np.atleast_1d(X)
-        return self._kernel(X)
+        return self._kernel_d(X)
+
+    def irf_pred(self, X):
+        if self.modes_fit_ is None:
+            msg = 'Call fit() before accessing modes_fit_.'
+            raise ValueError(msg)
+
+        X = np.atleast_1d(X)
+        return self._irf(X)
 
 
 
@@ -1454,8 +1475,9 @@ class ComplexModes:
         return np.sqrt(self._rescale) * self._modes_map(*self._raw_modes_fit)
 
     def _get_metric(self):
-        self._metric = _metric_amps_modes(
-            self.poles, self.fs, self.ns, response=self.response)
+        m = _metric_amps_modes(
+            self.poles, self.ns, response=self.response)
+        self._metric = m / np.max(m)
 
     def _fun(self, x):
         n_out, n_in, dof = self.amps.shape
@@ -1579,8 +1601,6 @@ class ComplexModes:
 
     def fit(self, x0, options:dict=None, maxiter:int=1e3):
         options = {} if options is None else options
-        if 'gtol' not in options.keys():
-            options['gtol'] = 1e-2
         if 'xtol' not in options.keys():
             options['xtol'] = 1e-5
 
@@ -1611,9 +1631,15 @@ class ComplexModes:
 
         # Define functions for predictions
         amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
-        self._kernel = Kernel(
+        self._irf = Kernel(
             roots=np.log(self.poles)*self.fs,
             amps=amps_fit,
+            response=self.response
+        )
+        self._kernel_d = _Kernel_discrete(
+            roots=np.log(self.poles)*self.fs,
+            amps=amps_fit,
+            fs=self.fs,
             response=self.response
         )
 
@@ -1625,7 +1651,15 @@ class ComplexModes:
             raise ValueError(msg)
 
         X = np.atleast_1d(X)
-        return self._kernel(X)
+        return self._kernel_d(X)
+
+    def irf_pred(self, X):
+        if self.modes_fit_ is None:
+            msg = 'Call fit() before accessing modes_fit_.'
+            raise ValueError(msg)
+
+        X = np.atleast_1d(X)
+        return self._irf(X)
 
 
 def modal_to_system(mode_shapes, Z):
