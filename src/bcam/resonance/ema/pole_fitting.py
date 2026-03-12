@@ -481,9 +481,19 @@ class VF(BaseEstimator):
             (np.real(y[ends]), np.sqrt(2)*np.real(y[1:last]), np.sqrt(2)*np.imag(y[1:last])),
             axis=0, dtype=float
         )
-        b = b.T.flatten().T
 
-        U, sigma = scipy.linalg.svd(C, full_matrices=False)[:2]
+        if (self.lapack_driver is None) or (self.lapack_driver in ['gelsd', 'gelss']):
+            U, sigma = scipy.linalg.svd(
+                C, full_matrices=False, overwrite_a=True)[:2]
+        elif self.lapack_driver == 'gelsy':
+            U, sigma = scipy.linalg.qr(
+                C, pivoting=True, overwrite_a=True, mode='economic')[:2]
+            sigma = np.diag(np.abs(sigma))
+        else:
+            msg = f'Unknown LAPACK driver. Expected one of "gelsd", "gelss", or "gelsy", got {self.lapack_driver} instead.'
+            raise ValueError(msg)
+        del C
+
         # Determine rank of R.
         if self.cond is not None:
             R_rank = np.sum(sigma > sigma[0]*self.cond)
@@ -493,24 +503,16 @@ class VF(BaseEstimator):
             R_rank = np.sum(sigma > 100*eps*sigma[0])
         U = U[:, :R_rank]
         S = R - U@(U.T@R)
+        b = b - U@(U.T@b)
+        del R, U, sigma
         S = S.reshape((ns, self.order, rank))
         S = S.transpose(1, 2, 0).reshape((-1, ns*rank)).T
-        del R, U, sigma
-
-        # # Solve LS for small Cauchy matrix.
-        # normals = scipy.linalg.lstsq(
-        #     C, R, cond=self.cond, lapack_driver=self.lapack_driver)[0]
-        # Rb = Rb - C@normals
-        # del C, normals
-        # Rb = Rb.reshape((ns, self.order+1, rank))
-        # R_tilde, b_tilde = Rb[:, :-1, :], Rb[:, -1, :]
-        # del Rb
-        # R_tilde = R_tilde.transpose(1, 2, 0).reshape((-1, ns*rank)).T
-        # b_tilde = b_tilde.T.reshape((1, -1)).T
 
         # Solve reduced LS problem.
+        b = b.T.flatten().T
         t = scipy.linalg.lstsq(
-            S, b, cond=self.cond, lapack_driver=self.lapack_driver)[0]
+            S, b, cond=self.cond, lapack_driver=self.lapack_driver,
+            overwrite_a=True, overwrite_b=True)[0]
         t = In @ t
 
         n_real = len(poles.real) + 1 # +1 for the constant term.

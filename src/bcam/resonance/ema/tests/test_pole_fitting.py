@@ -152,7 +152,8 @@ class Test_VF:
                 n_real_poles=0, n_complex_pairs=M, rank=1, rng=rng)
 
             # Fit the signal.
-            model = pole_fitting.VF(order=2*M, niter=5)
+            model = pole_fitting.VF(
+                order=2*M, niter=10, lapack_driver='gelsd')
             model.fit(*y)
 
             for part in ['real', 'cx']:
@@ -168,8 +169,8 @@ class Test_VF:
     def test_scalar_mixed(self):
         # Test only complex poles
         # ------------------------
-        parent_rng = np.random.default_rng(345354)
-        n_trials = 1
+        parent_rng = np.random.default_rng()
+        n_trials = 5
         children = parent_rng.spawn(n_trials)
         for rng in children:
             M = rng.integers(1, 5)
@@ -178,7 +179,8 @@ class Test_VF:
                 n_real_poles=L, n_complex_pairs=M, rank=1, rng=rng)
 
             # Fit the signal.
-            model = pole_fitting.VF(order=2*M+L, niter=5)
+            model = pole_fitting.VF(
+                order=2*M+L, niter=5, lapack_driver='gelsd')
             model.fit(*y)
 
             for part in ['real', 'cx']:
