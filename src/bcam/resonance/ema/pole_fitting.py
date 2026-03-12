@@ -102,9 +102,9 @@ def _pole_pruning(poles:Poles, r:HCoeffs, tol:float):
     return poles
 
 def _get_max_order(ns, rank):
-    # Counting complex paramaters in a complex time series
-    # and in a rational function, we have that:
-    max_order = rank*ns//(2*(rank+1))
+    # Counting complex paramaters in a real time series
+    # and in a symmetric rational function, we have that:
+    max_order = int(np.floor(rank*ns/(rank+1)))
 
     return max_order
 

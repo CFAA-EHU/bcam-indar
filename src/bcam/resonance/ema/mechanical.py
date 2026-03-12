@@ -731,7 +731,7 @@ class Amplitudes(BaseEstimator):
 
     def predict(self, X):
         if self.assume_delta:
-            return self.irf_pred(X)
+            return self.irf_pred(X) + self.residual(X)
 
         n_out, n_in = self.tensor_modes_.shape[:2]
 
