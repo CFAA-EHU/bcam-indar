@@ -474,6 +474,7 @@ class VF(BaseEstimator):
             (np.real(R[ends]), np.sqrt(2)*np.real(R[1:last]), np.sqrt(2)*np.imag(R[1:last])),
             axis=0, dtype=float
         )
+        R = R.reshape((ns, -1))
 
         # Data to approximate. Shape = (ns, rank).
         b = np.concatenate(
@@ -481,26 +482,38 @@ class VF(BaseEstimator):
             axis=0, dtype=float
         )
 
-        Rb = np.concatenate((R, b[:, np.newaxis, :]), axis=1)
-        Rb = Rb.reshape((ns, -1))
-        del R, b
+        if (self.lapack_driver is None) or (self.lapack_driver in ['gelsd', 'gelss']):
+            U, sigma = scipy.linalg.svd(
+                C, full_matrices=False, overwrite_a=True)[:2]
+        elif self.lapack_driver == 'gelsy':
+            U, sigma = scipy.linalg.qr(
+                C, pivoting=True, overwrite_a=True, mode='economic')[:2]
+            sigma = np.diag(np.abs(sigma))
+        else:
+            msg = f'Unknown LAPACK driver. Expected one of "gelsd", "gelss", or "gelsy", got {self.lapack_driver} instead.'
+            raise ValueError(msg)
+        del C
 
-        # Solve LS for small Cauchy matrix.
-        normals = scipy.linalg.lstsq(
-            C, Rb, cond=self.cond, lapack_driver=self.lapack_driver)[0]
-        Rb = Rb - C@normals
-        del C, normals
-        Rb = Rb.reshape((ns, self.order+1, rank))
-        R_tilde, b_tilde = Rb[:, :-1, :], Rb[:, -1, :]
-        del Rb
-        R_tilde = R_tilde.transpose(1, 2, 0).reshape((-1, ns*rank)).T
-        b_tilde = b_tilde.T.reshape((1, -1)).T
+        # Determine rank of R.
+        if self.cond is not None:
+            R_rank = np.sum(sigma > sigma[0]*self.cond)
+        else:
+            # Get machine's epsilon for the data type of R.
+            eps = np.finfo(R.dtype).eps
+            R_rank = np.sum(sigma > 100*eps*sigma[0])
+        U = U[:, :R_rank]
+        S = R - U@(U.T@R)
+        b = b - U@(U.T@b)
+        del R, U, sigma
+        S = S.reshape((ns, self.order, rank))
+        S = S.transpose(1, 2, 0).reshape((-1, ns*rank)).T
 
         # Solve reduced LS problem.
+        b = b.T.flatten().T
         t = scipy.linalg.lstsq(
-            R_tilde, b_tilde, cond=self.cond, lapack_driver=self.lapack_driver)[0]
+            S, b, cond=self.cond, lapack_driver=self.lapack_driver,
+            overwrite_a=True, overwrite_b=True)[0]
         t = In @ t
-        t = t[:, 0]
 
         n_real = len(poles.real) + 1 # +1 for the constant term.
         n_complex = len(poles.cx)
