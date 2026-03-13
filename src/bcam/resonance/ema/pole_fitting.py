@@ -784,9 +784,9 @@ def dist(x, y, ns:int):
     t2 = 2*((abs_x*abs_y) - np.real(_inner_prod(ns, x, y)))
 
     if floats:
-        return np.sqrt(t1 + t2)[0]
+        return np.sqrt(t1 + t2)[0]/ns
     else:
-        return np.sqrt(t1 + t2)
+        return np.sqrt(t1 + t2)/ns
 
 def _std_new(x, ns):
     x = np.asarray(x)
