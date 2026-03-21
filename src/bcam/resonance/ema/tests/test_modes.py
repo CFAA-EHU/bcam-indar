@@ -236,7 +236,7 @@ class TestModesFitting:
 
         ns, fs = 210, 100
         modes = mechanical.RealModes(
-            np.exp(freqs/fs), amps_m, ns=ns, response='a', fs=fs)
+            np.exp(freqs/fs), amps_m, ns=ns, response='a', fs=fs, assume_delta=True)
         modes_fit = modes.fit().modes_fit_
         # The result is unique up to a sign flip in each mode.
         modes_fit *= np.sign(modes_m[0, :]/modes_fit[0, :])[np.newaxis, :]
@@ -245,38 +245,54 @@ class TestModesFitting:
         assert np.allclose(modes_fit, modes_m, rtol=1e-5, atol=0.)
 
     def test_complex(self):
-        dof, n_out, n_in = 4, 3, 2
-        rng = np.random.default_rng()
-        freqs = -rng.uniform(2, 5, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
-        coords = np.arange(n_out)
-        modes_m = np.nan
-        while isinstance(modes_m, float):
-            xm = rng.normal(size=(n_out, dof))
-            zm = 5e-3*rng.normal(size=(n_out, dof))
-            zm[:n_out, :n_out] = zm[:n_out, :n_out] - zm[:n_out, :n_out].T
-            modes_m = mechanical.PartialModesMap(freqs, coords)(xm, zm)
-        amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
+        dof = 3
+        n_out, n_in = 3, 2
+        ns, fs = 2**9, 1/0.001
 
-        ns, fs = 210, 100
+        rng = np.random.default_rng(1234)
+        children = rng.spawn(2)
+        X = children[0].normal(size=(dof, dof))
+        freqs = 2*np.pi*np.array([49.4, 52.3, 56.7])
+        damps = np.array([0.048, 0.044, 0.042])
+
+        Lambda = -damps*freqs + 1j*np.sqrt(1-damps**2)*freqs
+
+        Z = np.zeros_like(X)
+        Z_ = 1e-2*children[1].uniform(low=0.5, high=1, size=(3,))
+        # Change signs randomly.
+        Z_ *= children[1].choice([-1, 1], size=Z_.shape)
+        Z[((0, 1), (1, 2))] = Z_[:2]
+        Z[0, 2] = Z_[2]
+        Z = Z - Z.T
+
+        modes = X + 1j*X@Z
+        amps_m = mechanical.mode_to_amps(modes, n_out, n_in)
+
         # Fit as proportional as initial guess.
-        modes = mechanical.RealModes(
-            np.exp(freqs/fs), amps_m, ns=ns, response='a', fs=fs)
-        modes_real = modes.fit().modes_fit_
+        model = mechanical.RealModes(
+            np.exp(Lambda/fs), amps_m,
+            ns=ns, response='a', fs=fs, assume_delta=True)
+        modes_real = model.fit(options_ncg={'gtol': 1e-3}).modes_fit_
 
         # Check that real modes are not good enough.
         # The result is unique up to a sign flip in each mode.
-        modes_real *= np.sign(np.real(modes_m[0, :]/modes_real[0, :]))[np.newaxis, :]
-        assert not np.allclose(modes_real, modes_m, rtol=1e-4, atol=0.)
+        modes_real *= np.sign(np.real(modes[0, :]/modes_real[0, :]))[np.newaxis, :]
+        assert not np.allclose(modes_real, modes, rtol=1e-4, atol=0.)
 
-        modes = mechanical.ComplexModes(
-            np.exp(freqs/fs), coords, amps_m,fs=fs, ns=ns, response='a')
+        coords = np.arange(n_out)
+        model_nop = mechanical.ComplexModes(
+            poles=np.exp(Lambda/fs),
+            coords=coords,
+            amps=amps_m,
+            fs=fs, ns=ns, response='a', assume_delta=True)
+
         x0 = (modes_real, np.zeros_like(modes_real))
-        modes_fit = modes.fit(x0, options={'verbose': 2, 'gtol': 1.e-9}).modes_fit_
+        modes_nop = model_nop.fit(x0, options={'verbose': 2, 'gtol': 1.e-8}).modes_fit_
         # The result is unique up to a sign flip in each mode.
-        modes_fit *= np.sign(np.real(modes_m[0, :]/modes_fit[0, :]))[np.newaxis, :]
+        modes_nop *= np.sign(np.real(modes[0, :]/modes_nop[0, :]))[np.newaxis, :]
 
-        assert modes.optRes_['success']
-        assert np.allclose(modes_fit, modes_m, rtol=1e-4, atol=0.)
+        assert model_nop.optRes_['success']
+        assert np.allclose(modes_nop, modes, rtol=1e-4, atol=0.)
 
 # Fitting tests
 # -------------

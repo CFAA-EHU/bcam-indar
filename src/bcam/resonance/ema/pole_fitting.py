@@ -778,15 +778,19 @@ def dist(x, y, ns:int):
     floats = isinstance(x, float) and isinstance(y, float)
     x = np.atleast_1d(x)
     y = np.atleast_1d(y)
+    # Get eps.
+    eps = np.finfo(x.dtype).eps
     abs_x = np.sqrt(np.real(_inner_prod(ns, x)))
     abs_y = np.sqrt(np.real(_inner_prod(ns, y)))
     t1 = (abs_x - abs_y)**2
     t2 = 2*((abs_x*abs_y) - np.real(_inner_prod(ns, x, y)))
+    t = t1 + t2
+    t = np.where(t < eps, 0., t)
 
     if floats:
-        return np.sqrt(t1 + t2)[0]/ns
+        return np.emath.sqrt(t)[0]/ns
     else:
-        return np.sqrt(t1 + t2)/ns
+        return np.emath.sqrt(t)/ns
 
 def _std_new(x, ns):
     x = np.asarray(x)
@@ -989,7 +993,7 @@ class StablePoles:
         if not hasattr(self, 'clusters_'):
             raise ValueError('You must run find_clusters() first.')
 
-        columns = ['number', 'pole', 'pole std.', 'amp.', 'amp. std.', 'highest order', 'lowest order']
+        columns = ['number', 'pole', 'pole cv.', 'amp.', 'amp. cv.', 'highest order', 'lowest order']
         stats = {c: [] for c in columns}
         for c, amps_c in zip(self.clusters_, self.clusters_amps_):
             stats['number'].append(len(c))
@@ -997,9 +1001,9 @@ class StablePoles:
             stats['highest order'].append(orders[0])
             stats['lowest order'].append(orders[-1])
             stats['pole'].append(c[orders[0]])
-            stats['pole std.'].append(_std_new(list(c.values()), self._ns))
+            stats['pole cv.'].append(_std_new(list(c.values()), self._ns)/dist(stats['pole'][-1], 0, self._ns)[0])
             stats['amp.'].append(np.mean(list(amps_c.values())))
-            stats['amp. std.'].append(np.std(list(amps_c.values())))
+            stats['amp. cv.'].append(np.std(list(amps_c.values()))/stats['amp.'][-1])
 
         return pd.DataFrame(stats)
 

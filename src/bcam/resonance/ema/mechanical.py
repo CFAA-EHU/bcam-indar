@@ -596,56 +596,6 @@ def _fit_amplitudes_stable(
     return tensor_modes_, amps_
 
 
-class _Kernel_discrete:
-
-    def __init__(
-        self,
-        roots,
-        amps,
-        fs:float=1.,
-        response:str='a',
-    ):
-        self.roots = np.atleast_1d(roots)
-        self.amps = np.atleast_2d(amps)
-        self.fs = fs
-        self.response = response
-
-        if roots.ndim > 1:
-            msg = 'Expected a 1D-array for roots.'
-            raise ValueError(msg)
-
-        if amps.shape[-1] != len(roots):
-            msg = 'The last dimension of amps should match the length of roots.'
-            raise ValueError(msg)
-
-        self._factor = np.ones_like(self.roots)
-        self._factor *= (np.exp(self.roots/fs) - 1)*fs
-        if response == 'd':
-            self._factor /= self.roots
-        elif response == 'v':
-            pass
-        elif response == 'a':
-            self._factor *= self.roots
-        else:
-            msg = f'Unknown response type: {response}'
-            raise ValueError(msg)
-
-    def __call__(self, t):
-        t = np.atleast_1d(t)
-        if t.ndim > 1:
-            msg = f'Expected a 1D array for times, got an array of dimension {t.ndim}.'
-            raise ValueError(msg)
-
-        K = np.einsum(
-            '...j,tj->...t',
-            self.amps,
-            self._factor[np.newaxis, :]*np.exp(self.roots[np.newaxis, :]*t[:, np.newaxis]),
-            dtype=complex
-        )
-        K = np.imag(K)
-
-        return K
-
 class Amplitudes(BaseEstimator):
 
     def __init__(
@@ -713,11 +663,12 @@ class Amplitudes(BaseEstimator):
             response=self.response
         )
         if not self.assume_delta:
-            self._kernel_d = _Kernel_discrete(
+            self._kernel_d = Kernel(
                 roots=np.log(self.mech_poles)*self.fs,
                 amps=self.tensor_modes_,
                 fs=self.fs,
-                response=self.response
+                response=self.response,
+                discrete='step'
             )
 
         amps_ = np.concatenate(
@@ -1385,11 +1336,12 @@ class RealModes:
             response=self.response
         )
         if not self.assume_delta:
-            self._kernel_d = _Kernel_discrete(
+            self._kernel_d = Kernel(
                 roots=np.log(self.poles)*self.fs,
                 amps=amps_fit,
                 fs=self.fs,
-                response=self.response
+                response=self.response,
+                discrete='step'
             )
 
         return self
@@ -1653,7 +1605,7 @@ class ComplexModes:
             return np.array(hessp).T
 
         dim = 2*n_out*dof - n_out*(n_out+1)//2
-        shift = self._ref_constr + np.array([1, 1, 1])
+        shift = self._ref_constr + np.array([0.5, -1., -1.])
         scalar_f = ConstraintModifier(shift, 0.1)
         constraints = ScalarComposition(
             scalar_f, constr_fun, constr_jac, constr_hessp, (3, dim))
@@ -1669,7 +1621,7 @@ class ComplexModes:
             ub=np.array([5, 5, 5]),
             jac=constraints.jac,
             hess=constr_hess,
-            keep_feasible=True
+            keep_feasible=[True, True, True]
         )
         return r
 
@@ -1711,11 +1663,12 @@ class ComplexModes:
             response=self.response
         )
         if not self.assume_delta:
-            self._kernel_d = _Kernel_discrete(
+            self._kernel_d = Kernel(
                 roots=np.log(self.poles)*self.fs,
                 amps=amps_fit,
                 fs=self.fs,
-                response=self.response
+                response=self.response,
+                discrete='step'
             )
 
         return self
