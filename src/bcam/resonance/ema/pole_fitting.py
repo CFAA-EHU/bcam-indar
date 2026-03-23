@@ -720,7 +720,7 @@ class SuperResolution(BaseEstimator):
 
 # Stabilization algorithm
 
-def _geometric_sum(r:float, ns:int):
+def _geometric_sum(r, ns:int):
     if ns <= 5:
         return sum(r**k for k in range(ns))
 
@@ -775,7 +775,15 @@ def _inner_prod(ns:int, x, y=None):
     return r
 
 def dist(x, y, ns:int):
-    floats = isinstance(x, float) and isinstance(y, float)
+    scalars = False
+    x_scalar = isinstance(x, (float, complex))
+    y_scalar = isinstance(y, (float, complex))
+    if x_scalar and y_scalar:
+        scalars = True
+        if isinstance(x, complex) or isinstance(y, complex):
+            # Cast both numbers to complex if one of them is complex.
+            x = np.asarray(x, dtype=complex)
+            y = np.asarray(y, dtype=complex)
     x = np.atleast_1d(x)
     y = np.atleast_1d(y)
     # Get eps.
@@ -787,7 +795,7 @@ def dist(x, y, ns:int):
     t = t1 + t2
     t = np.where(t < eps, 0., t)
 
-    if floats:
+    if scalars:
         return np.emath.sqrt(t)[0]/ns
     else:
         return np.emath.sqrt(t)/ns
