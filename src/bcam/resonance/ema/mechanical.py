@@ -1146,6 +1146,43 @@ class PartialModesMap:
 
         return hessp_fun
 
+def extend_couplings(x, z, coords=None):
+    x, z = np.asarray(x), np.asarray(z)
+    if x.ndim != 2:
+        raise ValueError('Expected a 2D-array for x.')
+    if x.shape != z.shape:
+        raise ValueError('x and z must have the same shape.')
+
+    n_out, dof = x.shape
+    z[:n_out, :n_out] = (z[:n_out, :n_out] - z[:n_out, :n_out].T)/2
+    coords = np.arange(n_out) if coords is None else np.asarray(coords)
+    coords_c = np.setdiff1d(
+        np.arange(dof), coords, assume_unique=True)
+
+    try:
+        q = derivatives.grass(x.T, coords)[0]
+    except (scipy.linalg.LinAlgError, scipy.linalg.LinAlgWarning):
+        logger.warning('x.T[coords] is singular.')
+
+    z_e = np.zeros((dof, dof), dtype=z.dtype)
+    z_e[:n_out] = z
+    z_e[n_out:, :n_out] = -z_e[:n_out, n_out:].T
+
+    def inv_qe(a):
+        '''
+        Compute a@[q e]^{-1}, where [q e] = [q_0 ... q_{n_out-1} e_{i_1} ...].
+        '''
+        a_ = np.zeros((dof, dof), dtype=a.dtype)
+        a_[:, coords_c] = a[:, n_out:]
+        a_[:, coords] = scipy.linalg.solve(
+            q[coords].T,
+            (a[:, :n_out] - a_[:, coords_c]@q[coords_c, :]).T,
+            assume_a='upper triangular').T
+        return a_
+
+    # z = p@qe.T@z_e@qe, where p is projection.
+    return -inv_qe(inv_qe(z_e).T)
+
 
 def _metric_amps_modes(poles, ns, response='a', assume_delta=False):
     '''

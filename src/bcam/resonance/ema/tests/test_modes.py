@@ -103,6 +103,24 @@ def test_jac_lu():
 # Tests for modes
 # ---------------
 
+def test_extend_couplings():
+    n_out, dof = 3, 5
+    rng = np.random.default_rng()
+
+    x = rng.normal(size=(n_out, dof))
+    x_e = rng.normal(size=(dof-n_out, dof))
+    x_e = np.concatenate((x, x_e), axis=0)
+    z = 0.0001*rng.normal(size=(n_out, dof))
+    z[:n_out, :n_out] = (z[:n_out, :n_out] - z[:n_out, :n_out].T)/2
+
+    z_e = mechanical.extend_couplings(x, z)
+
+    freqs = -rng.uniform(0.1, 0.2, size=dof) + 1j*rng.uniform(100, 105, size=dof)
+    phi = mechanical.PartialModesMap(freqs, np.arange(n_out))(x, z)
+    phi_e = x_e @ (np.eye(dof) + 1j * z_e)
+
+    assert np.allclose(phi, phi_e[:n_out])
+
 def test_reshape_modes():
     dof, n_out = 4, 3
     rng = np.random.default_rng(1268)
