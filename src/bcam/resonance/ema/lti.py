@@ -132,6 +132,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         *,
+        dt:float=1.,
         alpha:float=0.,
         beta:float=0.,
         mode:str='g',
@@ -149,6 +150,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         self.maxiter = maxiter
         self.conlim = conlim
         self.show = show
+        self.dt = dt
 
     def fit(self, X, y):
         r'''
@@ -198,7 +200,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
             conlim=self.conlim,
             show=self.show,
         )
-        self.kernel_ = r[0]
+        self.kernel_ = r[0]/self.dt
         self.info_ = {
             'istop': r[1],
             'itn': r[2],
@@ -226,7 +228,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         if X.shape[0] > self.kernel_.shape[0]:
             raise ValueError("Input X is longer than the fitted kernel.")
 
-        return scipy.signal.fftconvolve(
+        return self.dt*scipy.signal.fftconvolve(
             X, self.kernel_[np.newaxis, :], mode='full', axes=1)[:, :X.shape[1]]
 
     def score(self, X, y):
