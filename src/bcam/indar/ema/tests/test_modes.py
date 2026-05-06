@@ -3,7 +3,7 @@ import pytest
 import numpy as np
 import scipy
 
-from bcam.resonance.ema import mechanical, derivatives
+from bcam.indar.ema import mechanical, derivatives
 
 # Derivatives tests
 # -----------------

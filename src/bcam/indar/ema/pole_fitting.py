@@ -10,7 +10,7 @@ from sklearn.base import BaseEstimator
 import matplotlib.pyplot as plt
 
 from .helpers import Poles, HCoeffs
-from bcam.resonance import Rational, ExpSum
+from bcam.indar import Rational, ExpSum
 
 logger = logging.getLogger(__name__)
 

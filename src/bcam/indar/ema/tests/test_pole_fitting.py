@@ -2,8 +2,8 @@ import pytest
 
 import numpy as np
 
-from bcam.resonance.ema import pole_fitting
-from bcam.resonance import Rational, ExpSum
+from bcam.indar.ema import pole_fitting
+from bcam.indar import Rational, ExpSum
 
 
 # ============================

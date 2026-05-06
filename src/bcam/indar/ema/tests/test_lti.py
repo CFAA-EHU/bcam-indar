@@ -3,7 +3,7 @@ import pytest
 import numpy as np
 import scipy
 
-from bcam.resonance.ema import lti
+from bcam.indar.ema import lti
 
 def test_lti_kernel_fit():
     rng = np.random.default_rng()

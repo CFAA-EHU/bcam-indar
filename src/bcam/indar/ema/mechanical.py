@@ -12,7 +12,7 @@ import scipy
 
 from . import derivatives
 from .helpers import Poles, HCoeffs
-from bcam.resonance import Kernel, ExpSum
+from bcam.indar import Kernel, ExpSum
 
 
 logger = logging.getLogger(__name__)

@@ -6,8 +6,8 @@ build-backend = "hatchling.build"
 packages = ["src/bcam"]
 
 [project]
-name = "resonance"
-version = "0.1"
+name = "indar"
+version = "1.0.0"
 authors = [
     { name = "Felipe Ponce-Vanegas", email = "fponce@bcamath.org"},
 ]

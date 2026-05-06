@@ -1,4 +1,6 @@
-Resonance is an open-source software originally intended for
-sharing the tools developed at the group of Analysis of Vibrations at BCAM.
+## Indar
 
-We welcome any support you can provide us!
+Indar is an open-source Python package that provides algorithms and methods developed at the Basque Center for Applied Mathematics (BCAM)
+for analyzing vibrations and assessing the stability of manufacturing operations in the aeronautics sector.
+
+Contributions, feedback, and support are welcome.
