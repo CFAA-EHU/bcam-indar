@@ -1,0 +1,413 @@
+import pytest
+
+import numpy as np
+import scipy
+
+from bcam.indar.ema import mechanical, derivatives
+
+# Derivatives tests
+# -----------------
+
+class TestGrass:
+
+    @pytest.fixture(scope='class')
+    def initial(self):
+        rng = np.random.default_rng()
+        n, m = 5, 3
+        x = rng.normal(size=(n, m))
+        # Generate m integers in [0, n-1] without repetition.
+        coords = rng.choice(n, size=m, replace=False)
+        coords = np.sort(coords)
+
+        return [x, coords]
+
+    def test_grass(self, initial):
+        x, coords = initial
+        q, s, inv_s = derivatives.grass(x, coords)
+        assert np.allclose(x, q@s)
+        assert np.allclose(np.eye(len(coords)), s@inv_s)
+
+    def test_jac(self, initial):
+        x, coords = initial
+        rng = np.random.default_rng()
+        dx = rng.normal(size=x.shape)
+
+        q, s, s_inv = derivatives.grass(x, coords)
+        dq, ds = derivatives.jac_grass(dx, coords, (q, s, s_inv))
+        assert np.allclose(dx, dq@s + q@ds)
+        assert np.allclose(q.T@dq, -dq.T@q)
+        assert np.allclose(np.triu(dq[coords], k=1), 0)
+
+    def test_jac_minimal(self, initial):
+        x, coords = initial
+        rng = np.random.default_rng()
+        dx = rng.normal(size=x.shape)
+
+        q, s, s_inv = derivatives.grass(x, coords)
+        dq = derivatives.jac_grass(dx, coords, (q, s, s_inv))[0]
+        dq_r = derivatives.jac_grass_minimal(dx, coords, (q, s, s_inv))
+        assert np.allclose(dq_r, dq[coords])
+
+    def test_hessp(self, initial):
+        x, coords = initial
+        rng = np.random.default_rng()
+        dx = rng.normal(size=x.shape)
+        p = rng.normal(size=x.shape)
+    
+        q, s, s_inv = derivatives.grass(x, coords)
+        dq, ds = derivatives.jac_grass(dx, coords, (q, s, s_inv))
+        pdq, pds = derivatives.jac_grass(p, coords, (q, s, s_inv))
+        pd2q, pd2s = derivatives.hessp_grass(pdq, pds, dq, ds, coords, (q, s, s_inv))
+
+        assert np.allclose(pdq@ds + dq@pds + pd2q@s + q@pd2s, 0)
+        assert np.allclose(dq.T@pdq + pdq.T@dq + q.T@pd2q + pd2q.T@q, 0)
+        assert np.allclose(np.triu(pd2q[coords], k=1), 0)
+
+def test_jac_cho():
+    rng = np.random.default_rng()
+    n = 4
+    u = rng.normal(size=(n, n))
+    dx = rng.normal(size=(n, n))
+    dx = (dx + dx.T)/2
+    u = np.triu(u)
+    du = derivatives.jac_cho(u, dx)
+    assert np.allclose(dx, du.T@u+ u.T@du)
+
+def test_jac_qr():
+    rng = np.random.default_rng()
+    x = rng.normal(size=(4, 3))
+    q, r = scipy.linalg.qr(
+        x, overwrite_a=False, mode='economic', pivoting=False)
+    idx = np.argwhere(np.diag(r) < 0)
+    q[:, idx] *= -1
+    r[idx, :] *= -1
+    dx = rng.normal(size=(4, 3))
+    dq, dr = derivatives.jac_qr(x, dx, (q, r))
+    assert np.allclose(dx, dq@r + q@dr)
+
+def test_jac_lu():
+    rng = np.random.default_rng()
+    n = 4
+    x = rng.normal(size=(n, n))
+    dx = rng.normal(size=(n, n))
+    lu_piv = scipy.linalg.lu_factor(x)
+    dlu = derivatives.jac_lu(dx, lu_piv)
+
+    lu, piv = lu_piv
+    l, u = np.tril(lu, k=-1)+np.eye(n), np.triu(lu)
+    dl, du = np.tril(dlu, k=-1), np.triu(dlu)
+    dx = dx[derivatives.pivot_to_permutation(piv)]
+    assert np.allclose(dx, dl@u + l@du)
+
+
+# Tests for modes
+# ---------------
+
+def test_extend_couplings():
+    n_out, dof = 3, 5
+    rng = np.random.default_rng()
+
+    x = rng.normal(size=(n_out, dof))
+    x_e = rng.normal(size=(dof-n_out, dof))
+    x_e = np.concatenate((x, x_e), axis=0)
+    z = 0.0001*rng.normal(size=(n_out, dof))
+    z[:n_out, :n_out] = (z[:n_out, :n_out] - z[:n_out, :n_out].T)/2
+
+    z_e = mechanical.extend_couplings(x, z)
+
+    freqs = -rng.uniform(0.1, 0.2, size=dof) + 1j*rng.uniform(100, 105, size=dof)
+    phi = mechanical.PartialModesMap(freqs, np.arange(n_out))(x, z)
+    phi_e = x_e @ (np.eye(dof) + 1j * z_e)
+
+    assert np.allclose(phi, phi_e[:n_out])
+
+def test_reshape_modes():
+    dof, n_out = 4, 3
+    rng = np.random.default_rng(1268)
+
+    # Reference mode shape.
+    x0 = 0.1*rng.normal(size=(n_out, dof))
+    z0 = 0.01*rng.normal(size=(n_out, dof))
+    z0 = np.triu(z0, k=1)
+    z0[:n_out, :n_out] = z0[:n_out, :n_out] - z0[:n_out, :n_out].T
+    x = mechanical.reshape_modes_output(x0, z0)
+    x0_, z0_ = mechanical.reshape_modes_input(x, dof, n_out)
+
+    assert np.allclose(x0_, x0), np.allclose(z0_, z0)
+
+class TestModes:
+    
+    @pytest.fixture(scope='class')
+    def mode_shapes(self):
+        dof, n_out = 6, 4
+        rng = np.random.default_rng(123455)
+
+        freqs = rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        coords = np.arange(n_out)
+        modes = mechanical.PartialModesMap(freqs, coords)
+        psi = np.nan
+        while isinstance(psi, float):
+            x = rng.normal(size=(n_out, dof))
+            z = 1e-3*rng.normal(size=(n_out, dof))
+            z[:n_out, :n_out] = z[:n_out, :n_out] - z[:n_out, :n_out].T
+            psi = modes(x, z)
+        psi *= np.sqrt(np.imag(freqs))[np.newaxis, :]
+
+        return psi, freqs
+
+    def test_null(self, mode_shapes):
+        psi, freqs = mode_shapes
+        test_obj = np.imag(psi / np.imag(freqs)[np.newaxis, :] @ psi.T)
+        assert np.allclose(test_obj, 0)
+
+    def test_mass_inv(self, mode_shapes):
+        psi, freqs = mode_shapes
+        test_obj = np.imag(psi * (freqs / np.imag(freqs))[np.newaxis, :] @ psi.T)
+        scipy.linalg.cholesky(test_obj, lower=False, overwrite_a=True)
+
+    def test_stiffness_inv(self, mode_shapes):
+        psi, freqs = mode_shapes
+        test_obj = -np.imag(psi / (freqs * np.imag(freqs))[np.newaxis, :] @ psi.T)
+        scipy.linalg.cholesky(test_obj, lower=False, overwrite_a=True)
+
+    @pytest.fixture(scope='class')
+    def initial(self):
+        dof, n_out = 6, 4
+        rng = np.random.default_rng()
+        freqs = rng.uniform(-2, -1, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        coords = np.arange(n_out)
+        modes = mechanical.PartialModesMap(freqs, coords)
+        modes.atol = 1e-20
+        modes.rtol = 1e-15
+
+        return modes, n_out, dof
+    
+    def test_jac(self, initial):
+        modes, n_out, dof = initial
+        rng = np.random.default_rng()
+
+        modes_i = np.nan
+        while isinstance(modes_i, float):
+            xi = rng.normal(size=(n_out, dof))
+            zi = 5e-3*rng.normal(size=(n_out, dof))
+            zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
+            modes_i = modes(xi, zi)
+
+        dx = rng.normal(size=(n_out, dof))
+        dz = rng.normal(size=(n_out, dof))
+        dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
+
+        eval = rng.normal(size=(n_out, dof))
+
+        jac_ana = np.sum(eval * modes.jac(xi, zi)(dx, dz))
+        test = False
+        for exp in range(3, 10):
+            delta = 10**-exp
+            modes_f = modes(xi + delta*dx, zi + delta*dz)
+            jac_num = np.sum(eval * (modes_f - modes_i)/delta)
+            test = np.allclose(jac_num, jac_ana, rtol=1e-5, atol=0.)
+            if test:
+                break
+        assert test
+    
+    def test_hessp(self, initial):
+        modes, n_out, dof = initial
+        rng = np.random.default_rng()
+
+        modes_i = np.nan
+        while isinstance(modes_i, float):
+            xi = rng.normal(size=(n_out, dof))
+            zi = 5e-3*rng.normal(size=(n_out, dof))
+            zi[:n_out, :n_out] = zi[:n_out, :n_out] - zi[:n_out, :n_out].T
+            modes_i = modes(xi, zi)
+
+        dx = rng.normal(size=(n_out, dof))
+        dz = rng.normal(size=(n_out, dof))
+        dz[:n_out, :n_out] = dz[:n_out, :n_out] - dz[:n_out, :n_out].T
+
+        vx = rng.normal(size=(n_out, dof))
+        vz = rng.normal(size=(n_out, dof))
+        vz[:n_out, :n_out] = vz[:n_out, :n_out] - vz[:n_out, :n_out].T
+
+        eval = rng.normal(size=(n_out, dof))
+
+        hessp_ana = np.sum(eval * modes.hessp(xi, zi, vx, vz)(dx, dz))
+        jac_modes_i = modes.jac(xi, zi)(vx, vz)
+        test = False
+        for exp in range(3, 10):
+            delta = 10**-exp
+            jac_modes_f = modes.jac(xi + delta*dx, zi + delta*dz)(vx, vz)
+            hessp_num = np.sum(eval * (jac_modes_f - jac_modes_i)/delta)
+            test = np.allclose(hessp_num, hessp_ana, rtol=1e-5, atol=0.)
+            if test:
+                break
+        assert test
+
+class TestModesFitting:
+
+    def test_prop(self):
+        dof, n_out, n_in = 4, 3, 2
+        rng = np.random.default_rng()
+        freqs = -rng.uniform(1, 2, dof) + 1j*rng.uniform(2*np.pi, 2*np.pi*20, dof)
+        modes_m = rng.normal(size=(n_out, dof))
+        amps_m = mechanical.mode_to_amps(modes_m, n_out, n_in)
+
+        ns, fs = 210, 100
+        modes = mechanical.RealModes(
+            np.exp(freqs/fs), amps_m, ns=ns, response='a', fs=fs, assume_delta=True)
+        modes_fit = modes.fit().modes_fit_
+        # The result is unique up to a sign flip in each mode.
+        modes_fit *= np.sign(modes_m[0, :]/modes_fit[0, :])[np.newaxis, :]
+
+        assert modes.success_
+        assert np.allclose(modes_fit, modes_m, rtol=1e-5, atol=0.)
+
+    def test_complex(self):
+        dof = 3
+        n_out, n_in = 3, 2
+        ns, fs = 2**9, 1/0.001
+
+        rng = np.random.default_rng(1234)
+        children = rng.spawn(2)
+        X = children[0].normal(size=(dof, dof))
+        freqs = 2*np.pi*np.array([49.4, 52.3, 56.7])
+        damps = np.array([0.048, 0.044, 0.042])
+
+        Lambda = -damps*freqs + 1j*np.sqrt(1-damps**2)*freqs
+
+        Z = np.zeros_like(X)
+        Z_ = 1e-2*children[1].uniform(low=0.5, high=1, size=(3,))
+        # Change signs randomly.
+        Z_ *= children[1].choice([-1, 1], size=Z_.shape)
+        Z[((0, 1), (1, 2))] = Z_[:2]
+        Z[0, 2] = Z_[2]
+        Z = Z - Z.T
+
+        modes = X + 1j*X@Z
+        amps_m = mechanical.mode_to_amps(modes, n_out, n_in)
+
+        # Fit as proportional as initial guess.
+        model = mechanical.RealModes(
+            np.exp(Lambda/fs), amps_m,
+            ns=ns, response='a', fs=fs, assume_delta=True)
+        modes_real = model.fit(options_ncg={'gtol': 1e-3}).modes_fit_
+
+        # Check that real modes are not good enough.
+        # The result is unique up to a sign flip in each mode.
+        modes_real *= np.sign(np.real(modes[0, :]/modes_real[0, :]))[np.newaxis, :]
+        assert not np.allclose(modes_real, modes, rtol=1e-4, atol=0.)
+
+        coords = np.arange(n_out)
+        model_nop = mechanical.ComplexModes(
+            poles=np.exp(Lambda/fs),
+            coords=coords,
+            amps=amps_m,
+            fs=fs, ns=ns, response='a', assume_delta=True)
+
+        x0 = (modes_real, np.zeros_like(modes_real))
+        modes_nop = model_nop.fit(x0, options={'verbose': 2, 'gtol': 1.e-8}).modes_fit_
+        # The result is unique up to a sign flip in each mode.
+        modes_nop *= np.sign(np.real(modes[0, :]/modes_nop[0, :]))[np.newaxis, :]
+
+        assert model_nop.optRes_['success']
+        assert np.allclose(modes_nop, modes, rtol=1e-4, atol=0.)
+
+# Fitting tests
+# -------------
+
+def test_trig_fft():
+    rng = np.random.default_rng()
+    n = 10
+    x = rng.normal(size=n)
+    x = x - np.mean(x)
+    x_fft = mechanical.trig_fft(x)
+    x_ifft = mechanical.trig_ifft(x_fft)
+    assert np.allclose(x, x_ifft)
+
+class TestAmplitudes:
+
+    @staticmethod
+    def kernel(ns, fs, a, freqs):
+        t = np.arange(ns) / fs
+        K = 0
+
+        # Resonant part. Discretized kernel.
+        dof = len(freqs[0])
+        if dof != 0:
+            K1 = fs*freqs[0]*(np.exp(freqs[0]/fs) - 1)
+            K1 = a[0] * K1.reshape(1, 1, dof)
+            K1 = np.expand_dims(K1, axis=2)
+            K1 = K1 * np.exp(freqs[0][np.newaxis, :]*t[:, np.newaxis]).reshape(1, 1, ns, dof)
+            K1 = np.imag(np.sum(K1, axis=-1))
+            K += K1
+
+        # General part.
+        n_f = len(freqs[1])
+        if n_f != 0:
+            K2 = np.expand_dims(a[1], axis=2)
+            K2 = K2 * np.exp(freqs[1][np.newaxis, :]*t[:, np.newaxis]).reshape(1, 1, ns, n_f)
+            K2 = np.real(np.sum(K2, axis=-1))
+            K += K2
+
+        return K
+
+    def test_reshape(self):
+        rng = np.random.default_rng()
+        dof, n_out, n_in = 4, 3, 2
+
+        x = rng.normal(
+            size=(n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof - 1))
+        ix = mechanical.reshape_injection_sym(x, n_out=n_out, n_in=n_in)
+        pix = mechanical.reshape_projection_sym(ix)
+
+        assert np.allclose(x, pix)
+
+    def test_amps(self):
+        rng = np.random.default_rng()
+        ns, fs = 200, 100
+        n_out, n_in = 3, 2
+        _amps, _freqs = [], []
+
+        dof = 3
+        if dof > 0:
+            modal = mechanical.randomSystem(
+                masses=rng.uniform(0.1, 0.2, dof),
+                dampings=rng.uniform(0.02, 0.05, dof),
+                roots=rng.uniform(2*np.pi*1, 2*np.pi*20, dof),
+                damping_type='nop',
+                seed=None)[1]
+            m_freqs = modal['frequencies']
+            modes = modal['mode_shapes']
+            modes = modes * (1/np.sqrt(np.imag(m_freqs)))[np.newaxis, :]
+            m_amps = mechanical.mode_to_amps(modes, n_out, n_in)
+        else:
+            m_amps, m_freqs = np.array([]), np.array([])
+        _amps.append(m_amps)
+        _freqs.append(m_freqs)
+
+        n_c, n_r = 4, 2
+        c_freqs = -rng.uniform(0.1, 1, n_c) + 2j*np.pi*rng.uniform(1, 50, n_c)
+        c_amps = rng.normal(scale=1., size=(n_out, n_in, n_c)).astype(np.complex128)
+        c_amps += 1j * rng.normal(scale=1e-1, size=(n_out, n_in, n_c))
+        r_freqs = -rng.uniform(0.1, 1, n_r) + np.pi*fs*1j*rng.integers(0, 2, size=n_r)
+        r_amps = rng.normal(scale=1, size=(n_out, n_in, n_r))
+        freqs = np.concatenate([c_freqs, r_freqs], dtype=complex)
+        amps = np.concatenate([c_amps, r_amps], axis=-1)
+
+        _freqs.append(freqs)
+        _amps.append(amps)
+
+        K = self.kernel(ns, fs, _amps, _freqs)
+
+        model = mechanical.Amplitudes(
+            mech_poles=np.exp(m_freqs/fs),
+            res_poles=(np.exp(r_freqs/fs), np.exp(c_freqs/fs)),
+            fs=fs, response='a', solver='gelsd')
+        model.fit(K)
+
+        mech_amps_fit = model.tensor_modes_
+        amps_fit = model.amps_
+
+        assert np.allclose(mech_amps_fit, m_amps, atol=0.)
+        assert np.allclose(amps_fit.cx, c_amps, atol=0.)
+        assert np.allclose(amps_fit.real, r_amps, atol=0.)

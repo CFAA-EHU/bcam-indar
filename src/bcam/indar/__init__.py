@@ -1,0 +1,6 @@
+'''
+Indar
+=========
+'''
+
+from .core import *

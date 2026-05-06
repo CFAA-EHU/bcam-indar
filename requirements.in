@@ -1,0 +1,9 @@
+numpy
+scipy
+pandas
+sympy
+symengine
+scikit-learn
+jitcode
+matplotlib
+attrs
