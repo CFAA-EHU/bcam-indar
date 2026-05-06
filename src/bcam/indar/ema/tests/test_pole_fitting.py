@@ -283,10 +283,7 @@ class Test_SuperResolution:
                 prune_tol=1e-5
             )
             ns = x[1]
-            model.fit(
-                np.fft.rfft(x[0], axis=0),
-                ns%2
-            )
+            model.fit(x[0])
 
             for part in ['real', 'cx']:
                 p_ = getattr(model.poles_, part)
