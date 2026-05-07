@@ -1,7 +1,7 @@
 # To use:
 #
 #   $ mamba env create -f environment.yml  # `conda` works too for this command
-#   $ mamba activate numpy-dev
+#   $ mamba activate indar-dev
 #
 name: indar-dev
 channels:
@@ -17,6 +17,8 @@ dependencies:
   - pandas
   - matplotlib
   - sympy
+  - sphinx
+  - numpydoc
   - pip>=23.1
   - pip:
     - hatch
@@ -24,3 +26,4 @@ dependencies:
     - jitcode
     - symengine
     - pip-tools
+    - sphinx-nefertiti
