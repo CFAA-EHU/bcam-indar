@@ -1,0 +1,44 @@
+stages:
+  - docs
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+cache:
+  paths:
+    - .cache/pip
+
+.docs_build:
+  stage: docs
+  image: python:3.13
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install -e .
+    - pip install -r requirements.txt
+    - pip install sphinx numpydoc sphinx-nefertiti
+  script:
+    - cd docs
+    - make html
+
+pages:
+  extends: .docs_build
+  script:
+    - cd docs
+    - make html
+    - mkdir -p ../public
+    - cp -r build/html/* ../public/
+  artifacts:
+    paths:
+      - public
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+
+docs_preview_develop:
+  extends: .docs_build
+  artifacts:
+    expose_as: 'Documentation preview (develop)'
+    paths:
+      - docs/build/html
+    expire_in: 7 days
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "develop"'
