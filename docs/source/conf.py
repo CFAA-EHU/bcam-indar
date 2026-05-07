@@ -23,6 +23,7 @@ extensions = [
     'sphinx.ext.doctest',
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
+    'numpydoc',
 ]
 
 templates_path = ['_templates']
@@ -35,3 +36,5 @@ autosummary_generate = True
 
 html_theme = 'sphinx_nefertiti'
 html_static_path = ['_static']
+html_css_files = ['custom.css']
+html_js_files = ['custom.js']
