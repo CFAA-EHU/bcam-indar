@@ -1,5 +1,5 @@
 '''
-Experimental Modal Analysis.
+Experimental Modal Analysis
 '''
 
 from .lti import *
