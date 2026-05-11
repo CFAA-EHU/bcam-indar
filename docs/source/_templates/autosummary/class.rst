@@ -12,7 +12,9 @@
 		:toctree: .
 
 	{% for item in methods %}
-		~{{ fullname }}.{{ item }}
+	{% if item == '__init__' or not (item.startswith('__') and item.endswith('__')) %}
+		~{{ objname }}.{{ item }}
+	{% endif %}
 	{% endfor %}
 	{% endif %}
 	{% endblock %}
@@ -25,7 +27,7 @@
 		:toctree: .
 
 	{% for item in attributes %}
-		~{{ fullname }}.{{ item }}
+		~{{ objname }}.{{ item }}
 	{% endfor %}
 	{% endif %}
 	{% endblock %}

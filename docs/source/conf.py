@@ -34,7 +34,7 @@ autosummary_imported_members = True
 
 # Generate autosummary pages for class members listed by numpydoc,
 # including inherited ones coming from sklearn base classes.
-numpydoc_class_members_toctree = True
+numpydoc_class_members_toctree = False
 numpydoc_show_inherited_class_members = True
 
 # Some inherited sklearn docstrings include references that only resolve
@@ -42,6 +42,12 @@ numpydoc_show_inherited_class_members = True
 nitpick_ignore = [
     ('std:ref', 'metadata_routing'),
     ('std:term', 'meta-estimator'),
+]
+
+# Keep inherited sklearn API docs, but suppress cross-project reference noise.
+suppress_warnings = [
+    'ref.ref',
+    'ref.term',
 ]
 
 # -- Options for HTML output -------------------------------------------------
