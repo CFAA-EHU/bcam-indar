@@ -1,5 +1,5 @@
 '''
-Experimental Modal Analysis
+A sub-package for Experimental Modal Analysis.
 '''
 
 from .lti import *

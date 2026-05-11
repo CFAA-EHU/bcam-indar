@@ -30,6 +30,19 @@ templates_path = ['_templates']
 exclude_patterns = []
 
 autosummary_generate = True
+autosummary_imported_members = True
+
+# Generate autosummary pages for class members listed by numpydoc,
+# including inherited ones coming from sklearn base classes.
+numpydoc_class_members_toctree = True
+numpydoc_show_inherited_class_members = True
+
+# Some inherited sklearn docstrings include references that only resolve
+# inside the sklearn documentation project.
+nitpick_ignore = [
+    ('std:ref', 'metadata_routing'),
+    ('std:term', 'meta-estimator'),
+]
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output

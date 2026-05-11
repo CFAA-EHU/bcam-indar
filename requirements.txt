@@ -35,16 +35,21 @@ numpy==2.4.4
     #   jitcode
     #   jitcxde-common
     #   matplotlib
+    #   pandas
     #   scikit-learn
     #   scipy
 packaging==26.2
     # via matplotlib
+pandas==3.0.2
+    # via -r requirements.in
 pillow==12.2.0
     # via matplotlib
 pyparsing==3.3.2
     # via matplotlib
 python-dateutil==2.9.0.post0
-    # via matplotlib
+    # via
+    #   matplotlib
+    #   pandas
 scikit-learn==1.8.0
     # via -r requirements.in
 scipy==1.17.1

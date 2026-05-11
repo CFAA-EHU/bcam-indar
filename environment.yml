@@ -8,18 +8,18 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python>=3.13
+  - python=3.13
   - attrs
   - pytest
-  - numpy
-  - scipy
-  - scikit-learn
+  - numpy=2.4
+  - scipy=1.17
+  - scikit-learn=1.8
   - pandas
   - matplotlib
   - sympy
   - sphinx
   - numpydoc
-  - pip>=23.1
+  - pip
   - pip:
     - hatch
     - hatch-requirements-txt
