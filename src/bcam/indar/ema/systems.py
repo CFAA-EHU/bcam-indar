@@ -4,13 +4,11 @@ from itertools import product
 
 import numpy as np
 import scipy
-import jitcode
-import symengine
 
 
 # === Systems ===
 
-class BeamSystem:
+class Beam:
 
     def __init__(self, density, flexibility, h=1, seed=None):
         self._density = np.asarray(density)
@@ -95,110 +93,3 @@ class BeamSystem:
         bending = scipy.interpolate.BSpline(nodes, c, 2)
         
         return bending
-
-
-# === Simulations ===
-
-class Spring:
-
-    def __init__(self, M, C, K, force=None):
-        '''Simulate a linear vibrating system.
-
-        Set up an object representing a linear system
-        to be used in JiTCODE.
-        '''
-        self.M, self.C, self.K = M, C, K
-        self.force = np.zeros(self.M.shape[0]) if force is None else np.array(force, ndmin=1)
-        if len(self.force) != self.M.shape[0]:
-            msg = f'Expected a force with {self.M.shape[0]}-DoF,\
-                got {len(self.force)} instead.'
-            raise ValueError(msg)
-
-        Minv = np.linalg.inv(self.M)
-        self._A = Minv @ C
-        self._B = Minv @ K
-        self._force = Minv @ self.force
-
-    def __iter__(self):
-        dofs = self.M.shape[0]
-        y = jitcode.y
-        q = [y(i) for i in range(dofs)]
-        p = [y(i + dofs) for i in range(dofs)]
-        for i in range(dofs):
-            yield p[i]
-        for i in range(dofs):
-            tmp = -sum(self._B[i, j] * q[j] for j in range(dofs))
-            tmp += -sum(self._A[i, j] * p[j] for j in range(dofs))
-            tmp += self._force[i]
-            yield tmp
-
-    def __len__(self):
-        return 2 * self.M.shape[0]
-
-
-class Hammer:
-
-    def __init__(self, M, C, K, sigma=0.1, dt=None):
-        self.M, self.C, self.K = M, C, K
-        self.sigma = sigma
-        self.dt = self.sigma/4 if dt is None else dt
-        
-        t = jitcode.t
-        self._force = symengine.exp(-0.5 * ((t - 5 * sigma) / sigma)**2) / (np.sqrt(2 * np.pi) * sigma)
-
-    def simulate(
-            self,
-            exitation_points,
-            T=10,
-            solver_name='dopri5'
-        ):
-        '''
-        Parameters
-        ----------
-        exitation_points : 1D or 2D-array
-            If a 1D-array, it must have the same length as the number of DoFs.
-            If a 2D-array, it must have shape (DoFs, N), where N is the number of exitation points.
-        '''
-        dofs = self.M.shape[0]
-
-        # Validate the exitation_points.
-        exitation_points = np.array(exitation_points)
-        if exitation_points.ndim == 1:
-            exitation_points = exitation_points[:, np.newaxis]
-        elif exitation_points.ndim > 2:
-            msg = f'Invalid number of dimensions for exitation_point. Expected 1 or 2, got {exitation_points.ndim}.'
-            raise ValueError(msg)
-        
-        if exitation_points.shape[0] != dofs:
-            msg = f'Invalid shape for exitation_point. Expected ({dofs}, ...), got ({exitation_points.shape[0]}, ...).'
-            raise ValueError(msg)
-        exitation_points = exitation_points / np.linalg.norm(exitation_points, axis=0, keepdims=True)
-        n_excitations = exitation_points.shape[1]
-        
-        dt = self.dt
-        n_samples = round(T / dt)
-        data = np.zeros((dofs, n_excitations, n_samples))
-        for n, point in enumerate(exitation_points.T):
-            system = Spring(
-                self.M, self.C, self.K, point * self._force)
-
-            initial_state = np.zeros(2*dofs)
-            solver = jitcode(system)
-            solver.set_integrator(solver_name)
-            solver.set_initial_value(initial_state, 0.0)
-            solution = []
-            for time in dt * np.arange(0, n_samples+1):
-                solution.append(solver.integrate(time))
-            solution = np.array(solution)
-
-            acc = solution[:, dofs:]
-            acc = (acc[2:] - acc[:-2]) / (2 * dt)
-            acc = np.append(acc, np.zeros((1, dofs)), axis=0)
-            acc = np.roll(acc, 1, axis=0)
-            data[:, n, :] = acc.T
-
-        t = jitcode.t
-        impact = symengine.lambdify(t, [self._force])
-        impact = impact(dt * np.arange(0, n_samples))
-
-        return data, impact

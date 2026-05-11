@@ -1,0 +1,26 @@
+/* Restore the classifier separator in definition lists used by numpydoc. */
+.classifier::before {
+    content: " : ";
+}
+
+/* Avoid always-visible horizontal scrollbars in parameter blocks. */
+.field-list dd {
+    overflow-x: auto;
+}
+
+/* Align inner parameter names with the outer field-list left padding. */
+.field-list dd dl.simple dt {
+    padding-left: 0.5rem;
+}
+
+/* SciPy-style h1: prefix (module path) small and muted, name below in full size. */
+h1 .h1-prefix {
+    display: block;
+    font-size: 0.55em;
+    font-weight: normal;
+    opacity: 0.65;
+}
+
+h1 .h1-name {
+    display: inline-block;
+}

@@ -3,3 +3,5 @@
 .env
 .pytest_cache/
 dist/
+docs/build/
+docs/source/generated/

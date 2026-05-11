@@ -1,0 +1,12 @@
+numpy
+scipy
+pandas
+sympy
+symengine
+scikit-learn
+jitcode
+matplotlib
+attrs
+sphinx
+sphinx-nefertiti
+numpydoc

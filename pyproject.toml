@@ -23,10 +23,14 @@ classifiers = [
     "Topic :: Scientific/Engineering",
 ]
 requires-python = ">= 3.13"
-dynamic = ["dependencies", "optional-dependencies"]
+dynamic = [
+    "version", "dependencies", "optional-dependencies"]
 readme = "README.md"
 license = "MIT AND (Apache-2.0 OR BSD-2-Clause)"
 license-files = ["LICEN[CS]E*"]
+
+[tool.hatch.version]
+path = "src/bcam/indar/__init__.py"
 
 [tool.hatch.metadata.hooks.requirements_txt]
 files = ["requirements.txt"]

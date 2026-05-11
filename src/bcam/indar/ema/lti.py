@@ -105,13 +105,15 @@ class _Dloss(scipy.sparse.linalg.LinearOperator):
         return v.T
 
 class LTIKernel(BaseEstimator, RegressorMixin):
-    r'''
+    '''
     Fit Linear Time Invariant kernel.
 
     A Linear Time Invariant (LTI) model assumes that
     the response `y` to an input `x` is given by
+    
     .. math::
         y_t = \sum_{s\le t} K_{t-s} x_s + \epsilon_t,
+
     where `K` is the kernel to be estimated, and :math:`\epsilon` is a noise term.
 
     Parameters
