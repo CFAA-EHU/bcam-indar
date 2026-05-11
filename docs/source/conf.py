@@ -50,4 +50,6 @@ nitpick_ignore = [
 html_theme = 'sphinx_nefertiti'
 html_static_path = ['_static']
 html_css_files = ['custom.css']
-html_js_files = ['custom.js']
+html_js_files = [
+    ('custom.js', {'priority': 100}),
+]
