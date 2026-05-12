@@ -34,6 +34,9 @@ exclude_patterns = []
 autosummary_generate = True
 autosummary_imported_members = True
 
+# Inherit docstrings from parent class methods during autodoc generation.
+autodoc_inherit_docstrings = True
+
 # Generate autosummary pages for class members listed by numpydoc,
 # including inherited ones coming from sklearn base classes.
 numpydoc_class_members_toctree = False

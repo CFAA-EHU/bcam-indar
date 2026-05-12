@@ -113,7 +113,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
     where :math:`dt` is the time step, :math:`h` is the Impulse Response Function (IRF) to be estimated
     (also known as the kernel), and :math:`\\varepsilon` is white noise.
     This class only admits SISO data, that is,
-    the input and response are scalar time series, and the kernel is a 1D array.
+    the input and response are scalar time series, and the kernel is a 1d-array.
 
     This class uses the matrix-free algorithm `LSMR <https://doi.org/10.1137/10079687X>`_, as
     implemented in :func:`scipy.sparse.linalg.lsmr`, to estimate the IRF.
@@ -187,7 +187,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         >>> model = ema.LTIKernel(beta=5.)
         >>> model.fit(X, y)
 
-    We check the prediction performance of the fitted model.
+    We check that the predicted response matches the true response.
 
     .. plot::
         :context:
@@ -204,6 +204,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
     def __init__(
         self,
         *,
+        dt:float=1.,
         alpha:float=0.,
         beta:float=0.,
         mode:str='g',
@@ -212,7 +213,6 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         maxiter:int=None,
         conlim:float=1e8,
         show:bool=False,
-        dt:float=1.,
     ):
         self.alpha = alpha
         self.beta = beta
@@ -239,7 +239,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         Returns
         -------
         self : object
-            Fitted estimator.
+            Fitted Estimator.
         '''
         # Validate inputs.
         X = np.asarray(X)
@@ -292,7 +292,17 @@ class LTIKernel(BaseEstimator, RegressorMixin):
 
     def predict(self, X):
         '''
-        Predict response using the fitted LTI model.
+        Predict response using the LTI model.
+
+        Parameters
+        ----------
+        X : array-like of shape (n_repetitions, n_time_samples).
+            Input data.
+
+        Returns
+        -------
+        y_pred : array-like of shape (n_repetitions, n_time_samples)
+            Predicted response data.
         '''
         # Check if fitted.
         if not hasattr(self, 'kernel_'):
@@ -310,7 +320,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
 
     def score(self, X, y):
         '''
-        Compute the prediction RMS error.
+        Return coefficient of determination on test data.
 
         Parameters
         ----------
@@ -323,7 +333,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         Returns
         -------
         score : float
-            RMS error.
+            :math:`R^2` of `self.predict(X)` w.r.t `y`.
         '''
         # Validate inputs.
         X = np.asarray(X)
