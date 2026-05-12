@@ -115,49 +115,90 @@ class LTIKernel(BaseEstimator, RegressorMixin):
     This class only admits SISO data, that is,
     the input and response are scalar time series, and the kernel is a 1D array.
 
-    This class uses the matrix-free algorithm `LSMR <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.lsmr.html>`_, as
-    implemented in `scipy.sparse.linalg.lsmr`, to estimate the IRF.
+    This class uses the matrix-free algorithm `LSMR <https://doi.org/10.1137/10079687X>`_, as
+    implemented in :func:`scipy.sparse.linalg.lsmr`, to estimate the IRF.
 
     Parameters
     ----------
-    dt : float, optional
+    dt : float
         Sampling time step.
 
-    alpha, beta : float, optional
-        Penalty parameters. If `alpha` is positive, the :math:`\ell^2` norm of the kernel is penalized.
+    alpha, beta : float
+        If `alpha` is positive, the :math:`\ell^2` norm of the kernel is penalized.
         If `beta` is positive, the :math:`\ell^2` norm of the kernel's derivative is penalized.
 
-    mode : {'g', 'a'}, optional
-        The mode of the penalty.
+    mode : {'g', 'a'}
         When the mode is *general* (`g`), the derivative is penalized for all times, while
         for *acceleration* (`a`) mode, time :math:`k = 0` is not penalized.
 
-    atol, btol : float, optional
-        Stopping tolerances.
+    atol, btol : float
         `atol` is the relative tolerance in the entries of the input :math:`x`, and
         `btol` is the relative tolerance in the entries of the response :math:`y`.
 
-    maxiter, conlim, show : int, int, bool, optional
-        Parameters for the `LSMR` algorithm.
-        See `scipy.sparse.linalg.lsmr` for details.
+    maxiter, conlim, show : int, int, bool
+        See :func:`scipy.sparse.linalg.lsmr` for details.
 
     Attributes
     ----------
-    kernel_ : 1d array of shape (n_samples,)
+    kernel_ : array of shape (n_samples,)
         The estimated IRF, or kernel.
 
     info_ : dict
         Information about the optimization process, containing the following keys:
+
         - `istop`: reason for stopping.
+
         - `itn`: number of iterations.
+
         - `normr`: the norm of the residual.
+
         - `normar`: the norm of the projected residual.
+
         - `norma`: the estimate of the Frobenius norm of the matrix.
+
         - `conda`: the estimate of the condition number of the matrix.
+
         - `normx`: the norm of the solution.
 
     Examples
     --------
+    We create synthetic data from a known kernel and fit the LTI model to check if the kernel is correctly estimated.
+
+    .. plot::
+        :context: reset
+        :format: doctest
+        :include-source: True
+
+        >>> import numpy as np
+        >>> from scipy.signal import fftconvolve
+        >>> from bcam.indar import ema
+        >>> # Create random input data.
+        >>> rng = np.random.default_rng(123)
+        >>> n_reps = 5 # Number of repetitions (trials)
+        >>> N = 100 # Number of time samples
+        >>> X = rng.normal(0, 1, size=(n_reps, N))
+        >>> # Create a kernel and generate response data.
+        >>> true_kernel = np.exp(-0.05*np.arange(N)) * np.cos(2*np.pi*0.1*np.arange(N))
+        >>> y = fftconvolve(
+        ...     X, true_kernel[np.newaxis, :], mode='full', axes=1)[:, :N]
+        >>> # Add noise to the response.
+        >>> y += rng.normal(0, .1, y.shape)
+        >>> # Fit kernel from input/output data.
+        >>> model = ema.LTIKernel(beta=5.)
+        >>> model.fit(X, y)
+
+    We check the prediction performance of the fitted model.
+
+    .. plot::
+        :context:
+        :format: doctest
+        :include-source: True
+
+        >>> import matplotlib.pyplot as plt
+        >>> plt.plot(true_kernel, label='True kernel')
+        >>> plt.plot(model.kernel_, label='Estimated kernel')
+        >>> plt.legend()
+        >>> plt.show()
     '''
 
     def __init__(

@@ -32,10 +32,11 @@ license-files = ["LICEN[CS]E*"]
 path = "src/bcam/indar/__init__.py"
 
 [tool.hatch.metadata.hooks.requirements_txt]
-files = ["requirements/requirements.txt"]
+files = ["requirements/requirements.in"]
 
 [tool.hatch.metadata.hooks.requirements_txt.optional-dependencies]
-test = ["requirements/requirements-test.txt"]
+test = ["requirements/requirements-test.in"]
+docs = ["requirements/requirements-docs.in"]
 
 [project.urls]
 Repository = "https://gitlab.bcamath.org/fponce/indar.git"

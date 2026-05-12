@@ -23,7 +23,9 @@ extensions = [
     'sphinx.ext.doctest',
     'sphinx.ext.autodoc',
     'sphinx.ext.autosummary',
+    'sphinx.ext.intersphinx',
     'numpydoc',
+    'matplotlib.sphinxext.plot_directive',
 ]
 
 templates_path = ['_templates']
@@ -49,6 +51,19 @@ suppress_warnings = [
     'ref.ref',
     'ref.term',
 ]
+
+# Cross-reference objects from external documentation projects.
+intersphinx_mapping = {
+    'python': ('https://docs.python.org/3', None),
+    'numpy': ('https://numpy.org/doc/stable', None),
+    'scipy': ('https://docs.scipy.org/doc/scipy', None),
+    'sklearn': ('https://scikit-learn.org/stable', None),
+}
+
+# Hide the '(Source code)' link shown by matplotlib plot directive blocks.
+plot_html_show_source_link = False
+# Keep only PNG artifacts in plot output links.
+plot_formats = ['png']
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
