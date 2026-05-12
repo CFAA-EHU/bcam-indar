@@ -101,17 +101,17 @@ class _Dloss(scipy.sparse.linalg.LinearOperator):
         return v.T
 
 class LTIKernel(BaseEstimator, RegressorMixin):
-    '''
+    r'''
     Fit a Linear Time-Invariant (LTI) kernel.
 
     In a discrete LTI model, given an input :math:`x`,
     the response :math:`y` at a given time :math:`k` is
 
     .. math::
-        y_k = dt\,\sum_{i=0}^k  h_{k-i}\,x_i + \\varepsilon_k,
+        y_k = dt\,\sum_{i=0}^k  h_{k-i}\,x_i + \varepsilon_k,
 
     where :math:`dt` is the time step, :math:`h` is the Impulse Response Function (IRF) to be estimated
-    (also known as the kernel), and :math:`\\varepsilon` is white noise.
+    (also known as the kernel), and :math:`\varepsilon` is white noise.
     This class only admits SISO data, that is,
     the input and response are scalar time series, and the kernel is a 1d-array.
 
@@ -159,6 +159,10 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         - `conda`: the estimate of the condition number of the matrix.
 
         - `normx`: the norm of the solution.
+
+    Notes
+    -----
+    This class is a sklearn `predictor <https://scikit-learn.org/stable/developers/develop.html>`_.
 
     Examples
     --------
@@ -356,6 +360,39 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         return 1-ss_res/ss_tot
 
 def H1(X, y):
+    r'''
+    Compute the H1 estimator of the kernel.
+
+    This estimator models the response as
+
+    .. math::
+        \hat{y}(\omega) = \hat{h}(\omega)\hat{x}(\omega) + \varepsilon(\omega),
+
+    where :math:`\hat{y}(\omega)` is the continuous Fourier transform of the response,
+    and likewise for :math:`\hat{h}(\omega)`, :math:`\hat{x}(\omega)`, where
+    :math:`h` is the Impulse Response Function and :math:`x` is the input signal.
+    The term :math:`\varepsilon(\omega)` is white noise.
+
+    In practice, the continuous Fourier transform is approximated by the DFT, and
+    the H1 estimator is given by
+
+    .. math::
+        \hat{h}(\omega) = \frac{\sum_{r=1}^R \hat{y}_r(\omega)\hat{x}_r(\omega)^*}{\sum_{r=1}^R \hat{x}_r(\omega)\hat{x}_r(\omega)^*},
+
+    where :math:`R` is the number of repetitions (trials), and :math:`^*` denotes complex conjugation.
+
+    Parameters
+    ----------
+    X : array-like of shape (n_repetitions, n_time_samples).
+        Input data.
+    y : array-like of shape (n_repetitions, n_time_samples).
+        True response data.
+
+    Returns
+    -------
+    H1 : array-like of shape (n_time_samples,)
+        H1 estimator of the kernel.
+    '''
     # Validate inputs.
     X = np.asarray(X)
     y = np.asarray(y)
