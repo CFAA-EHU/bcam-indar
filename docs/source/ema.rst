@@ -40,7 +40,6 @@ Modal Analysis
     ComplexModes
     modal_to_system
     system_to_modal
-    randomSystem
     mode_to_amps
     amps_to_modes
     extend_couplings

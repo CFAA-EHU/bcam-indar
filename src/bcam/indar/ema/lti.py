@@ -1,7 +1,3 @@
-'''
-Functions for Linear Time Invariant (LTI) models.
-'''
-
 import logging
 
 import numpy as np
@@ -105,36 +101,68 @@ class _Dloss(scipy.sparse.linalg.LinearOperator):
         return v.T
 
 class LTIKernel(BaseEstimator, RegressorMixin):
-    r'''
-    Fit Linear Time Invariant kernel.
+    '''
+    Fit a Linear Time-Invariant (LTI) kernel.
 
-    A Linear Time Invariant (LTI) model assumes that
-    the response `y` to an input `x` is given by
-    
+    In a discrete LTI model, given an input :math:`x`,
+    the response :math:`y` at a given time :math:`k` is
+
     .. math::
-        y_t = \sum_{s\le t} K_{t-s} x_s + \epsilon_t,
+        y_k = dt\,\sum_{i=0}^k  h_{k-i}\,x_i + \\varepsilon_k,
 
-    where `K` is the kernel to be estimated, and :math:`\epsilon` is a noise term.
+    where :math:`dt` is the time step, :math:`h` is the Impulse Response Function (IRF) to be estimated
+    (also known as the kernel), and :math:`\\varepsilon` is white noise.
+    This class only admits SISO data, that is,
+    the input and response are scalar time series, and the kernel is a 1D array.
+
+    This class uses the matrix-free algorithm `LSMR <https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.lsmr.html>`_, as
+    implemented in `scipy.sparse.linalg.lsmr`, to estimate the IRF.
 
     Parameters
     ----------
-    penalty : float, optional
-        Penalty parameter for the :math:`H^1` norm. Default is 0 (no penalty).
+    dt : float, optional
+        Sampling time step.
+
+    alpha, beta : float, optional
+        Penalty parameters. If `alpha` is positive, the :math:`\ell^2` norm of the kernel is penalized.
+        If `beta` is positive, the :math:`\ell^2` norm of the kernel's derivative is penalized.
+
     mode : {'g', 'a'}, optional
-        The mode of the penalty. For the `general` case, all points are taken into accout.
-        For the `acceleration` case, the first point is not penalized.
-        Maximum number of iterations for the CG solver. Default is None (no limit).
+        The mode of the penalty.
+        When the mode is *general* (`g`), the derivative is penalized for all times, while
+        for *acceleration* (`a`) mode, time :math:`k = 0` is not penalized.
+
+    atol, btol : float, optional
+        Stopping tolerances.
+        `atol` is the relative tolerance in the entries of the input :math:`x`, and
+        `btol` is the relative tolerance in the entries of the response :math:`y`.
+
+    maxiter, conlim, show : int, int, bool, optional
+        Parameters for the `LSMR` algorithm.
+        See `scipy.sparse.linalg.lsmr` for details.
 
     Attributes
     ----------
-    kernel_ : ndarray
-        The estimated kernel after fitting the model.
+    kernel_ : 1d array of shape (n_samples,)
+        The estimated IRF, or kernel.
+
+    info_ : dict
+        Information about the optimization process, containing the following keys:
+        - `istop`: reason for stopping.
+        - `itn`: number of iterations.
+        - `normr`: the norm of the residual.
+        - `normar`: the norm of the projected residual.
+        - `norma`: the estimate of the Frobenius norm of the matrix.
+        - `conda`: the estimate of the condition number of the matrix.
+        - `normx`: the norm of the solution.
+
+    Examples
+    --------
     '''
 
     def __init__(
         self,
         *,
-        dt:float=1.,
         alpha:float=0.,
         beta:float=0.,
         mode:str='g',
@@ -142,7 +170,8 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         btol:float=1e-6,
         maxiter:int=None,
         conlim:float=1e8,
-        show:bool=False
+        show:bool=False,
+        dt:float=1.,
     ):
         self.alpha = alpha
         self.beta = beta
@@ -155,7 +184,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         self.dt = dt
 
     def fit(self, X, y):
-        r'''
+        '''
         Fit LTI model.
 
         Parameters
@@ -180,6 +209,11 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         if X.shape != y.shape:
             raise ValueError(
                 "X and y must have the same shape."
+            )
+        
+        if self.mode not in ['g', 'a']:
+            raise ValueError(
+                "Mode must be 'g' or 'a'."
             )
 
         # Set up minimization problem.
@@ -216,7 +250,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         return self
 
     def predict(self, X):
-        r'''
+        '''
         Predict response using the fitted LTI model.
         '''
         # Check if fitted.
@@ -234,7 +268,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
             X, self.kernel_[np.newaxis, :], mode='full', axes=1)[:, :X.shape[1]]
 
     def score(self, X, y):
-        r'''
+        '''
         Compute the prediction RMS error.
 
         Parameters
