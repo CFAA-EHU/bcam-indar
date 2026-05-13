@@ -25,8 +25,6 @@ Pole Fitting
     VF
     SuperResolution
     StablePoles
-    pairing
-    dist
 
 Modal Analysis
 --------------
@@ -35,11 +33,5 @@ Modal Analysis
     :toctree: generated
 
     Amplitudes
-    PartialModesMap
     RealModes
     ComplexModes
-    modal_to_system
-    system_to_modal
-    mode_to_amps
-    amps_to_modes
-    extend_couplings

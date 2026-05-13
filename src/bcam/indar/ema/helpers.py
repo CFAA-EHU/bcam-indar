@@ -2,7 +2,7 @@ import attrs
 import numpy as np
 
 
-def pos_imag(x):
+def _pos_imag(x):
     x = np.asarray(x, dtype=complex)
     x[np.imag(x) < 0] = np.conj(x[np.imag(x) < 0])
     return x
@@ -10,7 +10,7 @@ def pos_imag(x):
 @attrs.define
 class Poles:
     real = attrs.field(converter=lambda x: np.asarray(x, dtype=float), default=np.array([]))
-    cx = attrs.field(converter=pos_imag, default=np.array([]))
+    cx = attrs.field(converter=_pos_imag, default=np.array([]))
 
     @classmethod
     def from_raw(cls, poles):

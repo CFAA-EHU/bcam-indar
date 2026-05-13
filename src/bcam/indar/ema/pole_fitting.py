@@ -114,17 +114,101 @@ def _update_sets(gS, gG, idx):
 
 
 class AAA(BaseEstimator):
+    r'''
+    Rational approximation using the AAA algorithm.
+
+    This is an extension of the `AAA algorithm <https://doi.org/10.1137/16M1106122>`_
+    to vector-valued functions using a common-denominator representation.
+    Since this class was created for subsequent use in spectral estimation,
+    it is assumed that the data to be approximated is the DFT of a real signal.
+    Hence, if the data :math:`y` has length :math:`n`, then
+    the rational function :math:`R(z)` satisfies
+
+    .. math:: R\big(e^{2\pi i k / n}\big) \approx y_k,\quad\text{for } k = 0, \ldots, n-1,
+
+    where :math:`y_k = y_{n-k}^*`, and :math:`R(z) = R(z^*)^*`.
+    Because of the symmetry of the data,
+    instead of :math:`\{y_k\}_{k=0}^{n-1}` we work with :math:`\{y_k\}_{k=0}^{N-1}` and
+    the parity :math:`\sigma := n \mod 2` so that :math:`n = 2(N-1) + \sigma`.
+
+    This class is a `sklearn` estimator.
+
+    Parameters
+    ----------
+    order : int
+        Number of poles of the rational function;
+        recall that complex poles come in conjugate pairs.
+        If `order` > `max_order`, where `max_order` :math:`= \lfloor \frac{r\cdot n}{r+1} \rfloor`, and
+        :math:`r` is the rank of the data, that is, :math:`y_k \in \mathbb{C}^r`, then
+        `order` is set to `max_order` and a warning is raised.
+
+    compute_r : bool
+        Whether to compute residues and constant term after fitting poles.
+    
+    prune_tol : float
+        Tolerance for pruning poles based on the norm of their residues.
+        If compute_r=False, then residues are computed for pruning, but not updated or stored.
+
+    d : bool
+        Whether to include a constant term in the rational function.
+    
+    lapack_driver : str
+        LAPACK driver to use for least-squares problems. Should be one of "gelsd", "gelss", or "gelsy". 
+        If None, the default driver is used.
+    
+    cond : float
+        Condition number threshold for rank estimation in least-squares problems.
+        If None, the default threshold is used.
+
+    Attributes
+    ----------
+    poles_ : Poles
+        Poles of the fitted rational function.
+        To access the real or complex poles, use the attributes `poles_.real` and `poles_.cx`, respectively.
+        Only complex poles with positive imaginary part are returned.
+    
+    r_ : HCoeffs
+        Residues of the fitted rational function; only computed if compute_r=True.
+        To access the real or complex residues, use the attributes `r_.real` and `r_.cx`, respectively.
+        Only complex residues associated with complex poles with positive imaginary part are returned.
+    
+    d_ : np.ndarray
+        Constant term of the fitted rational function; only computed if compute_r=True.
+
+    Notes
+    -----
+    A rational function :math:`R(z) = p(z)/q(z)` is of type :math:`(l, m)`
+    if :math:`p(z)` is a vector-valued polynomial of degree :math:`l`, and
+    :math:`q(z)` is a scalar polynomial of degree :math:`m`.
+    When :math:`l = m`, the :math:`R` can be written as
+
+    .. math:: R(z) = d + \frac{p_0(z)}{q(z)},
+
+    where :math:`d` is a constant vector, and :math:`p_0(z)` has degree at most :math:`m-1`;
+    by symmetry, :math:`d` is real.
+    For spectral estimation :math:`d = 0`, however,
+    if the parameter `d` is set to `True`, then :math:`d` is not forced to vanish.
+
+    In the computation of the poles, it is assumed that the (generic) condition that
+    all the roots of :math:`q(z)` are simple is satisfied.
+
+    The AAA algorithm is iterative in the number of poles, and
+    at each step it adds a new support point, so
+    this class stores the indices of the support points for further reuse
+    if the `order` is increased in a subsequent fit.
+    This property is exploited in the construction of stabilization diagrams.
+    '''
 
     def __init__(
-            self,
-            *,
-            order:int=None,
-            compute_r:bool=True,
-            prune_tol:float=0.,
-            d:bool=False,
-            lapack_driver:str=None,
-            cond:float=None
-        ):
+        self,
+        *,
+        order:int=None,
+        compute_r:bool=True,
+        prune_tol:float=0.,
+        d:bool=False,
+        lapack_driver:str=None,
+        cond:float=None
+    ):
         self.order = order
         self.compute_r = compute_r
         self.prune_tol = prune_tol
@@ -133,7 +217,7 @@ class AAA(BaseEstimator):
         self.cond = cond
 
     @staticmethod
-    def count_freqs(idxs, N, parity):
+    def _count_freqs(idxs, N, parity):
         idxs = np.array(idxs)
         idxs = np.sort(idxs)
         n_freqs = 0
@@ -287,7 +371,7 @@ class AAA(BaseEstimator):
     def _fit(self, y, parity, indices):
         N = y.shape[0]
         gS, gG = self._initialize_sets(y, indices)
-        n_freqs = self.count_freqs(gS['index'], N, parity)
+        n_freqs = self._count_freqs(gS['index'], N, parity)
 
         step = 1
         while n_freqs-1 < self.order:
@@ -340,13 +424,13 @@ class AAA(BaseEstimator):
         if self.order is None:
             self.order = rank
         elif self.order > max_order:
-            msg = f'The order exceeds the maximum recommended order {max_order}.'
+            msg = f'The order exceeds the maximum order {max_order}.'
             logger.warning(msg, stacklevel=2)
 
         # If there are already indices from a previous fit, we reuse them.
         if hasattr(self, 'indices_'):
             indices = self.indices_
-            n_freqs = self.count_freqs(indices, N, parity)
+            n_freqs = self._count_freqs(indices, N, parity)
             if n_freqs-1 > self.order:
                 n_freqs = 0
                 i = 0
@@ -397,7 +481,23 @@ class AAA(BaseEstimator):
         return self._predict(X).T
 
 class VF(BaseEstimator):
+    r'''
+    Rational approximation using Vector Fitting (VF).
 
+    This is an implementation of the `VF algorithm <https://doi.org/10.1109/SPI.2006.289202>`_
+    for vector-valued functions using a common-denominator representation.
+    Since this class was created for subsequent use in spectral estimation,
+    it is assumed that the data to be approximated is the DFT of a real signal.
+    Hence, if the data :math:`y` has length :math:`n`, then
+    the rational function :math:`R(z)` satisfies
+
+    .. math:: R\big(e^{2\pi i k / n}\big) \approx y_k,\quad\text{for } k = 0, \ldots, n-1,
+
+    where :math:`y_k = y_{n-k}^*`, and :math:`R(z) = R(z^*)^*`.
+    Because of the symmetry of the data,
+    instead of :math:`\{y_k\}_{k=0}^{n-1}` we work with :math:`\{y_k\}_{k=0}^{N-1}` and
+    the parity :math:`\sigma := n \mod 2` so that :math:`n = 2(N-1) + \sigma`.
+    '''
     def __init__(
         self,
         *,

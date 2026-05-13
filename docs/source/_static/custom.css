@@ -13,6 +13,12 @@
     padding-left: 0.5rem;
 }
 
+/* Add extra space above the Attributes section in docstring rendering (works for Sphinx/NumPy style) */
+dd.field-odd + dt.field-even,
+dd.field-odd + dt.field-even + dd.field-even {
+    margin-top: 1.0em;
+}
+
 /* SciPy-style h1: prefix (module path) small and muted, name below in full size. */
 h1 .h1-prefix {
     display: block;

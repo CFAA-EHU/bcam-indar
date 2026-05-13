@@ -120,28 +120,28 @@ class LTIKernel(BaseEstimator, RegressorMixin):
 
     Parameters
     ----------
-    dt : float
+    dt : float, default=1.0
         Sampling time step.
 
-    alpha, beta : float
+    alpha, beta : float, default=0.0
         If `alpha` is positive, the :math:`\ell^2` norm of the kernel is penalized.
         If `beta` is positive, the :math:`\ell^2` norm of the kernel's derivative is penalized.
 
-    mode : {'g', 'a'}
+    mode : {'g', 'a'}, default='g'
         When the mode is *general* (`g`), the derivative is penalized for all times, while
         for *acceleration* (`a`) mode, time :math:`k = 0` is not penalized.
 
-    atol, btol : float
+    atol, btol : float, default=1e-6
         `atol` is the relative tolerance in the entries of the input :math:`x`, and
         `btol` is the relative tolerance in the entries of the response :math:`y`.
 
-    maxiter, conlim, show : int, int, bool
+    maxiter, conlim, show : int, float, bool
         See :func:`scipy.sparse.linalg.lsmr` for details.
 
     Attributes
     ----------
     kernel_ : array of shape (n_samples,)
-        The estimated IRF, or kernel.
+        Estimated IRF, or kernel.
 
     info_ : dict
         Information about the optimization process, containing the following keys:
@@ -159,6 +159,8 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         - `conda`: the estimate of the condition number of the matrix.
 
         - `normx`: the norm of the solution.
+
+        See :func:`scipy.sparse.linalg.lsmr` for details.
 
     Notes
     -----
@@ -383,9 +385,10 @@ def H1(X, y):
 
     Parameters
     ----------
-    X : array-like of shape (n_repetitions, n_time_samples).
+    X : array-like of shape (n_repetitions, n_time_samples)
         Input data.
-    y : array-like of shape (n_repetitions, n_time_samples).
+
+    y : array-like of shape (n_repetitions, n_time_samples)
         True response data.
 
     Returns

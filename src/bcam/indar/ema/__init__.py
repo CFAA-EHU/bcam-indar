@@ -23,7 +23,7 @@ The Impulse Response Function (IRF) is a matrix-valued time series, but
 for mechanical systems it acquires a special structure, in particular,
 it is an exponential sum.
 
-In step 2 the Impulse Response Function (IRF) is approximated by an exponential sum, so
+In step 2 the IRF is approximated by an exponential sum, so
 the package offers methods to estimate the exponents and the number of terms in the sum.
 However, not every exponential sum is a valid IRF of a mechanical system, and
 the amplitudes must have a special form.
