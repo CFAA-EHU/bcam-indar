@@ -904,6 +904,67 @@ def _std_new(x, ns):
     return np.sqrt(np.mean(dist(x, mean, ns)**2))
 
 class StablePoles:
+    r'''
+    Stabilization diagram.
+
+    This class helps to identify stable poles across different orders of spectral estimation.
+    Since the algorithm tends to find more stable poles than really exist,
+    post-processing is recommended.
+
+    Parameters
+    ----------
+    model: BaseEstimator
+        Rational model to be used for spectral estimation.
+        This package offers AAA and VF, but custom estimators could be used.
+
+    max_order: int
+        Maximum order of the exponential sum.
+        Recall that complex poles come in conjugate pairs, so they count as two.
+
+    radius: float, optional
+        Maximum threshold for adding poles to a cluster.
+        If None, the radius is set to :math:`d(0, 0.5)`; see Notes for details.
+
+    min_scale: int, default=-10
+        Lowest amplitude level for clustering; see Notes for details.
+
+    Attributes
+    ----------
+
+    clusters_ : list of dict
+        List of clusters of poles.
+        Each cluster is a dictionary where the keys are the orders of the poles and the values are the poles themselves.
+        The clusters are sorted by decreasing number of poles.
+        If two clusters have the same size, then they are sorted increasing
+        standard deviation of the poles.
+
+    clusters_amps_ : list of dict
+        List of clusters of amplitudes corresponding to the poles in `clusters_`.
+        Only the norm of the amplitudes is stored.
+    
+    Notes
+    -----
+    The clustering algorithm first groups poles by the norm of the amplitudes, so
+    if :math:`A` is the largest amplitude accross all orders, then
+    the levels are defined as the (non-disjoint) intervals :math:`[A/2^{k+3}, A/2^k]` for :math:`k = 0, 1, \ldots`.
+    Then, the algorithm sets all the poles at order `max_order` as seeds for clustering.
+    At each step, starting from the highest order and downwards, all the poles at
+    the given order --- and within the same amplitude level --- are added to
+    their closest cluster if they are within the given `radius` from it;
+    unassigned poles are set as seeds for new clusters.
+    Finally, clusters with less than 25% of the total number of orders are discarded.
+
+    To measure the distance between poles, we use the following metric:
+
+    .. math::
+
+        d(p, q) = \sqrt{\frac{1}{n}\sum_{k=0}^{n-1} |p^k - q^k|^2}
+
+    where :math:`n` is the length of the signal to be approximated.
+    This distance is motivated by the fact that the poles are used to construct exponential sums, so
+    it is more meaningful to measure the distance between poles in terms of their effect on the exponential sum
+    rather than their Euclidean distance in the complex plane.
+    '''
 
     def __init__(
         self,
@@ -1030,6 +1091,18 @@ class StablePoles:
         return clusters
 
     def fit(self, y):
+        '''
+        Fit exponential sums and find clusters.
+
+        Parameters
+        ----------
+        y : array-like, shape (n_time_samples, n_channels)
+            Time series to be approximated by exponential sums.
+
+        Returns
+        -------
+        self : object
+        '''
         ns, rank = y.shape
         self._ns = ns
 
@@ -1094,10 +1167,23 @@ class StablePoles:
                 amps_c[order] = self.amps_set_[order][idx]
             amps.append(amps_c)
         return amps
-    
+
     def clusters_stats(self):
+        '''
+        Get statistics of the clusters.
+        
+        Returns
+        -------
+        stats : pandas.DataFrame
+            DataFrame containing the statistics of the clusters.
+
+        Raises
+        ------
+        ValueError
+            If fit() has not been run.
+        '''
         if not hasattr(self, 'clusters_'):
-            raise ValueError('You must run find_clusters() first.')
+            raise ValueError('You must run fit() first.')
 
         columns = ['number', 'pole', 'pole cv.', 'amp.', 'amp. cv.', 'highest order', 'lowest order']
         stats = {c: [] for c in columns}
@@ -1113,9 +1199,24 @@ class StablePoles:
 
         return pd.DataFrame(stats)
 
-    def plot_poles(self, scale, ax=None):
+    def plot_poles(self, level, ax=None):
+        '''
+        Plot poles at a given level.
+        
+        Parameters
+        ----------
+        level : float
+            Level to plot poles.
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot on. If None, a new figure and axes are created.
+
+        Raises
+        ------
+        ValueError
+            If fit() has not been run.
+        '''
         if not hasattr(self, 'amps_set_'):
-            raise ValueError('You must run find_clusters() first.')
+            raise ValueError('You must run fit() first.')
 
         if ax is None:
             _, ax = plt.subplots(nrows=1)
@@ -1126,7 +1227,7 @@ class StablePoles:
 
         # Compute maximum amplitude across all orders.
         grand_max = np.max([e[0] for e in self.amps_set_.values()])
-        level = grand_max / (2**scale)
+        level = grand_max / (2**level)
 
         poles_scale = {}
         for order, set_ in self.amps_set_.items():
@@ -1159,8 +1260,23 @@ class StablePoles:
             plt.show()
 
     def plot_clusters(self, clusters=None, ax=None):
+        '''
+        Plot clusters of poles.
+        
+        Parameters
+        ----------
+        clusters : list of int, optional
+            List of cluster indices to plot. If None, all clusters are plotted.
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot on. If None, a new figure and axes are created.
+
+        Raises
+        ------
+        ValueError
+            If fit() has not been run.
+        '''
         if not hasattr(self, 'clusters_'):
-            raise ValueError('You must run find_clusters() first.')
+            raise ValueError('You must run fit() first.')
 
         clusters = clusters if clusters is not None else range(len(self.clusters_))
         if ax is None:
