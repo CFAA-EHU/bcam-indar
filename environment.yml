@@ -8,22 +8,22 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.13
+  - python=3.11
   - attrs
   - pytest
   - numpy=2.4
   - scipy=1.17
   - scikit-learn=1.8
-  - pandas
-  - matplotlib
-  - sympy
+  - pandas=3.0
+  - matplotlib=3.10
+  - sympy=1.14
   - sphinx
   - numpydoc
   - pip
   - pip:
     - hatch
     - hatch-requirements-txt
-    - jitcode
-    - symengine
+    - jitcode==1.7
+    - symengine==0.14
     - pip-tools
     - sphinx-nefertiti

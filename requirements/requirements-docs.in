@@ -1,3 +1,3 @@
-sphinx
-sphinx-nefertiti
-numpydoc
+sphinx>=9.0
+sphinx-nefertiti>=0.9
+numpydoc>=1.10

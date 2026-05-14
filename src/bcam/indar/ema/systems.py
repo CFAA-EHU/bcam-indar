@@ -4,8 +4,8 @@ import numpy as np
 import scipy
 import jitcode
 
+from .mechanical import system_to_modal
 
-# === Systems ===
 
 class Beam:
 
@@ -119,6 +119,128 @@ def _validate_dims(M, C, K, check_symmetry=True):
             raise ValueError(msg)
     
     return M, C, K
+
+class Spring:
+
+    def __init__(self, M, C, K, force=None):
+        '''Simulate a linear vibrating system.
+
+        Set up an object representing a linear system
+        to be used in JiTCODE.
+        '''
+        self.M, self.C, self.K = _validate_dims(M, C, K)
+        self.force = np.zeros(self.M.shape[0]) if force is None else np.array(force, ndmin=1)
+        if len(self.force) != self.M.shape[0]:
+            msg = f'Expected a force with {self.M.shape[0]}-DoF,\
+                got {len(self.force)} instead.'
+            raise ValueError(msg)
+
+        Minv = np.linalg.inv(self.M)
+        self._A = Minv @ C
+        self._B = Minv @ K
+        self._force = Minv @ self.force
+
+    def __iter__(self):
+        y = jitcode.y
+        dofs = self.M.shape[0]
+        q = [y(i) for i in range(dofs)]
+        p = [y(i + dofs) for i in range(dofs)]
+        for i in range(dofs):
+            yield p[i]
+        for i in range(dofs):
+            tmp = -sum(self._B[i, j] * q[j] for j in range(dofs))
+            tmp += -sum(self._A[i, j] * p[j] for j in range(dofs))
+            tmp += self._force[i]
+            yield tmp
+
+    def __len__(self):
+        return 2 * self.M.shape[0]
+
+
+def randomSystem(
+    masses, dampings, roots,
+    damping_type='prop', seed=None):
+    '''Generate a random linear vibrating system.
+
+    Parameters
+    ----------
+    dofs : int
+        Number of degrees of freedom.
+    masses : tuple, optional
+        Range for mass values.
+    dampings : tuple, optional
+        Range for damping ratios.
+    roots : tuple, optional
+        Range for natural frequencies.
+    damping_type : str, optional
+        Type of damping ('prop' for proportional, 'nop' for non-proportional).
+    seed : int, optional
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    mechanical : dict
+        Dictionary containing mass, damping, and stiffness matrices.
+    modal : dict
+        Dictionary containing mode shapes (mass normalized) and roots.
+    '''
+    m = np.asarray(masses)
+    zeta = np.asarray(dampings)
+    freqs = np.asarray(roots)
+    dofs = len(freqs)
+    # Raise an exception if the lengths are different.
+    if (len(m) != dofs) or (len(zeta) != dofs):
+        msg = 'Incompatible lengths for masses, dampings, and roots.'
+        raise ValueError(msg)
+
+    # Generate rotation matrices.
+    if dofs > 1:
+        U = scipy.stats.ortho_group(dim=dofs, seed=seed)
+        Um = U.rvs()
+        Uk = U.rvs()
+        if damping_type == 'prop':
+            Uc = Uk
+        elif damping_type == 'nop':
+            Uc = U.rvs()
+        else:
+            msg = 'Invalid damping type. Choose between `prop` and `nop`.'
+            raise ValueError(msg)
+    else:
+        Um = np.array([[1]])
+        Uk, Uc = Um, Um
+    
+    modes_ = Um @ np.diag(1 / np.sqrt(m))
+    invModes_ = np.diag(np.sqrt(m)) @ Um.T
+    M = Um @ np.diag(m) @ Um.T
+    C = invModes_.T @ Uc @ np.diag(2*zeta*freqs) @ Uc.T @ invModes_
+    K = invModes_.T @ Uk @ np.diag(freqs**2) @ Uk.T @ invModes_
+    normal_modes = modes_ @ Uk
+
+    if damping_type == 'prop':
+        mode_shapes = normal_modes
+        Z = freqs*(-zeta + 1j*np.sqrt(1-zeta**2))
+    else:
+        A = normal_modes.T @ C @ normal_modes
+        B = np.diag(freqs**2)
+        mode_shapes, Z = system_to_modal(np.eye(dofs), A, B)
+        mode_shapes = normal_modes @ mode_shapes
+
+    # Sort by size of complex frequency.
+    idxs = np.argsort(np.abs(Z))
+    mode_shapes = mode_shapes[:, idxs]
+    Z = Z[idxs]
+
+    mechanical = {
+        'mass': M,
+        'damping': C,
+        'stiffness': K
+    }
+    modal = {
+        'frequencies': Z,
+        'mode_shapes': mode_shapes
+    }
+    return mechanical, modal
+
 
 class Spring:
 

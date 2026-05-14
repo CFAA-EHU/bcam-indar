@@ -3,7 +3,7 @@ import pytest
 import numpy as np
 import scipy
 
-from bcam.indar.ema import mechanical, derivatives
+from bcam.indar.ema import mechanical, derivatives, randomSystem
 
 # Derivatives tests
 # -----------------
@@ -370,7 +370,7 @@ class TestAmplitudes:
 
         dof = 3
         if dof > 0:
-            modal = mechanical.randomSystem(
+            modal = randomSystem(
                 masses=rng.uniform(0.1, 0.2, dof),
                 dampings=rng.uniform(0.02, 0.05, dof),
                 roots=rng.uniform(2*np.pi*1, 2*np.pi*20, dof),
