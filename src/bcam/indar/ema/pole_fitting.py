@@ -964,6 +964,9 @@ class StablePoles:
     This distance is motivated by the fact that the poles are used to construct exponential sums, so
     it is more meaningful to measure the distance between poles in terms of their effect on the exponential sum
     rather than their Euclidean distance in the complex plane.
+
+    Examples
+    --------
     '''
 
     def __init__(
