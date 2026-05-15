@@ -82,14 +82,11 @@ class Kernel:
         self,
         roots,
         amps,
-        fs:float=1.0,
         response:str='a',
-        discrete:str='delta'
     ):
         self.roots = np.atleast_1d(roots)
         self.amps = np.atleast_2d(amps)
         self.response = response
-        self.discrete = discrete
 
         if roots.ndim > 1:
             msg = 'Expected a 1D-array for roots.'
@@ -103,26 +100,13 @@ class Kernel:
             msg = f'Unknown response type: {response}'
             raise ValueError(msg)
 
-        if discrete not in ['delta', 'step']:
-            msg = f'Unknown discrete type: {discrete}'
-            raise ValueError(msg)
-
         self._factor = np.ones_like(self.roots)
-        if discrete == 'delta':
-            if response == 'd':
-                pass
-            elif response == 'v':
-                self._factor *= self.roots
-            elif response == 'a':
-                self._factor *= self.roots**2
-        elif discrete == 'step':
-            self._factor *= (np.exp(self.roots/fs) - 1)*fs
-            if response == 'd':
-                self._factor *= 1 / self.roots
-            elif response == 'v':
-                pass
-            elif response == 'a':
-                self._factor *= self.roots
+        if response == 'd':
+            pass
+        elif response == 'v':
+            self._factor *= self.roots
+        elif response == 'a':
+            self._factor *= self.roots**2
 
     def __call__(self, t):
         t = np.atleast_1d(t)

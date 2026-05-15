@@ -941,7 +941,7 @@ class SuperResolution(BaseEstimator):
     def fit(self, y):
         '''
         Fit exponential sum.
-        
+
         Parameters
         ----------
         y : array-like, shape (n_samples, n_channels)
