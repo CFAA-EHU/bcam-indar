@@ -130,8 +130,8 @@ def test_reshape_modes():
     z0 = 0.01*rng.normal(size=(n_out, dof))
     z0 = np.triu(z0, k=1)
     z0[:n_out, :n_out] = z0[:n_out, :n_out] - z0[:n_out, :n_out].T
-    x = mechanical.reshape_modes_output(x0, z0)
-    x0_, z0_ = mechanical.reshape_modes_input(x, dof, n_out)
+    x = mechanical._reshape_modes_output(x0, z0)
+    x0_, z0_ = mechanical._reshape_modes_input(x, dof, n_out)
 
     assert np.allclose(x0_, x0), np.allclose(z0_, z0)
 

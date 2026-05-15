@@ -672,7 +672,7 @@ class Amplitudes(BaseEstimator):
 
         # Define functions for predictions
         self._kernel = Kernel(
-            roots=np.log(self.mech_poles)*self.fs,
+            nat_freqs=np.log(self.mech_poles)*self.fs,
             amps=self.tensor_modes_,
             response=self.response
         )
@@ -782,7 +782,7 @@ class Amplitudes(BaseEstimator):
 # Modal Parameters
 # =================================
 
-def reshape_modes_input(x, dof:int, n_out:int):
+def _reshape_modes_input(x, dof:int, n_out:int):
     '''
     Transform 1darray into (x, z) for use in PartialModesMap.
     '''
@@ -802,7 +802,7 @@ def reshape_modes_input(x, dof:int, n_out:int):
 
     return X, Z
 
-def reshape_modes_output(X, Z):
+def _reshape_modes_output(X, Z):
     '''
     Transform (x, z) into 1darray compatible with scipy.optimize.
 
@@ -825,11 +825,11 @@ def reshape_modes_output(X, Z):
 
     return x
 
-def basis_iterator(n_out:int, dof:int):
+def _basis_iterator(n_out:int, dof:int):
     e = np.zeros(2*n_out*dof - n_out*(n_out+1)//2)
     e[0] = 1
     for _ in range(len(e)):
-        yield reshape_modes_input(e, dof, n_out)
+        yield _reshape_modes_input(e, dof, n_out)
         e = np.roll(e, 1)
 
 def mode_to_amps(modes, n_out, n_in):
@@ -1274,7 +1274,7 @@ class RealModes:
     '''
     Fit mode shapes with proportional damping.
 
-    After estimating the amplitudes with ``Amplitudes``,
+    After estimating the amplitudes with :class:`Amplitudes`,
     
     Parameters
     ----------
@@ -1440,7 +1440,7 @@ class RealModes:
         # Define functions for predictions
         amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
         self._irf = Kernel(
-            roots=np.log(self.poles)*self.fs,
+            nat_freqs=np.log(self.poles)*self.fs,
             amps=amps_fit,
             response=self.response
         )
@@ -1465,7 +1465,7 @@ class RealModes:
 
 
 
-class ConstraintModifier:
+class _ConstraintModifier:
 
     def __init__(self, shift, scale):
         self.shift = shift
@@ -1504,7 +1504,7 @@ class ConstraintModifier:
                 return f((x - self.shift)/self.scale)/self.scale
             return f_
 
-class ScalarComposition:
+class _ScalarComposition:
 
     def __init__(self, scalar, f, df, d2f, dim):
         self.scalar = scalar
@@ -1602,7 +1602,7 @@ class ComplexModes:
 
     def _fun(self, x):
         n_out, n_in, dof = self.amps.shape
-        x_, z_ = reshape_modes_input(x, dof, n_out)
+        x_, z_ = _reshape_modes_input(x, dof, n_out)
 
         modes = self._modes_map(x_, z_)
         if isinstance(modes, float):
@@ -1624,7 +1624,7 @@ class ComplexModes:
 
     def _jac(self, x):
         n_out, n_in, dof = self.amps.shape
-        x_, z_ = reshape_modes_input(x, dof, n_out)
+        x_, z_ = _reshape_modes_input(x, dof, n_out)
 
         modes = self._modes_map(x_, z_)
         d_modes = self._modes_map.jac(x_, z_)
@@ -1636,7 +1636,7 @@ class ComplexModes:
         diff = 2*np.einsum('ijk,kl->ijl', diff, self._metric)
 
         jac = [np.einsum('ijl,ijl', diff, self._jac_amps(modes, d_modes(dx, dz)))
-               for dx, dz in basis_iterator(n_out, dof)]
+               for dx, dz in _basis_iterator(n_out, dof)]
         return np.array(jac)
 
     def _hessp_amp(self, modes, pd_modes, d_modes, d2_modes):
@@ -1653,8 +1653,8 @@ class ComplexModes:
 
     def _hessp(self, x, p):
         n_out, n_in, dof = self.amps.shape
-        x_, z_ = reshape_modes_input(x, dof, n_out)
-        px, pz = reshape_modes_input(p, dof, n_out)
+        x_, z_ = _reshape_modes_input(x, dof, n_out)
+        px, pz = _reshape_modes_input(p, dof, n_out)
 
         modes = self._modes_map(x_, z_)
         amps = mode_to_amps(modes, n_out, n_in)
@@ -1676,33 +1676,33 @@ class ComplexModes:
                 'ijk,kl,ijl->', pd_amps, self._metric, d_amps)
             return d2_dist
 
-        hessp = [hess_f(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+        hessp = [hess_f(dx, dz) for dx, dz in _basis_iterator(n_out, dof)]
         return np.array(hessp)
 
     def _get_constraints(self):
         n_out, _, dof = self.amps.shape
 
         def constr_fun(x):
-            x_, z_ = reshape_modes_input(x, dof, n_out)
+            x_, z_ = _reshape_modes_input(x, dof, n_out)
             return self._modes_map.constraints(x_, z_)
 
         def constr_jac(x):
-            x_, z_ = reshape_modes_input(x, dof, n_out)
+            x_, z_ = _reshape_modes_input(x, dof, n_out)
             jac = self._modes_map.jac_constraints(x_, z_)
-            jac = [jac(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+            jac = [jac(dx, dz) for dx, dz in _basis_iterator(n_out, dof)]
             return np.array(jac).T
 
         def constr_hessp(x, p):
-            x_, z_ = reshape_modes_input(x, dof, n_out)
-            px, pz = reshape_modes_input(p, dof, n_out)
+            x_, z_ = _reshape_modes_input(x, dof, n_out)
+            px, pz = _reshape_modes_input(p, dof, n_out)
             hessp = self._modes_map.hessp_constraints(x_, z_, px, pz)
-            hessp = [hessp(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+            hessp = [hessp(dx, dz) for dx, dz in _basis_iterator(n_out, dof)]
             return np.array(hessp).T
 
         dim = 2*n_out*dof - n_out*(n_out+1)//2
         shift = self._ref_constr + np.array([0.5, -1., -1.])
-        scalar_f = ConstraintModifier(shift, 0.1)
-        constraints = ScalarComposition(
+        scalar_f = _ConstraintModifier(shift, 0.1)
+        constraints = _ScalarComposition(
             scalar_f, constr_fun, constr_jac, constr_hessp, (3, dim))
 
         def constr_hess(x, v):
@@ -1738,7 +1738,7 @@ class ComplexModes:
 
         res = scipy.optimize.minimize(
             self._fun,
-            x0=reshape_modes_output(*x0),
+            x0=_reshape_modes_output(*x0),
             method='trust-constr',
             jac=self._jac,
             hessp=self._hessp,
@@ -1747,13 +1747,13 @@ class ComplexModes:
             callback=callback
         )
         n_out, n_in, dof = self.amps.shape
-        self._raw_modes_fit = reshape_modes_input(res.x, dof, n_out)
+        self._raw_modes_fit = _reshape_modes_input(res.x, dof, n_out)
         self.optRes_ = res
 
         # Define functions for predictions
         amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
         self._irf = Kernel(
-            roots=np.log(self.poles)*self.fs,
+            nat_freqs=np.log(self.poles)*self.fs,
             amps=amps_fit,
             response=self.response
         )
