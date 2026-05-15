@@ -77,3 +77,17 @@ html_css_files = ['custom.css']
 html_js_files = [
     ('custom.js', {'priority': 100}),
 ]
+
+# -- Math rendering options --------------------------------------------------
+mathjax4_config = {
+    'tex': {
+        'macros': {
+            'im': [r'\text{Im}', 0],
+            're': [r'\text{Re}', 0],
+            # Norm macros: ||v||, with different sizes
+            'norm': [r'\lVert #1 \rVert', 1],
+            'bignorm': [r'\Bigl\lVert #1 \Bigr\rVert', 1],
+            'Bignorm': [r'\biggl\lVert #1 \biggr\rVert', 1],
+        }
+    }
+}

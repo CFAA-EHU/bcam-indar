@@ -320,8 +320,8 @@ def test_trig_fft():
     n = 10
     x = rng.normal(size=n)
     x = x - np.mean(x)
-    x_fft = mechanical.trig_fft(x)
-    x_ifft = mechanical.trig_ifft(x_fft)
+    x_fft = mechanical._trig_fft(x)
+    x_ifft = mechanical._trig_ifft(x_fft)
     assert np.allclose(x, x_ifft)
 
 class TestAmplitudes:
@@ -357,8 +357,8 @@ class TestAmplitudes:
 
         x = rng.normal(
             size=(n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof - 1))
-        ix = mechanical.reshape_injection_sym(x, n_out=n_out, n_in=n_in)
-        pix = mechanical.reshape_projection_sym(ix)
+        ix = mechanical._reshape_injection_sym(x, n_out=n_out, n_in=n_in)
+        pix = mechanical._reshape_projection_sym(ix)
 
         assert np.allclose(x, pix)
 

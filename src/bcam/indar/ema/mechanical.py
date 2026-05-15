@@ -22,7 +22,7 @@ def _sum_exp_weighted(z, ns:int):
     z[~sl] = sum((ns-i)*(z[~sl]**i) for i in range(ns))
     return z/ns**2
 
-def trig_fft(x):
+def _trig_fft(x):
     '''
     Trigonometric expansion of a real signal.
     '''
@@ -42,7 +42,7 @@ def trig_fft(x):
     x_hat = np.concatenate(x_hat, axis=-1)
     return x_hat
 
-def trig_ifft(x):
+def _trig_ifft(x):
     '''
     Inverse trigonometric expansion of a real signal.
     '''
@@ -91,9 +91,9 @@ def _metric_amps(
     dim_c = 2*dof - 1 if dof > 0 else 0
     m_r_r = np.zeros((dim_c, dim_c))
     m_r_r[:dof, :dof] = np.real(m1 - m2)
-    m_r_r[dof:, :dof] = trig_fft(np.imag(m1 + m2).T)[..., 1:].T
+    m_r_r[dof:, :dof] = _trig_fft(np.imag(m1 + m2).T)[..., 1:].T
     m_r_r[:dof, dof:] = m_r_r[dof:, :dof].T
-    m_r_r[dof:, dof:] = trig_fft(trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
+    m_r_r[dof:, dof:] = _trig_fft(_trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
     m_r_r *= 0.5
 
     # Block (exps, roots).
@@ -116,8 +116,8 @@ def _metric_amps(
     m_r_f = np.zeros((2*n_c, dim_c))
     m_r_f[:n_c, :dof] = np.imag(m1 + m2)
     m_r_f[n_c:, :dof] = np.real(m1 - m2)
-    m_r_f[:n_c, dof:] = trig_fft(np.real(m1 + m2))[..., 1:]
-    m_r_f[n_c:, dof:] = trig_fft(np.imag(-m1 + m2))[..., 1:]
+    m_r_f[:n_c, dof:] = _trig_fft(np.real(m1 + m2))[..., 1:]
+    m_r_f[n_c:, dof:] = _trig_fft(np.imag(-m1 + m2))[..., 1:]
     m_r_f *= 0.5
 
     # Block (reals, roots).
@@ -125,7 +125,7 @@ def _metric_amps(
 
     m_r_fr = np.zeros((n_r, dim_c))
     m_r_fr[:, :dof] = np.imag(m1)
-    m_r_fr[:, dof:] = trig_fft(np.real(m1))[..., 1:]
+    m_r_fr[:, dof:] = _trig_fft(np.real(m1))[..., 1:]
 
     # Block (exps, exps).
     def _mult(x, y):
@@ -228,7 +228,7 @@ class _AmplitudesNormal:
                 'ijt,kt->ijk',
                 y, prod(np.arange(ns)))
             r1 = np.concatenate(
-                [np.imag(r1), trig_fft(np.real(r1))[..., 1:]],
+                [np.imag(r1), _trig_fft(np.real(r1))[..., 1:]],
                 axis=-1)
         else:
             r1 = np.zeros((n_out, n_in, 0), dtype=y.dtype)
@@ -262,7 +262,7 @@ class _AmplitudesNormal:
         r1, r2, r3 = np.real(r1), np.real(r2), np.real(r3)
         if (n_c == 0) and (n_r == 0):
             # Project to space of 'symmetric' matrices.
-            return reshape_projection_sym(r1).T
+            return _reshape_projection_sym(r1).T
         elif dof == 0:
             r = np.concatenate([r2, r3], axis=-1)
             r = r.reshape(-1, 2*n_c+n_r)
@@ -309,7 +309,7 @@ class _AmplitudesNormal:
                 self._rhs(y),
                 assume_a='pos').T
 
-            r1 = reshape_injection_sym(r[:, :dim_c], n_out, n_in)
+            r1 = _reshape_injection_sym(r[:, :dim_c], n_out, n_in)
             r2, r3 = None, None
         elif dof == 0:
             r = scipy.linalg.solve(
@@ -371,7 +371,7 @@ class _AmplitudesNormal:
         else:
             r = np.concatenate(
                 [np.zeros((*r1.shape[:2], 1)), r1[..., dof:]], axis=-1)
-            r = trig_ifft(r).astype(np.complex128)
+            r = _trig_ifft(r).astype(np.complex128)
             self.tensor_modes_ = r1[..., :dof] + 1j*r
 
         # Store amplitudes for residual poles.
@@ -385,7 +385,7 @@ class _AmplitudesNormal:
         return self
 
 
-def reshape_injection_sym(x, n_out:int, n_in:int):
+def _reshape_injection_sym(x, n_out:int, n_in:int):
     '''
     2darray (n_in*(n_in+1)//2 + (n_out-n_in)*n_in, dof) to 3darray (n_out, n_in, dof).
 
@@ -408,7 +408,7 @@ def reshape_injection_sym(x, n_out:int, n_in:int):
         x_[n_in:, :] = x[c: c+(n_out-n_in)*n_in].reshape(n_out-n_in, n_in, -1)
     return x_
 
-def reshape_projection_sym(x):
+def _reshape_projection_sym(x):
     '''
     3darray (n_out, n_in, dof) to 2darray (flatten*, dof).
 
@@ -489,23 +489,23 @@ def _fit_amplitudes_stable(
     Vm *= v[np.newaxis, :]
     Vm *= np.sqrt((1 - np.arange(ns)[:, np.newaxis]/ns)/ns)
     Vm = np.concatenate(
-        (np.imag(Vm), trig_fft(np.real(Vm))[:, 1:]), axis=1)
+        (np.imag(Vm), _trig_fft(np.real(Vm))[:, 1:]), axis=1)
 
     y *= np.sqrt((1 - np.arange(ns)[np.newaxis, np.newaxis, :]/ns)/ns)
 
     # Symmetric part.
-    ys = reshape_projection_sym(y)
+    ys = _reshape_projection_sym(y)
     r = scipy.linalg.lstsq(
         np.concatenate((V, Vm), axis=1), ys.T,
         overwrite_a=True, overwrite_b=True,
         cond=cond, lapack_driver=lapack_driver)[0].T
     del ys
-    r = reshape_injection_sym(r, n_out, n_in)
+    r = _reshape_injection_sym(r, n_out, n_in)
 
     # Divide result between mechanical and residual matrices.
     r_r, r_m = r[..., :2*n_c+n_r], r[..., 2*n_c+n_r:]
     imag_r = np.pad(r_m[..., dof:], pad_width=((0, 0), (0, 0), (1, 0)))
-    r_m = r_m[..., :dof] + 1j*trig_ifft(imag_r).astype(np.complex128)
+    r_m = r_m[..., :dof] + 1j*_trig_ifft(imag_r).astype(np.complex128)
     tensor_modes_ = r_m
 
     # Antisymmetric part of residue.
@@ -525,6 +525,82 @@ def _fit_amplitudes_stable(
 
 
 class Amplitudes(BaseEstimator):
+    r'''
+    Fit amplitudes to MIMO exponential sums with fixed frequencies.
+
+    If :math:`h` is an exponential sum representing a noisy Impulse Response Function (IRF), then
+
+    .. math::
+        \begin{split}
+            h_{k, ij}
+            &= \im\Big(\sum_{l=1}^{n} A^l_{ij}\lambda_l^\nu s_l^k\Big) + \sum_{m}C^m_{ij}s_{b, m}^k \\
+            &= \text{estimated IRF} + \text{background},
+        \end{split}
+    
+    where :math:`n` are the number of Degrees of Freedom (DoF),
+    :math:`\lambda_l` are the frequencies representing the modes of the mechanical system,
+    :math:`s_l = e^{\lambda_l dt}` are the corresponding poles,
+    :math:`s_{b, m}` are the poles representing the background (includes the noise), and
+    :math:`A^l_{ij}` and :math:`C^m_{ij}` are the corresponding amplitudes.
+    The exponent :math:`\nu` depends on the type of response (displacement (0), velocity (1), or acceleration (2)).
+
+    The mechanical amplitudes :math:`A^l_{ij}` satisfy Maxwell's reciprocity theorem, that is,
+    :math:`A^l_{ij} = A^l_{ji}`, and
+    also the necessary condition :math:`\sum_l \im(A^l_{ij}) = 0` for all :math:`i, j`.
+
+    By convention, mechanical frequencies have positive imaginary part.
+    Since the IRF is real, the poles and amplitudes of the background should be either real or come in complex conjugate pairs.
+
+    Parameters
+    ----------
+    mech_poles : array-like of complex, shape (n_dof,), optional
+        Poles representing the mechanical modes. If None, no mechanical modes are fitted.
+
+    res_poles : tuple of array-like, optional
+        Poles representing the background (residual).
+        The first element is an array of real poles, and
+        the second element is an array of complex poles.
+        If None, no background is fitted.
+
+    fs : float, default=1.
+        Sampling frequency (:math:`1/dt`).
+
+    response : {'a', 'v', 'd'}, default='a'
+        Type of response: 'a' for acceleration, 'v' for velocity, 'd' for displacement.
+
+    cond : float or None, optional
+        Condition number for least-squares solver. If None, machine precision is used.
+
+    solver : {'normal', 'gelsd', 'gelss', 'gelsy'}, default='gelsd'
+        Solver to use for least-squares problems. 'normal' uses the normal equations, while
+        the others use different LAPACK drivers for more stable solutions.
+
+    Attributes
+    ----------
+    tensor_modes_ : array, shape (n_outputs, n_inputs, n_dof)
+        Amplitudes of the mechanical modes.
+
+    amps_ : HCoeffs
+        Amplitudes of the background (residual) poles,
+        with attributes 'real' and 'cx' for real and complex poles, respectively.
+
+    Notes
+    -----
+    If :math:`h` are the data, and :math:`\hat{h}` is the estimated noisy IRF, then
+    the least squares problem is solved using the Hilbert--Schmidt norm, that is,
+    the objective function is proportional to
+
+    .. math::
+        \norm{h - \hat{h}}^2_{\mathrm{HS}} = \sum_{i, j}\sum_{k=0}^{N-1} (N-k)(h_{k, ij} - \hat{h}_{k, ij})^2.
+
+    This norm gives more weight to the earlier part of the IRF, which
+    appear more often when computing the output given an input.
+
+    When the IRF is accelerance, then
+    the IRF contains a mass-term which introduces a Dirac delta at time zero,
+    so the background will also contain this term, but
+    the Dirac delta is approximated by frequencies with very high damping.
+    '''
 
     def __init__(
         self,
@@ -544,6 +620,19 @@ class Amplitudes(BaseEstimator):
         self.solver = solver
 
     def fit(self, y):
+        '''
+        Fit amplitudes.
+
+        Parameters
+        ----------
+        y : array-like, shape (n_outputs, n_inputs, n_samples)
+            Data to fit representing the IRF.
+
+        Returns
+        -------
+        self : object
+            Fitted estimator.
+        '''
 
         self.mech_poles = np.array([], dtype=complex) if self.mech_poles is None \
             else np.asarray(self.mech_poles)
@@ -598,9 +687,35 @@ class Amplitudes(BaseEstimator):
         return self
 
     def predict(self, X):
+        '''
+        Predict the noisy IRF.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Time samples.
+
+        Returns
+        -------
+        K : array-like, shape (n_outputs, n_inputs, n_samples)
+            Predicted noisy IRF.
+        '''
         return self.irf_pred(X) + self.residual(X)
 
     def residual(self, X):
+        '''
+        Predict background or residual.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Time samples.
+        
+        Returns
+        -------
+        K : array-like, shape (n_outputs, n_inputs, n_samples)
+            Predicted background.
+        '''
         n_out, n_in = self.tensor_modes_.shape[:2]
 
         X = np.atleast_1d(X)
@@ -614,6 +729,21 @@ class Amplitudes(BaseEstimator):
         return K
 
     def irf_pred(self, X):
+        '''
+        Predict IRF.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Time samples.
+        
+        Returns
+        -------
+        K : array-like, shape (n_outputs, n_inputs, n_samples)
+            Predicted IRF.
+            In case of accelerance, returns IRF without the mass-term.
+        '''
+
         n_out, n_in = self.tensor_modes_.shape[:2]
 
         X = np.atleast_1d(X)
@@ -626,6 +756,22 @@ class Amplitudes(BaseEstimator):
         return K
 
     def score(self, X, y):
+        '''
+        Return the coefficient of determination R^2 of the prediction.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Time samples.
+        y : array-like, shape (n_outputs, n_inputs, n_samples)
+            True values.
+
+        Returns
+        -------
+        score : float
+            Coefficient of determination.
+        '''
+
         # y must have the same sampling rate.
         ns = X.shape[0]
         y_pred = self.predict(X)
