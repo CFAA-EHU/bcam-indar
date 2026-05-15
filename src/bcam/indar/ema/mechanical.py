@@ -1271,6 +1271,39 @@ def _metric_amps_modes(poles, ns, response='a'):
     return np.real(m_r_r)
 
 class RealModes:
+    '''
+    Fit mode shapes with proportional damping.
+
+    After estimating the amplitudes with ``Amplitudes``,
+    
+    Parameters
+    ----------
+    poles : 1D-array
+        Modal frequencies.
+    
+    amps : 3D-array, shape (n_outputs, n_inputs, dof)
+        Amplitudes for each output-input pair and mode.
+    
+    ns : int
+        Number of samples in the IRF.
+
+    response : str, default 'a'
+        Type of response. Must be one of 'a', 'v', or 'd', for accelerance, velocity, or displacement, respectively.
+
+    fs : float, default 1.
+        Sampling frequency (:math:`1/dt`) of the IRF.
+
+    Attributes
+    ----------
+    modes_fit_ : 3D-array, shape (n_outputs, dof)
+        Fitted (partial) mode shapes.
+
+    success_ : bool
+        Whether the optimization was successful.
+
+    message_ : str
+        Description of the cause of the termination.
+    '''
 
     def __init__(
         self,

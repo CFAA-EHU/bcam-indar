@@ -35,3 +35,10 @@ Modal Analysis
     Amplitudes
     RealModes
     ComplexModes
+
+.. toctree::
+    :hidden:
+
+    generated/bcam.indar.ema.SuperResolution.n_poles_
+    generated/bcam.indar.ema.SuperResolution.exps_
+    generated/bcam.indar.ema.ComplexModes.modes_fit_
