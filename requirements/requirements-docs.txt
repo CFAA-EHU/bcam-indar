@@ -22,16 +22,12 @@ jinja2==3.1.6
     # via sphinx
 markupsafe==3.0.3
     # via jinja2
-numpy==2.4.5
-    # via pyuff
 numpydoc==1.10.0
     # via -r requirements/requirements-docs.in
 packaging==26.2
     # via sphinx
 pygments==2.20.0
     # via sphinx
-pyuff==2.5.6
-    # via -r requirements/requirements-docs.in
 requests==2.33.1
     # via sphinx
 roman-numerals==4.1.0

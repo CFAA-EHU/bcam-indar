@@ -27,4 +27,3 @@ dependencies:
     - symengine==0.14
     - pip-tools
     - sphinx-nefertiti
-    - pyuff
