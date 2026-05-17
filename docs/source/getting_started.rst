@@ -11,14 +11,15 @@ In the following example, we show how to use the package to perform a simple EMA
 A two-DoF system
 ----------------
 
-The system is a pair of masses connected by springs and dampers as shown in the figure below.
+We simulate a hammer hit test of the two-DoF system in the figure below, and
+we use the `indar` package to estimate the modal parameters of the system.
 
 .. image:: _images/TMD.png
    :align: center
    :width: 300px
 
 The system is excited at the first mass, and the response is measured at both masses.
-The equation of the system is given by
+The equation of motion of the masses is given by
 
 .. math::
     M\ddot{x} + C\dot{x} + Kx = f(t)
@@ -26,9 +27,9 @@ The equation of the system is given by
 .. math::
     M = \begin{bmatrix} m_1 & 0 \\ 0 & m_2 \end{bmatrix},\quad
     C = \begin{bmatrix} c_1 + c_2 & -c_2 \\ -c_2 & c_2 \end{bmatrix},\quad
-    K = \begin{bmatrix} k_1 + k_2 & -k_2 \\ -k_2 & k_2 \end{bmatrix}
+    K = \begin{bmatrix} k_1 + k_2 & -k_2 \\ -k_2 & k_2 \end{bmatrix},
 
-We use the following parameters for the system:
+where the parameters are in the table below.
 
 +----------------------+----------------------+----------------------+
 | Mass                 | Damping              | Stiffness            |
@@ -37,3 +38,7 @@ We use the following parameters for the system:
 +----------------------+----------------------+----------------------+
 | :math:`m_2 = 0.2`    | :math:`c_2 = 0.08`   | :math:`k_2 = 7.0`    |
 +----------------------+----------------------+----------------------+
+
+Suppose that the test is repeated four times with a sampling interval of
+:math:`\Delta t = 0.04` s and the number of time samples is 256.
+To follow the example, download the data files `2-dof-system_rep*.csv` from `this link <https://github.com/CFAA-EHU/bcam-indar/tree/main/docs/source/_downloads>`_.
