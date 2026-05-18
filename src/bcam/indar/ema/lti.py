@@ -1,7 +1,9 @@
+from __future__ import annotations
 import logging
 
 import numpy as np
 import scipy
+from numpy.typing import ArrayLike
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import validate_data
 
@@ -140,7 +142,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
 
     Attributes
     ----------
-    kernel_ : array of shape (n_samples,)
+    kernel_ : np.ndarray of shape (n_samples,)
         Estimated IRF, or kernel.
 
     info_ : dict
@@ -230,22 +232,23 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         self.show = show
         self.dt = dt
 
-    def fit(self, X, y):
+    def fit(self, X: ArrayLike, y: ArrayLike) -> LTIKernel:
         '''
         Fit LTI model.
 
         Parameters
         ----------
-        X : array-like of shape (n_repetitions, n_time_samples).
+
+        X : array-like of shape (n_repetitions, n_time_samples)
             Input data.
 
-        y : array-like of shape (n_repetitions, n_time_samples).
-            Response data with the same shape of `X`.
+        y : array-like of shape (n_repetitions, n_time_samples)
+            Response data with the same shape as `X`.
 
         Returns
         -------
-        self : object
-            Fitted Estimator.
+        self : LTIKernel
+            Fitted estimator.
         '''
         # Validate inputs.
         X = np.asarray(X)
@@ -296,18 +299,19 @@ class LTIKernel(BaseEstimator, RegressorMixin):
 
         return self
 
-    def predict(self, X):
+    def predict(self, X: ArrayLike) -> np.ndarray:
         '''
         Predict response using the LTI model.
 
         Parameters
         ----------
-        X : array-like of shape (n_repetitions, n_time_samples).
+
+        X : array-like of shape (n_repetitions, n_time_samples)
             Input data.
 
         Returns
         -------
-        y_pred : array-like of shape (n_repetitions, n_time_samples)
+        y_pred : np.ndarray of shape (n_repetitions, n_time_samples)
             Predicted response data.
         '''
         # Check if fitted.
@@ -324,22 +328,23 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         return self.dt*scipy.signal.fftconvolve(
             X, self.kernel_[np.newaxis, :], mode='full', axes=1)[:, :X.shape[1]]
 
-    def score(self, X, y):
+    def score(self, X: ArrayLike, y: ArrayLike) -> float:
         '''
         Return coefficient of determination on test data.
 
         Parameters
         ----------
-        X : array-like of shape (n_repetitions, n_time_samples).
+
+        X : array-like of shape (n_repetitions, n_time_samples)
             Input data.
 
-        y : array-like of shape (n_repetitions, n_time_samples).
+        y : array-like of shape (n_repetitions, n_time_samples)
             True response data.
 
         Returns
         -------
         score : float
-            :math:`R^2` of `self.predict(X)` w.r.t `y`.
+            :math:`R^2` of `self.predict(X)` with respect to `y`.
         '''
         # Validate inputs.
         X = np.asarray(X)
@@ -361,7 +366,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
             return 1.0 if ss_res == 0 else 0.0
         return 1-ss_res/ss_tot
 
-def H1(X, y):
+def H1(X: ArrayLike, y: ArrayLike) -> np.ndarray:
     r'''
     Compute the H1 estimator of the kernel.
 
@@ -385,6 +390,7 @@ def H1(X, y):
 
     Parameters
     ----------
+
     X : array-like of shape (n_repetitions, n_time_samples)
         Input data.
 
@@ -393,7 +399,7 @@ def H1(X, y):
 
     Returns
     -------
-    H1 : array-like of shape (n_time_samples,)
+    H1 : np.ndarray of shape (n_time_samples,)
         H1 estimator of the kernel.
     '''
     # Validate inputs.

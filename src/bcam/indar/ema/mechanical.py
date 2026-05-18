@@ -606,12 +606,12 @@ class Amplitudes(BaseEstimator):
     def __init__(
         self,
         *,
-        mech_poles:ArrayLike|None=None,
-        res_poles:tuple[ArrayLike, ArrayLike]|None=None,
-        fs:float=1.,
-        response:str='a',
-        cond:float|None=None,
-        solver:str='gelsd',
+        mech_poles: ArrayLike | None = None,
+        res_poles: tuple[ArrayLike, ArrayLike] | None = None,
+        fs: float = 1.,
+        response: str = 'a',
+        cond: float | None = None,
+        solver: str = 'gelsd',
     ):
         self.mech_poles = mech_poles
         self.res_poles = res_poles
@@ -620,7 +620,7 @@ class Amplitudes(BaseEstimator):
         self.cond = cond
         self.solver = solver
 
-    def fit(self, y:ArrayLike):
+    def fit(self, y: ArrayLike) -> Amplitudes:
         '''
         Fit amplitudes.
 
@@ -631,7 +631,7 @@ class Amplitudes(BaseEstimator):
 
         Returns
         -------
-        self : object
+        self : Amplitudes
             Fitted estimator.
         '''
 
@@ -687,7 +687,7 @@ class Amplitudes(BaseEstimator):
 
         return self
 
-    def predict(self, X:ArrayLike):
+    def predict(self, X: ArrayLike) -> np.ndarray:
         '''
         Predict the noisy IRF.
 
@@ -698,12 +698,12 @@ class Amplitudes(BaseEstimator):
 
         Returns
         -------
-        K : array-like, shape (n_outputs, n_inputs, n_samples)
+        K : np.ndarray, shape (n_outputs, n_inputs, n_samples)
             Predicted noisy IRF.
         '''
         return self.irf_pred(X) + self.residual(X)
 
-    def residual(self, X:ArrayLike):
+    def residual(self, X: ArrayLike) -> np.ndarray:
         '''
         Predict background or residual.
 
@@ -714,7 +714,7 @@ class Amplitudes(BaseEstimator):
         
         Returns
         -------
-        K : array-like, shape (n_outputs, n_inputs, n_samples)
+        K : np.ndarray, shape (n_outputs, n_inputs, n_samples)
             Predicted background.
         '''
         n_out, n_in = self.tensor_modes_.shape[:2]
@@ -729,7 +729,7 @@ class Amplitudes(BaseEstimator):
 
         return K
 
-    def irf_pred(self, X:ArrayLike):
+    def irf_pred(self, X: ArrayLike) -> np.ndarray:
         '''
         Predict IRF.
 
@@ -740,7 +740,7 @@ class Amplitudes(BaseEstimator):
         
         Returns
         -------
-        K : array-like, shape (n_outputs, n_inputs, n_samples)
+        K : np.ndarray, shape (n_outputs, n_inputs, n_samples)
             Predicted IRF.
             In case of accelerance, returns IRF without the mass-term.
         '''
@@ -756,7 +756,7 @@ class Amplitudes(BaseEstimator):
 
         return K
 
-    def score(self, X:ArrayLike, y:ArrayLike):
+    def score(self, X: ArrayLike, y: ArrayLike) -> float:
         '''
         Return the coefficient of determination R^2 of the prediction.
 
@@ -1287,10 +1287,10 @@ class RealModes:
 
     Parameters
     ----------
-    poles : 1D-array
+    poles : array-like, shape (dof,)
         Natural frequencies.
 
-    amps : 3D-array, shape (n_outputs, n_inputs, dof)
+    amps : array-like, shape (n_outputs, n_inputs, dof)
         Amplitudes for each measured output-input pair and mode.
     
     ns : int
@@ -1304,7 +1304,7 @@ class RealModes:
 
     Attributes
     ----------
-    modes_ : 3D-array, shape (n_outputs, dof)
+    modes_ : np.ndarray, shape (n_outputs, dof)
         Fitted (partial) mode shapes.
 
     success_ : bool
@@ -1332,11 +1332,11 @@ class RealModes:
 
     def __init__(
         self,
-        poles,
-        amps,
-        ns:int,
-        response:str='a',
-        fs:float=1.,
+        poles: ArrayLike,
+        amps: ArrayLike,
+        ns: int,
+        response: str = 'a',
+        fs: float = 1.,
     ):
         assert poles.ndim == 1, 'Expected a 1D-array for frequencies.'
         assert amps.ndim == 3, 'Expected a 3D-array for amplitudes.'
@@ -1429,7 +1429,11 @@ class RealModes:
             [2*t1[:n_in] + t2, t1[n_in:]], axis=0)
         return (Ap + Bx).flatten()
 
-    def fit(self, options_ncg:dict=None, dual_annealing_kwargs:dict=None):
+    def fit(
+        self,
+        options_ncg: dict | None = None,
+        dual_annealing_kwargs: dict | None = None,
+    ) -> RealModes:
         '''
         Fit the mode shapes.
         
@@ -1445,9 +1449,9 @@ class RealModes:
             The options 'x0', 'bounds', and 'minimizer_kwargs' are ignored since they are defined in this class.
             See :func:`scipy.optimize.dual_annealing` for details. Default is None.
 
-        Return
-        ------
-        self : object
+        Returns
+        -------
+        self : RealModes
             Fitted model.
         '''
         n_out, n_in, dof = self.amps.shape
@@ -1498,18 +1502,18 @@ class RealModes:
 
         return self
 
-    def predict(self, X):
+    def predict(self, X: ArrayLike) -> np.ndarray:
         '''
         Predict the impulse response function (IRF).
 
         Parameters
         ----------
-        X : array-like (n_samples,)
+        X : array-like, shape (n_samples,)
             Times at which to predict the IRF.
 
         Returns
         -------
-        irf : array-like (n_outputs, n_inputs, n_samples)
+        irf : np.ndarray, shape (n_outputs, n_inputs, n_samples)
             Predicted IRF at the given times.
         '''
         if self.modes_ is None:
@@ -1627,10 +1631,10 @@ class ComplexModes:
 
     Parameters
     ----------
-    poles : 1D-array, shape (dof,)
+    poles : array-like, shape (dof,)
         Natural frequencies.
 
-    amps : 3D-array, shape (n_outputs, n_inputs, dof)
+    amps : array-like, shape (n_outputs, n_inputs, dof)
         Amplitudes for each measured output-input pair and mode.
 
     ns : int
@@ -1639,7 +1643,7 @@ class ComplexModes:
     fs : float, default 1.
         Sampling frequency (:math:`1/dt`) of the IRF.
     
-    coords : 1D-array, shape (n_out,), optional
+    coords : array-like, shape (n_out,), optional
         To solve the minimization problem,
         the space of (partial) mode shapes is decomposed through the grassmannian space :math:`\mathrm{Gr}(n_\mathrm{out}, \mathrm{dof})` over the real field.
         To parameterize the grassmannian,
@@ -1653,7 +1657,7 @@ class ComplexModes:
 
     Attributes
     ----------
-    modes_ : 3D-array, shape (n_outputs, dof)
+    modes_ : np.ndarray, shape (n_outputs, dof)
         Fitted (partial) mode shapes.
 
     success_ : bool
@@ -1691,12 +1695,12 @@ class ComplexModes:
 
     def __init__(
         self,
-        poles:ArrayLike,
-        amps:ArrayLike,
-        ns:int,
-        fs:float=1.,
-        coords:ArrayLike|None=None,
-        response:str='a',
+        poles: ArrayLike,
+        amps: ArrayLike,
+        ns: int,
+        fs: float = 1.,
+        coords: ArrayLike | None = None,
+        response: str = 'a',
     ):
         self.poles = poles
         assert poles.ndim == 1, 'Expected 1D array for frequencies.'
@@ -1852,7 +1856,12 @@ class ComplexModes:
         )
         return r
 
-    def fit(self, x0, options:dict|None=None, maxiter:int=1e3):
+    def fit(
+        self,
+        x0: ArrayLike | tuple[ArrayLike, ArrayLike],
+        options: dict | None = None,
+        maxiter: int = 1000,
+    ) -> ComplexModes:
         r'''
         Fit the mode shapes.
 
@@ -1874,7 +1883,7 @@ class ComplexModes:
         
         Returns
         -------
-        self : object
+        self : ComplexModes
             Fitted model.
         '''
 
@@ -1926,18 +1935,18 @@ class ComplexModes:
 
         return self
 
-    def predict(self, X):
+    def predict(self, X: ArrayLike) -> np.ndarray:
         '''
         Predict the impulse response function (IRF).
         
         Parameters
         ----------
-        X : array-like (n_samples,)
+        X : array-like, shape (n_samples,)
             Times at which to predict the IRF.
         
         Returns
         -------
-        irf : array-like (n_outputs, n_inputs, n_samples)
+        irf : np.ndarray, shape (n_outputs, n_inputs, n_samples)
             Predicted IRF at the given times.
         '''
         if self.modes_ is None:

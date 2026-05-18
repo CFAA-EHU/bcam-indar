@@ -7,6 +7,7 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 import bcam.indar
+import re
 
 project = 'Indar'
 copyright = '2026, BCAM'
@@ -94,6 +95,27 @@ mathjax4_config = {
 
 # -- Type aliasing for documentation -----------------------------------------
 # Simplify type hints in signatures for Sphinx autodoc
+autodoc_typehints = 'signature'
 autodoc_type_aliases = {
-    "ArrayLike": "array-like",
+    'ArrayLike': 'array-like',
 }
+
+# Use short names (e.g., ArrayLike instead of numpy.typing.ArrayLike).
+autodoc_typehints_format = 'short'
+
+
+def _clean_type_alias_display(_app, _what, _name, _obj, _options, signature, return_annotation):
+    """Normalize ForwardRef-style alias rendering in autodoc signatures."""
+    # Example: TypeAliasForwardRef('array-like') -> array-like
+    pattern = r"TypeAliasForwardRef\((['\"])(.*?)\1\)"
+
+    if signature:
+        signature = re.sub(pattern, r'\2', signature)
+    if return_annotation:
+        return_annotation = re.sub(pattern, r'\2', return_annotation)
+
+    return signature, return_annotation
+
+
+def setup(app):
+    app.connect('autodoc-process-signature', _clean_type_alias_display)

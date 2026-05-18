@@ -1,9 +1,12 @@
+from __future__ import annotations
 import logging
 import bisect
 
 import numpy as np
 import scipy
 import pandas as pd
+from numpy.typing import ArrayLike
+from matplotlib.axes import Axes
 from sklearn.base import BaseEstimator
 import matplotlib.pyplot as plt
 
@@ -17,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Rational Approximation
 # ========================
 
-def pairing(A, B, ns:int, delta:float=None):
+def pairing(A, B, ns:int, delta: float | None = None):
 
     delta = 0.8 if delta is None else delta
 
@@ -46,7 +49,8 @@ def pairing(A, B, ns:int, delta:float=None):
 # Define helpers for rational fitting.
 
 def _get_residues(
-        y, parity, poles, d:bool=False, cond=None, lapack_driver=None):
+    y, parity, poles, d: bool = False, cond: float | None = None,
+    lapack_driver: str | None = None):
     N, rank = y.shape
     ns = 2*(N-1) + parity
 
@@ -202,12 +206,12 @@ class AAA(BaseEstimator):
     def __init__(
         self,
         *,
-        order:int=None,
+        order: int | None = None,
         compute_r:bool=True,
         prune_tol:float=0.,
         d:bool=False,
-        lapack_driver:str=None,
-        cond:float=None
+        lapack_driver: str | None = None,
+        cond: float | None = None
     ):
         self.order = order
         self.compute_r = compute_r
@@ -408,14 +412,16 @@ class AAA(BaseEstimator):
 
         return poles
 
-    def fit(self, y, parity:bool=None):
+    def fit(self, y: ArrayLike, parity: bool | None = None) -> AAA:
         r'''
         Fit rational function.
 
         Parameters
         ----------
+
         y : array-like, shape (N, n_channels)
             The data to fit, where for each frequency :math:`k = 0, \ldots, N-1`, the value :math:`y_k` is a vector of length `n_channels`.
+
 
         parity : bool, optional
             Parity of the data as explained in the class docstring.
@@ -424,7 +430,7 @@ class AAA(BaseEstimator):
 
         Returns
         -------
-        self : object
+        self : AAA
         '''
         y = np.asarray(y)
 
@@ -489,19 +495,20 @@ class AAA(BaseEstimator):
 
         return self
 
-    def predict(self, X):
+    def predict(self, X: ArrayLike) -> np.ndarray:
         '''
         Predict using the rational function.
 
         Parameters
         ----------
+
         X : array-like, shape (n_eval_points,)
             Complex points at which to evaluate the rational function.
 
         Returns
         -------
-        R : array, shape (n_eval_points, n_channels)
-            Return predicted values.
+        R : np.ndarray, shape (n_eval_points, n_channels)
+            Predicted values.
         '''
         if self.r_ is None:
             msg = 'Cannot compute rational function values without residues. \
@@ -600,13 +607,13 @@ class VF(BaseEstimator):
         self,
         *,
         order:int=1,
-        poles:np.typing.ArrayLike=None,
+        poles: ArrayLike | None = None,
         niter:int=1,
         compute_r:bool=True,
         d:bool=False,
         prune_tol:float=0.,
-        cond:float=None,
-        lapack_driver:str=None
+        cond: float | None = None,
+        lapack_driver: str | None = None
     ):
         self.order = order
         self.poles = poles
@@ -735,15 +742,17 @@ class VF(BaseEstimator):
 
         return poles
 
-    def fit(self, y, parity:bool=None):
+    def fit(self, y: ArrayLike, parity: bool | None = None) -> VF:
         r'''
         Fit rational function.
 
         Parameters
         ----------
+
         y : array-like, shape (N, n_channels)
             The data to fit, where for each frequency :math:`k = 0, \ldots, N-1`, the value :math:`y_k` is a vector of length `n_channels`.
         
+
         parity : bool, optional
             Parity of the data as explained in the class docstring.
             If not given, it is deduced from the imaginary part of the last frequency:
@@ -809,19 +818,20 @@ class VF(BaseEstimator):
 
         return self
 
-    def predict(self, X):
+    def predict(self, X: ArrayLike) -> np.ndarray:
         '''
         Predict using the rational function.
 
         Parameters
         ----------
+
         X : array-like, shape (n_eval_points,)
             Complex points at which to evaluate the rational function.
 
         Returns
         -------
-        R : array, shape (n_eval_points, n_channels)
-            Return predicted values.
+        R : np.ndarray, shape (n_eval_points, n_channels)
+            Predicted values.
         '''
         if self.r_ is None:
             msg = 'Cannot compute rational function values without residues. \
@@ -938,18 +948,19 @@ class SuperResolution(BaseEstimator):
 
         return amps
 
-    def fit(self, y):
+    def fit(self, y: ArrayLike) -> SuperResolution:
         '''
         Fit exponential sum.
 
         Parameters
         ----------
+
         y : array-like, shape (n_samples, n_channels)
             Time-domain signal to fit, where :math:`y_k` is a vector of length `n_channels` for each time index :math:`k = 0, \ldots, n-1`.
             
         Returns
         -------
-        self : object
+        self : SuperResolution
             Fitted estimator.
         '''
         y = np.asarray(y)
@@ -1003,18 +1014,19 @@ class SuperResolution(BaseEstimator):
 
         return self
 
-    def predict(self, X):
+    def predict(self, X: ArrayLike) -> np.ndarray:
         '''
         Predict using the exponential sum.
         
         Parameters
         ----------
+
         X : array-like, shape (n_eval_points,)
             Time points at which to evaluate the exponential sum.
 
         Returns
         -------
-        f : array, shape (n_eval_points, n_channels)
+        f : np.ndarray, shape (n_eval_points, n_channels)
             Predicted values.
             If compute_amps=False, then the returned values are NaN.
         '''
@@ -1067,7 +1079,7 @@ def _geometric_sum(r, ns:int):
 
     return r
 
-def _inner_prod(ns:int, x, y=None):
+def _inner_prod(ns: int, x, y: ArrayLike | None = None):
     if y is None:
         r = np.abs(x)**2
     else:
@@ -1241,7 +1253,7 @@ class StablePoles:
         model,
         max_order,
         *,
-        radius=None,
+        radius: float | None = None,
         min_scale:int=-10
     ):
         self.model = model
@@ -1360,18 +1372,19 @@ class StablePoles:
 
         return clusters
 
-    def fit(self, y):
+    def fit(self, y: ArrayLike) -> StablePoles:
         '''
         Fit exponential sums and find clusters.
 
         Parameters
         ----------
+
         y : array-like, shape (n_time_samples, n_channels)
             Time series to be approximated by exponential sums.
 
         Returns
         -------
-        self : object
+        self : StablePoles
         '''
         y = np.asarray(y)
         if y.ndim == 1:
@@ -1472,7 +1485,7 @@ class StablePoles:
 
         return pd.DataFrame(stats)
 
-    def plot_poles(self, level, ax=None):
+    def plot_poles(self, level: float, ax: Axes | None = None):
         '''
         Plot poles at a given level.
         
@@ -1532,7 +1545,7 @@ class StablePoles:
         if show:
             plt.show()
 
-    def plot_clusters(self, clusters=None, ax=None):
+    def plot_clusters(self, clusters: list[int] | None = None, ax: Axes | None = None):
         '''
         Plot clusters of poles.
         
