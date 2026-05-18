@@ -91,3 +91,9 @@ mathjax4_config = {
         }
     }
 }
+
+# -- Type aliasing for documentation -----------------------------------------
+# Simplify type hints in signatures for Sphinx autodoc
+autodoc_type_aliases = {
+    "ArrayLike": "array-like",
+}

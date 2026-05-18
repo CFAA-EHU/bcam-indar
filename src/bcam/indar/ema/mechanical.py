@@ -1,6 +1,8 @@
+from __future__ import annotations
 import logging
 
 import numpy as np
+from numpy.typing import ArrayLike
 from sklearn.base import BaseEstimator
 import scipy
 
@@ -204,7 +206,6 @@ class _AmplitudesNormal:
             return m, m_
 
     def _rhs(self, y):
-        fs = self.fs
         n_out, n_in, ns = y.shape
 
         # Resonances.
@@ -605,11 +606,11 @@ class Amplitudes(BaseEstimator):
     def __init__(
         self,
         *,
-        mech_poles=None,
-        res_poles=None,
+        mech_poles:ArrayLike|None=None,
+        res_poles:tuple[ArrayLike, ArrayLike]|None=None,
         fs:float=1.,
         response:str='a',
-        cond=None,
+        cond:float|None=None,
         solver:str='gelsd',
     ):
         self.mech_poles = mech_poles
@@ -619,7 +620,7 @@ class Amplitudes(BaseEstimator):
         self.cond = cond
         self.solver = solver
 
-    def fit(self, y):
+    def fit(self, y:ArrayLike):
         '''
         Fit amplitudes.
 
@@ -686,7 +687,7 @@ class Amplitudes(BaseEstimator):
 
         return self
 
-    def predict(self, X):
+    def predict(self, X:ArrayLike):
         '''
         Predict the noisy IRF.
 
@@ -702,7 +703,7 @@ class Amplitudes(BaseEstimator):
         '''
         return self.irf_pred(X) + self.residual(X)
 
-    def residual(self, X):
+    def residual(self, X:ArrayLike):
         '''
         Predict background or residual.
 
@@ -728,7 +729,7 @@ class Amplitudes(BaseEstimator):
 
         return K
 
-    def irf_pred(self, X):
+    def irf_pred(self, X:ArrayLike):
         '''
         Predict IRF.
 
@@ -755,7 +756,7 @@ class Amplitudes(BaseEstimator):
 
         return K
 
-    def score(self, X, y):
+    def score(self, X:ArrayLike, y:ArrayLike):
         '''
         Return the coefficient of determination R^2 of the prediction.
 
@@ -1303,7 +1304,7 @@ class RealModes:
 
     Attributes
     ----------
-    modes_fit_ : 3D-array, shape (n_outputs, dof)
+    modes_ : 3D-array, shape (n_outputs, dof)
         Fitted (partial) mode shapes.
 
     success_ : bool
@@ -1512,7 +1513,7 @@ class RealModes:
             Predicted IRF at the given times.
         '''
         if self.modes_ is None:
-            msg = 'Call fit() before accessing modes_fit_.'
+            msg = 'Call fit() before accessing modes_.'
             raise ValueError(msg)
 
         X = np.atleast_1d(X)
@@ -1609,14 +1610,92 @@ LinearOperator):
         return self
 
 class ComplexModes:
+    r'''
+    Fit mode shapes with non-proportional damping.
+
+    After estimating the amplitudes :math:`A^l_{ij}` with :class:`Amplitudes`,
+    this class can be used to fit mode shapes assuming non-proportional damping.
+    The algorithm needs an initial guess, which
+    may be taken from the fitted mode shapes by the class :class:`RealModes`.
+    The complex mode shapes are stored as an array :math:`\varphi` of shape (n_outputs, dof), and
+    they satisfy
+
+    .. math::
+        A^l_{ij} \approx \varphi_{il} \varphi_{jl},
+
+    where :math:`i=0, \ldots, n_\mathrm{out}-1`, :math:`j=0, \ldots, n_\mathrm{in}-1`, and :math:`l=0, \ldots, \mathrm{dof}-1`.
+
+    Parameters
+    ----------
+    poles : 1D-array, shape (dof,)
+        Natural frequencies.
+
+    amps : 3D-array, shape (n_outputs, n_inputs, dof)
+        Amplitudes for each measured output-input pair and mode.
+
+    ns : int
+        Number of time samples in the fitted IRF.
+
+    fs : float, default 1.
+        Sampling frequency (:math:`1/dt`) of the IRF.
+    
+    coords : 1D-array, shape (n_out,), optional
+        To solve the minimization problem,
+        the space of (partial) mode shapes is decomposed through the grassmannian space :math:`\mathrm{Gr}(n_\mathrm{out}, \mathrm{dof})` over the real field.
+        To parameterize the grassmannian,
+        we use a coordinate subspace :math:`\{e_{i_1}, \ldots, e_{i_{n_\mathrm{out}}}\}`, so
+        the array `coords` is ``np.array([i_1, \ldots, i_{n_\mathrm{out}}])``.
+        If None, the first `n_out` standard basis vectors are used.
+
+    response : str, default 'a'
+        Type of response.
+        Must be one of 'a', 'v', or 'd', for accelerance, velocity, or displacement, respectively.
+
+    Attributes
+    ----------
+    modes_ : 3D-array, shape (n_outputs, dof)
+        Fitted (partial) mode shapes.
+
+    success_ : bool
+        Whether the optimization was successful.
+
+    message_ : str
+        Description of the cause of the termination.
+
+    Notes
+    -----
+    We use a loss-function based on the Hilbert--Schmidt norm
+
+    .. math::
+        L(\varphi) = \sum_{i,j}\sum_{k=0}^{N-1} (N - k)\Big\lvert \im\Big(\sum_l(A^l_{ij}-\varphi_{il} \varphi_{jl})\lambda_l^\nu s_l^k\Big) \Big\rvert^2,
+
+    subject to the constraints
+
+    .. math::
+        \begin{split}
+        \im(\sum_l \varphi_{il} \varphi_{jl}) = 0,
+        \quad\text{for each } i = 0, \ldots, n_\mathrm{out}-1 \text{ and } j = 0, \ldots, n_\mathrm{in}-1, \\
+        \im(\sum_l \lambda_l\varphi_{il} \varphi_{jl}) > 0, \text{ and }
+        -\im(\sum_l \lambda_l^2\varphi_{il} \varphi_{jl}) > 0
+        \text{ for } i, j = 0, \ldots, n_\mathrm{in}-1.
+        \end{split}
+
+    Here, :math:`N` is the number of time samples,
+    :math:`s_l = e^{\lambda_l\,dt}` are the poles of the structure, and
+    the exponent :math:`\nu` depends on the type of IRF (accelerance (2), velocity (1), or displacement (0)).
+    The inequality constraints are to be understood as positive-definite matrices.
+
+    The optimization is performed by a local search with the minimizer :func:`scipy.optimize.minimize`
+    using the method `trust-constr`.
+    '''
 
     def __init__(
         self,
-        poles,
-        coords,
-        amps,
-        fs:int,
+        poles:ArrayLike,
+        amps:ArrayLike,
         ns:int,
+        fs:float=1.,
+        coords:ArrayLike|None=None,
         response:str='a',
     ):
         self.poles = poles
@@ -1626,6 +1705,9 @@ class ComplexModes:
         assert amps.ndim == 3, 'Expected 3D array for amplitudes.'
         assert amps.shape[2] == len(poles), 'Incompatible shapes for frequencies and amplitudes.'
 
+        n_out = amps.shape[0]
+        self.coords = np.asarray(coords) if coords is not None else np.arange(n_out)
+
         self.fs = fs
         self.ns = ns
         self.response = response
@@ -1633,19 +1715,15 @@ class ComplexModes:
         PartialModesMap.atol = 1e-10
         PartialModesMap.rtol = 1e-8
         roots = np.emath.log(poles)*fs
-        self._modes_map = PartialModesMap(roots, coords)
+        self._modes_map = PartialModesMap(roots, self.coords)
 
         self._rescale = np.max(np.abs(amps))
         self._get_metric()
 
-        self._raw_modes_fit = None
-        self.success_ = None
-        self.message_ = None
-
     @property
-    def modes_fit_(self):
+    def modes_(self):
         if self._raw_modes_fit is None:
-            msg = 'Call fit() before accessing modes_fit_.'
+            msg = 'Call fit() before accessing modes_.'
             raise ValueError(msg)
         return np.sqrt(self._rescale) * self._modes_map(*self._raw_modes_fit)
 
@@ -1774,10 +1852,44 @@ class ComplexModes:
         )
         return r
 
-    def fit(self, x0, options:dict=None, maxiter:int=1e3):
+    def fit(self, x0, options:dict|None=None, maxiter:int=1e3):
+        r'''
+        Fit the mode shapes.
+
+        Parameters
+        ----------
+        x0 : array-like or 2-tuple of arrays with shape (n_outputs, dof)
+            Initial guess for the optimization.
+            If a single array is given, it is interpreted as real mode shapes.
+            If a tuple of two arrays is given, the arrays represent a parameterization
+            of the mode shapes, where the first array is the real part, and
+            the second array has the same shape but
+            the left-most :math:`(n_\mathrm{out}\times n_\mathrm{out})`-submatrix is antisymmetric.
+
+        options : dict, optional
+            Options for the optimization by `trust-constr`.
+
+        maxiter : int, optional
+            Maximum number of iterations for the optimization. Default is 1000.
+        
+        Returns
+        -------
+        self : object
+            Fitted model.
+        '''
+
         options = {} if options is None else options
         if 'xtol' not in options.keys():
             options['xtol'] = 1e-5
+
+        if isinstance(x0, tuple) and len(x0) == 2:
+            pass
+        elif isinstance(x0, (list, np.ndarray)):
+            x0 = np.asarray(x0)
+            x0 = (x0, np.zeros_like(x0))
+        else:
+            msg = 'Expected x0 to be either a tuple of two arrays or a single array.'
+            raise ValueError(msg)
 
         x0 = tuple(e/np.sqrt(self._rescale) for e in x0)
 
@@ -1805,7 +1917,7 @@ class ComplexModes:
         self.optRes_ = res
 
         # Define functions for predictions
-        amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
+        amps_fit = mode_to_amps(self.modes_, n_out, n_in)
         self._irf = Kernel(
             nat_freqs=np.log(self.poles)*self.fs,
             amps=amps_fit,
@@ -1815,16 +1927,21 @@ class ComplexModes:
         return self
 
     def predict(self, X):
-        if self.modes_fit_ is None:
-            msg = 'Call fit() before accessing modes_fit_.'
-            raise ValueError(msg)
-
-        X = np.atleast_1d(X)
-        return self._irf(X)
-
-    def irf_pred(self, X):
-        if self.modes_fit_ is None:
-            msg = 'Call fit() before accessing modes_fit_.'
+        '''
+        Predict the impulse response function (IRF).
+        
+        Parameters
+        ----------
+        X : array-like (n_samples,)
+            Times at which to predict the IRF.
+        
+        Returns
+        -------
+        irf : array-like (n_outputs, n_inputs, n_samples)
+            Predicted IRF at the given times.
+        '''
+        if self.modes_ is None:
+            msg = 'Call fit() before accessing modes_.'
             raise ValueError(msg)
 
         X = np.atleast_1d(X)

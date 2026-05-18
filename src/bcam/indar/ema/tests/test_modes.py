@@ -304,8 +304,8 @@ class TestModesFitting:
             amps=amps_m,
             fs=fs, ns=ns, response='a')
 
-        x0 = (modes_real, np.zeros_like(modes_real))
-        modes_nop = model_nop.fit(x0, options={'verbose': 2, 'gtol': 1.e-8}).modes_fit_
+        x0 = modes_real
+        modes_nop = model_nop.fit(x0, options={'verbose': 2, 'gtol': 1.e-8}).modes_
         # The result is unique up to a sign flip in each mode.
         modes_nop *= np.sign(np.real(modes[0, :]/modes_nop[0, :]))[np.newaxis, :]
 
