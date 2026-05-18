@@ -203,6 +203,15 @@ check in which frequency range the estimation is expected to worsen due to the l
 Spectral estimation
 -------------------
 
+The IRF of a mechanical system is an exponential sum, and
+to estimate the order and natural frequencies of the system
+we transform the problem into one of rational approximation, for which
+we will use the AAA algorithm.
+
+We use the class :py:class:`bcam.indar.ema.StablePoles` to construct the stabilization diagram up to order 30
+(recall that complex poles appear in conjugate pairs) and
+summarize the clusters of stable poles.
+
 .. plot::
     :context: close-figs
     :format: python
@@ -216,6 +225,68 @@ Spectral estimation
     sp = ema.StablePoles(sr, max_order=30)
     sp.fit(irf_[:, 0, :].T)
 
-    # Summarize clusters and show them as a text table in the docs
-    clusters = sp.clusters_stats()
-    print(clusters.to_markdown(index=False))
+    # Summarize clusters
+    sp.clusters_stats()
+
+.. The hidden code block below is used to save the cluster statistics in a CSV file,
+.. which is then included in the documentation as a table.
+.. plot::
+    :context: close-figs
+    :format: python
+    :include-source: False
+    :nofigs:
+
+    from pathlib import Path
+
+    def _fmt_value(v):
+        if isinstance(v, complex):
+            return f'{v.real:.3g}{v.imag:+.3g}j'
+        if isinstance(v, float):
+            return f'{v:.3g}'
+        return v
+
+    out_dir = Path('_private_generated')
+    out_dir.mkdir(exist_ok=True)
+    clusters = sp.clusters_stats().copy()
+    for col in clusters.columns:
+        clusters[col] = clusters[col].map(_fmt_value)
+    clusters.to_csv(out_dir / 'stable_poles_clusters.csv', index=False)
+
+.. csv-table::
+    :file: _private_generated/stable_poles_clusters.csv
+    :header-rows: 1
+
+The table shows, as expected, three clusters of stable poles.
+Two of them correspond to the complex conjugate poles of the system, and
+the other is an approximation of the mass-term in the IRF for acceleration,
+which appears as a Dirac delta at time zero.
+
+The table shows that the complex poles have around the same amplitude, and
+that the Dirac delta has a large contribution.
+It is natural that the pole approximating the Dirac delta has a large 
+Coefficient of Variation (cv).
+
+We use VF ...
+
+.. plot::
+    :context: close-figs
+    :format: python
+    :include-source: True
+    :nofigs:
+
+    poles_ = sr.poles_
+    poles_ = (
+        sr.poles_.real,
+        sr.poles_.cx
+    )
+
+    sr = ema.SuperResolution(
+        order = sr.poles_.count(),
+        rational_fitter={
+            'method': 'VF',
+            'poles': poles_,
+            'niter': 5
+        },
+        compute_amps=False,
+        fs=1/dt)
+    sr.fit(irf_[:, 0, :].T)
