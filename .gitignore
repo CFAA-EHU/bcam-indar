@@ -6,3 +6,4 @@ dist/
 docs/build/
 docs/source/generated/
 *.png
+docs/source/data

@@ -6,8 +6,9 @@
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-import bcam.indar
 import re
+
+import bcam.indar
 
 project = 'Indar'
 copyright = '2026, BCAM'
@@ -27,6 +28,7 @@ extensions = [
     'sphinx.ext.intersphinx',
     'numpydoc',
     'matplotlib.sphinxext.plot_directive',
+    'sphinx_copybutton',
 ]
 
 templates_path = ['_templates']

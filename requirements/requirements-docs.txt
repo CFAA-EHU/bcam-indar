@@ -38,7 +38,10 @@ sphinx==9.0.4
     # via
     #   -r requirements/requirements-docs.in
     #   numpydoc
+    #   sphinx-copybutton
     #   sphinx-nefertiti
+sphinx-copybutton==0.5.2
+    # via -r requirements/requirements-docs.in
 sphinx-nefertiti==0.9.8
     # via -r requirements/requirements-docs.in
 sphinxcontrib-applehelp==2.0.0

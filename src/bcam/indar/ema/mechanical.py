@@ -1648,7 +1648,7 @@ class ComplexModes:
         the space of (partial) mode shapes is decomposed through the grassmannian space :math:`\mathrm{Gr}(n_\mathrm{out}, \mathrm{dof})` over the real field.
         To parameterize the grassmannian,
         we use a coordinate subspace :math:`\{e_{i_1}, \ldots, e_{i_{n_\mathrm{out}}}\}`, so
-        the array `coords` is ``np.array([i_1, \ldots, i_{n_\mathrm{out}}])``.
+        the array `coords` is ``np.array([i_1, \ldots, i_{out}])``.
         If None, the first `n_out` standard basis vectors are used.
 
     response : str, default 'a'
@@ -1691,6 +1691,8 @@ class ComplexModes:
 
     The optimization is performed by a local search with the minimizer :func:`scipy.optimize.minimize`
     using the method `trust-constr`.
+    To speed up computations, the exact jacobian and hessian are passed, and
+    the functions are optimized to avoid redundant computations.
     '''
 
     def __init__(
