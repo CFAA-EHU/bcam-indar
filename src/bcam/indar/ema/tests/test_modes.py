@@ -255,7 +255,7 @@ class TestModesFitting:
         ns, fs = 210, 100
         modes = mechanical.RealModes(
             np.exp(freqs/fs), amps_m, ns=ns, response='a', fs=fs)
-        modes_fit = modes.fit().modes_fit_
+        modes_fit = modes.fit().modes_
         # The result is unique up to a sign flip in each mode.
         modes_fit *= np.sign(modes_m[0, :]/modes_fit[0, :])[np.newaxis, :]
 
@@ -290,7 +290,7 @@ class TestModesFitting:
         model = mechanical.RealModes(
             np.exp(Lambda/fs), amps_m,
             ns=ns, response='a', fs=fs)
-        modes_real = model.fit(options_ncg={'gtol': 1e-3}).modes_fit_
+        modes_real = model.fit(options_ncg={'gtol': 1e-3}).modes_
 
         # Check that real modes are not good enough.
         # The result is unique up to a sign flip in each mode.

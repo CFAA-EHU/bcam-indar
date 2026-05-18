@@ -1271,21 +1271,29 @@ def _metric_amps_modes(poles, ns, response='a'):
     return np.real(m_r_r)
 
 class RealModes:
-    '''
+    r'''
     Fit mode shapes with proportional damping.
 
-    After estimating the amplitudes with :class:`Amplitudes`,
-    
+    After estimating the amplitudes :math:`A^l_{ij}` with :class:`Amplitudes`,
+    this class can be used to fit mode shapes assuming proportional damping.
+    The mode shapes are stored as an array :math:`\varphi` of shape (n_outputs, dof), and
+    they satisfy
+
+    .. math::
+        A^l_{ij} \approx \varphi_{il} \varphi_{jl},
+
+    where :math:`i=0, \ldots, n_\mathrm{out}-1`, :math:`j=0, \ldots, n_\mathrm{in}-1`, and :math:`l=0, \ldots, \mathrm{dof}-1`.
+
     Parameters
     ----------
     poles : 1D-array
-        Modal frequencies.
-    
+        Natural frequencies.
+
     amps : 3D-array, shape (n_outputs, n_inputs, dof)
-        Amplitudes for each output-input pair and mode.
+        Amplitudes for each measured output-input pair and mode.
     
     ns : int
-        Number of samples in the IRF.
+        Number of time samples in the fitted IRF.
 
     response : str, default 'a'
         Type of response. Must be one of 'a', 'v', or 'd', for accelerance, velocity, or displacement, respectively.
@@ -1303,6 +1311,22 @@ class RealModes:
 
     message_ : str
         Description of the cause of the termination.
+
+    Notes
+    -----
+    To compare amplitudes with mode shapes, we use a loss-function based on the Hilbert--Schmidt norm
+
+    .. math::
+        L(\varphi) = \sum_{i,j}\sum_{k=0}^{N-1} (N - k)\Big\lvert \im\Big(\sum_l(A^l_{ij}-\varphi_{il} \varphi_{jl})\lambda_l^\nu s_l^k\Big) \Big\rvert^2,
+
+    where :math:`N` is the number of time samples,
+    :math:`s_l = e^{\lambda_l\,dt}` are the poles of the structure, and
+    the exponent :math:`\nu` depends on the type of IRF (accelerance (2), velocity (1), or displacement (0)).
+
+    Since the loss-function is not convex, the optimization is performed with
+    the global minimizer :func:`scipy.optimize.dual_annealing` with local search by `trust-ncg`.
+    To define an initial guesss,
+    a determined subset of equations from the system :math:`A^l_{ij} = \varphi_{il} \varphi_{jl}` is solved.
     '''
 
     def __init__(
@@ -1327,10 +1351,6 @@ class RealModes:
         self.response = response
 
         self._rescale = np.max(np.abs(amps))
-        self.modes_fit_ = None
-        self.success_ = None
-        self.message_ = None
-
         self._get_metric()
 
     def _get_metric(self):
@@ -1408,11 +1428,40 @@ class RealModes:
             [2*t1[:n_in] + t2, t1[n_in:]], axis=0)
         return (Ap + Bx).flatten()
 
-    def fit(self, options_ncg:dict=None):
+    def fit(self, options_ncg:dict=None, dual_annealing_kwargs:dict=None):
+        '''
+        Fit the mode shapes.
+        
+        Parameters
+        ----------
+        options_ncg : dict, optional
+            Options for the local optimization by `trust-ncg`.
+            The options 'jac' and 'hessp' are ignored since they are passed in this class.
+            See :func:`scipy.optimize.minimize` for details. Default is None.
+        
+        dual_annealing_kwargs : dict, optional
+            Options for `scipy.optimize.dual_annealing`.
+            The options 'x0', 'bounds', and 'minimizer_kwargs' are ignored since they are defined in this class.
+            See :func:`scipy.optimize.dual_annealing` for details. Default is None.
+
+        Return
+        ------
+        self : object
+            Fitted model.
+        '''
         n_out, n_in, dof = self.amps.shape
         options_ncg = {} if options_ncg is None else options_ncg
+        # Remove keys 'jac' and 'hessp' from options_ncg if they exist.
+        options_ncg.pop('jac', None)
+        options_ncg.pop('hessp', None)
         if 'gtol' not in options_ncg.keys():
             options_ncg['gtol'] = 1.e-4
+
+        dual_annealing_kwargs = {} if dual_annealing_kwargs is None else dual_annealing_kwargs
+        # Remove keys 'x0', 'bounds', and 'minimizer_kwargs' from dual_annealing_kwargs if they exist.
+        dual_annealing_kwargs.pop('x0', None)
+        dual_annealing_kwargs.pop('bounds', None)
+        dual_annealing_kwargs.pop('minimizer_kwargs', None)
 
         x0 = np.real(amps_to_modes(self.amps/self._rescale))
         idx = np.nonzero(x0[0] < 0)[0]
@@ -1432,13 +1481,14 @@ class RealModes:
                 'jac': self._jac,
                 'hessp': self._hessp,
                 'options': options_ncg},
-            callback=None)
-        self.modes_fit_ = np.sqrt(self._rescale) * res.x.reshape(n_out, dof)
+            **dual_annealing_kwargs,
+            )
+        self.modes_ = np.sqrt(self._rescale) * res.x.reshape(n_out, dof)
         self.success_ = res.success
         self.message_ = res.message
 
         # Define functions for predictions
-        amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
+        amps_fit = mode_to_amps(self.modes_, n_out, n_in)
         self._irf = Kernel(
             nat_freqs=np.log(self.poles)*self.fs,
             amps=amps_fit,
@@ -1448,21 +1498,25 @@ class RealModes:
         return self
 
     def predict(self, X):
-        if self.modes_fit_ is None:
+        '''
+        Predict the impulse response function (IRF).
+
+        Parameters
+        ----------
+        X : array-like (n_samples,)
+            Times at which to predict the IRF.
+
+        Returns
+        -------
+        irf : array-like (n_outputs, n_inputs, n_samples)
+            Predicted IRF at the given times.
+        '''
+        if self.modes_ is None:
             msg = 'Call fit() before accessing modes_fit_.'
             raise ValueError(msg)
 
         X = np.atleast_1d(X)
         return self._irf(X)
-
-    def irf_pred(self, X):
-        if self.modes_fit_ is None:
-            msg = 'Call fit() before accessing modes_fit_.'
-            raise ValueError(msg)
-
-        X = np.atleast_1d(X)
-        return self._irf(X)
-
 
 
 class _ConstraintModifier:
