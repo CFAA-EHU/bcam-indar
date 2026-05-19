@@ -52,14 +52,36 @@ Alternatively, execute the following command in your bash terminal:
 
     wget -nv -P data https://raw.githubusercontent.com/CFAA-EHU/bcam-indar/main/docs/source/_downloads/2-dof-system_rep{0..3}.csv
 
-.. The next block of code creates a symbolic link to the data folder.
+.. The next block of code creates a symbolic link to the data folder and sets the plot font size.
 .. plot::
     :context: reset
     :nofigs:
 
     from pathlib import Path
     import shutil
+    import matplotlib.pyplot as plt
+    plt.rcParams['font.size'] = 14
 
+    # Define system's matrices
+    m1, freq1, d1 = 1., 20., 0.04
+    m2 = 0.05
+    freq2 = freq1/(1+m2)
+    d2 = np.sqrt((3/8)*m2/(1+m2)**3)
+
+    k1, k2 = m1*freq1**2, m2*freq2**2
+    c1, c2 = 2*d1*m1*freq1, 2*d2*m2*freq2
+
+    M = np.array(
+        [[m1, 0],
+         [0, m2]])
+    K = np.array(
+        [[k1+k2, -k2],
+         [-k2, k2]])
+    C = np.array(
+        [[c1+c2, -c2],
+         [-c2, c2]])
+
+    # Create symbolic link to data folder
     source_dir = Path('_documents')
     data_dir = Path('data')
     if data_dir.is_symlink() and not data_dir.exists():
@@ -102,7 +124,7 @@ To load and inspect the data, execute the following code in your Python environm
     n_in, n_out = 1, 2
 
     # Plot data for the first trial
-    fig, axs = plt.subplots(ncols=2, sharex=True, figsize=(12, 5))
+    fig, axs = plt.subplots(ncols=2, sharex=True, figsize=(10, 4))
     tt = np.arange(ns)*dt
     axs[0].set_title('Impact')
     axs[0].plot(tt, impact[0, :])
@@ -266,7 +288,8 @@ that the Dirac delta has a large contribution.
 It is natural that the pole approximating the Dirac delta has a large 
 Coefficient of Variation (cv).
 
-We use VF ...
+The AAA algorithm is fast but not very robust with noisy signals, so
+we can use Vector Fitting (VF) to refine the estimation of the poles.
 
 .. plot::
     :context: close-figs
@@ -274,19 +297,295 @@ We use VF ...
     :include-source: True
     :nofigs:
 
-    poles_ = sr.poles_
-    poles_ = (
-        sr.poles_.real,
-        sr.poles_.cx
-    )
-
+    # Use the poles estimated by AAA as initial poles for VF
     sr = ema.SuperResolution(
         order = sr.poles_.count(),
         rational_fitter={
             'method': 'VF',
-            'poles': poles_,
+            'poles': (sr.poles_.real, sr.poles_.cx),
             'niter': 5
         },
         compute_amps=False,
         fs=1/dt)
     sr.fit(irf_[:, 0, :].T)
+
+The object ``sr`` now contains the refined poles in the attribute ``poles_``.
+Recall that there are two types of poles: mechanical poles and background poles.
+
+Mode shapes
+-----------
+
+It remains to estimate the mode shapes of the system, and
+for that we will start estimating the amplitudes in the IRF using :py:class:`bcam.indar.ema.Amplitudes`.
+If we inspect the poles in ``sr.poles_``, we will see that the first two poles correspond to
+the poles found in the stabilization diagram, which are the mechanical poles of the system, and
+the rest of the poles are background poles.
+
+.. plot::
+    :context: close-figs
+    :format: python
+    :include-source: True
+    :nofigs:
+
+    model = ema.Amplitudes(
+        mech_poles=sr.poles_.cx[:2], # mechanical poles
+        res_poles=(sr.poles_.real, sr.poles_.cx[2:]), # background poles
+        fs=1/dt,
+        response='a')
+    model.fit(irf_)
+
+We plot different estimates for the response of mass 1.
+We compare the FRF estimated by the classes :class:`LTIKernel` and :class:`Amplitudes`.
+Recall that :class:`LTIKernel` estimates an IRF for a general LTI system, while
+:class:`Amplitudes` estimates an IRF with a specific structure, which is an exponential sum with fixed poles.
+
+We also plot the components of the IRF estimated by :class:`Amplitudes`, which
+are the predicted IRF of the tested structure and the background,
+where the background contains the noise and the mass-term of the accelerance.
+
+.. plot::
+    :context: close-figs
+    :format: python
+    :include-source: True
+
+    fig, axs = plt.subplots(ncols=2, sharex=True, figsize=(10, 4))
+
+    r, e = 0, 0 # response (r), input (e)
+    freqs = np.fft.rfftfreq(ns, dt)
+
+    # Plot the FRF estimated by the classes LTIKernel and Amplitudes
+    fft_pred = model.predict(np.arange(ns)*dt)
+    fft_pred = np.fft.rfft(fft_pred, axis=-1)*dt
+    axs[0].plot(freqs, np.abs(frf_[r, e]), label='LTIKernel')
+    axs[0].plot(freqs, np.abs(fft_pred[r, e]), label='Amplitudes')
+    axs[0].set_xlabel('Frequency')
+    axs[0].set_yscale('log')
+    axs[0].legend('lower right')
+
+    # Plot the predicted IRF and background.
+    # Since the background contains the mass-term,
+    # its FRF resembles a constant function.
+    frf_irf_pred = model.irf_pred(np.arange(ns)*dt)
+    frf_bckg = model.residual(np.arange(ns)*dt)
+    frf_irf_pred = np.fft.rfft(frf_irf_pred, axis=-1)*dt
+    frf_bckg = np.fft.rfft(frf_bckg, axis=-1)*dt
+    axs[1].plot(freqs, np.abs(frf_irf_pred[r, e]), label='pred. IRF')
+    axs[1].plot(freqs, np.abs(frf_bckg[r, e]), label='background')
+    axs[1].set_xlabel('Frequency')
+    axs[1].set_yscale('log')
+    axs[1].legend()
+
+    fig.tight_layout()
+    plt.show()
+
+To find the mode shapes under the assumption of proportional damping,
+we use the class :py:class:`bcam.indar.ema.RealModes`, which
+uses a global minimizer that minimizes the difference between the amplitudes :math:`A^l_{ij}`
+estimated by :py:class:`Amplitudes`,
+and the product of the mode shapes :math:`\varphi_{li} \varphi_{lj}`.
+
+.. plot::
+    :context: close-figs
+    :format: python
+    :include-source: True
+    :nofigs:
+
+    tensor_modes = model.tensor_modes_ # These are the amplitudes A^l_{ij}
+    model_r = ema.RealModes(
+        poles=sr.poles_.cx[:2], # mechanical poles
+        amps=tensor_modes,
+        fs=1/dt,
+        ns=ns,
+        response='a',
+    )
+    model_r.fit(
+        options_ncg={'disp': 0, 'gtol': 1e-5}, # Change disp to 1 to see details
+    )
+
+Since the poles are close to each other, the system may exhibit significant modal coupling,
+so to refine the mode shapes we drop the assumption of proportional damping, and
+estimate the mode shapes using the class :py:class:`bcam.indar.ema.ComplexModes`.
+
+.. plot::
+    :context: close-figs
+    :format: python
+    :include-source: True
+    :nofigs:
+
+    model_cx = ema.ComplexModes(
+        poles=sr.poles_.cx[:2], # mechanical poles
+        coords=np.arange(n_out),
+        amps=tensor_modes, # These are the amplitudes A^l_{ij}
+        fs=1/dt,
+        ns=ns,
+        response='a'
+    )
+    model_cx.fit(
+        x0=model_r.modes_, # As initial guess, we use the estimated real mode shapes
+        maxiter=100,
+        options={'verbose': 0, 'gtol': 1e-5, 'xtol': 1e-6} # Change verbose to 1 or 2 to see details
+    )
+
+During the optimization process, the class ``ComplexModes`` may display warnings that
+some matrices are not positive definite, which
+is due to a violation of constraints in the optimization problem, but otherwise
+is not something the user should worry about. However,
+if the optimization throws many warnings it means that the optimization is struggling to find a solution.
+
+We compare the estimated FRF with the real and complex mode shapes.
+
+.. plot::
+    :context: close-figs
+    :format: python
+    :include-source: True
+
+    fig, axs = plt.subplots(ncols=2, sharex=True, figsize=(10, 4))
+
+    e = 0
+    freqs = np.fft.rfftfreq(ns, dt)
+    
+    fft_r = model_r.predict(np.arange(ns)*dt)
+    fft_r = np.fft.rfft(fft_r, axis=-1)*dt
+    fft_cx = model_cx.predict(np.arange(ns)*dt)
+    fft_cx = np.fft.rfft(fft_cx, axis=-1)*dt
+    
+    for r in range(n_out):
+        axs[r].set_title(f'response {r}')
+        axs[r].plot(freqs, np.abs(fft_r[r, e]), label='RealModes')
+        axs[r].plot(freqs, np.abs(fft_cx[r, e]), label='ComplexModes')
+        axs[r].set_xlabel('Frequency')
+        axs[r].set_yscale('log')
+
+    axs[1].legend()
+    axs[0].set_xlim(0, 10)
+    axs[0].set_ylim(1e-1, 9)
+
+    fig.tight_layout()
+    plt.show()
+
+Even though the FRFs estimated using real and complex mode shapes are similar,
+the difference is still significant enough to be visible.
+
+In general, it is very difficult to estimate complex mode shapes.
+It works well here because there are only two modes that are close to each other, but
+if the system had at least a third complex pole with a very different natural frequency,
+the optimization algorithm would likely fail to converge after many iterations.
+
+When all poles are clustered around a frequency and the damping is sufficiently high,
+convergence of the optimization algorithm becomes more likely..
+Lack of convergence, however, does not imply that the estimation cannot be substantially improved
+by the use of complex mode shapes.
+
+To assess the quality of the estimation,
+we compare the FRF with complex mode shapes and the true FRF of the system.
+
+.. plot::
+    :context: close-figs
+    :format: python
+    :include-source: True
+
+    # Compute modal representation of the system
+    mode_shapes, nat_freqs = ema.system_to_modal(M, C, K)
+    # The mode shapes are returned normalized by mass,
+    # but we need them in the reduced normalization
+    mode_shapes = mode_shapes / np.sqrt(np.imag(nat_freqs))
+    # We compute the amplitudes of the true FRF
+    amps = ema.mode_to_amps(mode_shapes, n_out=2, n_in=2)
+
+    # Compute the true FRF of the system
+    frf_true = ema.Kernel(nat_freqs, amps)
+    tt = np.arange(ns)*dt
+    frf_true = frf_true(tt)
+    frf_true = np.fft.rfft(frf_true, axis=-1)*dt
+
+    fig, axs = plt.subplots(ncols=2, sharex=True, figsize=(10, 4))
+
+    freqs = np.fft.rfftfreq(ns, dt)
+    for r in range(n_out):
+        axs[r].set_title(f'response {r}')
+        axs[r].plot(freqs, np.abs(frf_true[r, e]), label='true FRF')
+        axs[r].plot(freqs, np.abs(fft_cx[r, e]), label=f'estimated FRF')
+        axs[r].set_xlabel('Frequency')
+        axs[r].set_yscale('log')
+
+    axs[1].legend()
+    axs[0].set_xlim(0, 10)
+    axs[0].set_ylim(1e-1, 9)
+
+    fig.tight_layout()
+    plt.show()
+
+We see that there is a good agreement between both FRFs.
+We can further estimate the mass, damping, and stiffness matrices using the equations
+
+.. math::
+    M = \im\big(\varphi \Lambda \varphi^T\big)^{-1}, \quad
+    K = -\im\big(\varphi \Lambda^{-1} \varphi^T\big)^{-1}, \quad\text{and}\quad
+    C = -M\im\big(\varphi \Lambda^2 \varphi^T\big)M.
+
+.. plot::
+    :context: close-figs
+    :format: python
+    :include-source: True
+
+    # Estimated modal parameters
+    modes_ = model_cx.modes_
+    poles_ = sr.poles_.cx[:2]
+    nat_freqs_ = np.log(poles_)/dt
+
+    # Estimated mass, damping, and stiffness matrices
+    M_ = np.imag((modes_*nat_freqs_[np.newaxis, :]) @ modes_.T)
+    M_ = np.linalg.inv(M_)
+
+    K_ = -np.imag((modes_/nat_freqs_[np.newaxis, :]) @ modes_.T)
+    K_ = np.linalg.inv(K_)
+
+    C_ = -np.imag((modes_*nat_freqs_[np.newaxis, :]**2)@modes_.T)
+    C_ = M_ @ C_ @ M_
+
+We can compare the true matrices (at the left) with the estimated ones (at the right).
+
+.. The hidden code block below writes a LaTeX-formatted comparison of
+.. true vs estimated matrices, included at the end of this page.
+.. plot::
+    :context: close-figs
+    :format: python
+    :include-source: False
+    :nofigs:
+
+    from pathlib import Path
+
+    def _fmt_num(x):
+        x = float(x)
+        if abs(x) < 5e-12:
+            x = 0.0
+        return f'{x:.4g}'
+
+    def _to_bmatrix(arr):
+        rows = [' & '.join(_fmt_num(v) for v in row) for row in np.asarray(arr)]
+        return r'\begin{bmatrix}' + r' \\ '.join(rows) + r'\end{bmatrix}'
+
+    out_dir = Path('_private_generated')
+    out_dir.mkdir(exist_ok=True)
+
+    content = (
+        '.. math::\n\n'
+        f'    M = {_to_bmatrix(M)}, \\qquad \\hat{{M}} = {_to_bmatrix(M_)}\n\n'
+        '.. math::\n\n'
+        f'    C = {_to_bmatrix(C)}, \\qquad \\hat{{C}} = {_to_bmatrix(C_)}\n\n'
+        '.. math::\n\n'
+        f'    K = {_to_bmatrix(K)}, \\qquad \\hat{{K}} = {_to_bmatrix(K_)}\n'
+    )
+
+    (out_dir / 'matrix_comparison.rst').write_text(content, encoding='utf-8')
+
+.. include:: _private_generated/matrix_comparison.rst
+
+In this case it is possible to reconstruct the system matrices because
+the number of outputs equals the DoF, but
+oftentimes the number of outputs is smaller than the DoF, so
+only partial mode shapes can be estimated.
+In this last case, there are infinitely many systems that are compatible with the estimated mode shapes.
+
+The package `indar.ema` contains methods that help to find at least one extension to a complete set of mode shapes, but
+they are still insufficiently documented here.

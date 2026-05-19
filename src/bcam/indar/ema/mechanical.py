@@ -511,12 +511,15 @@ def _fit_amplitudes_stable(
 
     # Antisymmetric part of residue.
     ya = reshape_projection_anti(y)
-    r = scipy.linalg.lstsq(
-        V, ya.T,
-        overwrite_a=True, overwrite_b=True,
-        cond=cond, lapack_driver=lapack_driver)[0].T
-    del ya
-    r = reshape_injection_anti(r, n_out, n_in)
+    if len(ya) > 0:
+        r = scipy.linalg.lstsq(
+            V, ya.T,
+            overwrite_a=True, overwrite_b=True,
+            cond=cond, lapack_driver=lapack_driver)[0].T
+        del ya
+        r = reshape_injection_anti(r, n_out, n_in)
+    else:
+        r = np.zeros_like(r_r)
     r_r = r_r + r
     amps_ = HCoeffs(
         real=r_r[..., :n_r],

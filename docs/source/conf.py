@@ -66,10 +66,16 @@ intersphinx_mapping = {
     'sklearn': ('https://scikit-learn.org/stable', None),
 }
 
+
 # Hide the '(Source code)' link shown by matplotlib plot directive blocks.
 plot_html_show_source_link = False
 # Keep only PNG artifacts in plot output links.
 plot_formats = ['png']
+
+# -- Matplotlib plot appearance (global rcParams) --
+plot_rcparams = {
+    'text.usetex': True,
+}
 
 # -- Options for HTML output -------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#options-for-html-output
