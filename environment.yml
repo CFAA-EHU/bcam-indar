@@ -19,6 +19,7 @@ dependencies:
   - sympy=1.14
   - sphinx
   - numpydoc
+  - cairosvg
   - pip
   - pip:
     - hatch
