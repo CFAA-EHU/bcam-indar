@@ -112,39 +112,23 @@ autodoc_type_aliases = {
 
 # Use short names (e.g., ArrayLike instead of numpy.typing.ArrayLike).
 autodoc_typehints_format = 'short'
-_logger = sphinx_logging.getLogger(__name__)
 
 
 def _ensure_png_from_svg(_app):
     """Convert every SVG in _images to PNG (300 dpi) during docs build."""
     images_dir = Path(__file__).resolve().parent / '_images'
     if not images_dir.exists():
-        _logger.warning('Expected images directory not found: %s', images_dir)
-        return
-
-    stale_svgs = [
-        svg_path
-        for svg_path in sorted(images_dir.glob('*.svg'))
-        if (not svg_path.with_suffix('.png').exists())
-        or (svg_path.with_suffix('.png').stat().st_mtime < svg_path.stat().st_mtime)
-    ]
-    if not stale_svgs:
         return
 
     try:
         import cairosvg
     except ImportError:
-        _logger.warning(
-            'Cannot convert SVG images to PNG because cairosvg is not installed. '
-            'Install docs dependencies or commit PNG images under %s.',
-            images_dir,
-        )
         return
 
-    for svg_path in stale_svgs:
+    for svg_path in images_dir.glob('*.svg'):
         png_path = svg_path.with_suffix('.png')
-        cairosvg.svg2png(url=str(svg_path), write_to=str(png_path), dpi=300)
-        _logger.info('Generated %s from %s at 300 dpi', png_path.name, svg_path.name)
+        if (not png_path.exists()) or (png_path.stat().st_mtime < svg_path.stat().st_mtime):
+            cairosvg.svg2png(url=str(svg_path), write_to=str(png_path), dpi=300)
 
 
 def _clean_type_alias_display(_app, _what, _name, _obj, _options, signature, return_annotation):
