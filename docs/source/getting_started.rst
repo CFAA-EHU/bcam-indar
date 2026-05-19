@@ -2,27 +2,26 @@
 Getting Started
 ===============
 
-The purpose of the `indar` package is to collect tools and methods developed during our research.
-The package does not have a specific structure, and it is not intended to be a general-purpose package.
-For now, `indar` only offers methods for Experimental Modal Analysis (EMA), and
+The `indar` package collects tools and methods developed during our research, and
+it is not intended as a general-purpose package with a fixed high-level workflow.
+At the moment, it provides methods for Experimental Modal Analysis (EMA) and
 for solving eigenvalue problems of Delay Differential Equations (DDE) with a single delay.
 
-In the following example, we show how to use the `indar` package to perform a simple EMA.
+This example shows a complete EMA workflow using `indar`.
 
 Tuned Mass Damper
 =================
 
-In this example you will learn how to use the basic utilities of the `indar.ema` module to estimate the modal parameters of a mechanical system.
-We will process data from a (simulated) hammer test of a Tuned Mass Damper (TMD), where
-the raw data are forces and accelerations measured at different points of the structure.
+In this example, we will use the core utilities of `indar.ema` to estimate the modal parameters of a mechanical system.
+We process data from a simulated hammer test of a Tuned Mass Damper (TMD), where
+the measured signals are the input force and output accelerations.
 
-The first step is to load the data and inspect it, and then to estimate the Impulse Response Function (IRF) of the system.
-The IRF can be defined for any causal Linear Time-Invariant (LTI) system, and
-in general it does not have to have a specific structure.
-However, the IRF of a mechanical system is an exponential sum, and
-we will estimate the order and natural frequencies of the exponential sum.
+We start by loading and inspecting the data, then estimate the system Impulse Response Function (IRF).
+The IRF is defined for any causal Linear Time-Invariant (LTI) system.
+For mechanical systems, however, the IRF is an exponential sum, so we can estimate
+its order and natural frequencies.
 
-Finally, we will estimate the mode shapes of the system, and compare the estimated modal parameters with the true ones.
+Finally, we estimate the mode shapes and compare the identified modal parameters with the true ones.
 
 For this example, we recommend to create an environment with the following dependencies:
 
@@ -211,10 +210,10 @@ to automatically select the best parameters based on a scoring function.
         lti_model.fit(impact, response[:, i, :])
         irf_[i, 0, :] = lti_model.kernel_
 
-The array `irf_` contains the estimated IRF with the best paramaters found by cross-validation.
+The array `irf_` contains the estimated IRF with the best parameters found by cross-validation.
 If we inspect `clf`, we will see that the best parameters are :math:`\alpha = 0.01` and :math:`\beta = 7.20`.
-We plot the estimated FRF of mass 2 together with the input spectrum to
-check in which frequency range the estimation is expected to worsen due to the low input energy.
+We now plot the estimated FRF of mass 2 together with the input spectrum.
+This helps identify the frequency range where low input energy may reduce estimation quality.
 
 .. plot::
     :context: close-figs
@@ -247,14 +246,12 @@ check in which frequency range the estimation is expected to worsen due to the l
 Spectral estimation
 -------------------
 
-The IRF of a mechanical system is an exponential sum, and
-to estimate the order and natural frequencies of the system
-we transform the problem into one of rational approximation, for which
-we will use the AAA algorithm.
+Because the IRF of a mechanical system is an exponential sum,
+estimating modal frequencies can be recast as a rational approximation problem.
+Here we use the AAA algorithm for that step.
 
-We use the class :py:class:`bcam.indar.ema.StablePoles` to construct the stabilization diagram up to order 30
-(recall that complex poles appear in conjugate pairs) and
-summarize the clusters of stable poles.
+We use :py:class:`bcam.indar.ema.StablePoles` to construct a stabilization diagram up to order 30
+(complex poles appear in conjugate pairs) and then summarize the resulting stable-pole clusters.
 
 .. plot::
     :context: close-figs
@@ -300,17 +297,17 @@ summarize the clusters of stable poles.
     :file: _private_generated/stable_poles_clusters.csv
     :header-rows: 1
 
-The table shows, as expected, three clusters of stable poles.
-The first column is the number of poles in each cluster, where each pole
-corresponds to a different order of the exponential sum.
-The table also shows the mean values of the clusters of poles and the mean magnitude of the amplitudes,
+As expected, the table shows three stable-pole clusters.
+The first column gives the number of poles per cluster, where each pole
+comes from a different model order in the stabilization diagram.
+The table also reports cluster means for poles and amplitude magnitudes,
 together with their coefficient of variation (cv).
 
-Two of the clusters correspond to the complex conjugate poles of the system, and
-the other is an approximation of the mass-term in the IRF for acceleration,
+Two clusters correspond to the system's complex-conjugate mechanical poles.
+The third approximates the mass-term from the accelerance,
 which appears as a Dirac delta at time zero.
-The table shows that the complex poles have around the same amplitude, and
-that the Dirac delta has a large contribution.
+Consistent with that interpretation, the two mechanical clusters have similar amplitudes,
+while the Dirac-like term has a comparatively large contribution.
 
 The AAA algorithm is fast but not very robust against noise, so
 we use Vector Fitting (VF) to refine the estimation of the poles.
@@ -333,19 +330,18 @@ we use Vector Fitting (VF) to refine the estimation of the poles.
         fs=1/dt)
     sr.fit(irf_[:, 0, :].T)
 
-The object ``sr`` now contains the refined poles in the attribute ``poles_``.
-Recall that there are two types of poles: mechanical poles and background poles.
+The object ``sr`` now contains the refined poles in ``poles_``.
+At this point we distinguish two groups: mechanical poles and background poles.
 
 Mode shapes
 -----------
 
-It remains to estimate the mode shapes of the system, and
-for that we will start estimating the amplitudes in the IRF using :py:class:`bcam.indar.ema.Amplitudes`.
-This estimation takes into account additional constraints such as Maxwell's reciprocity.
+The next step is to estimate mode shapes.
+To do that, we first estimate IRF amplitudes with :py:class:`bcam.indar.ema.Amplitudes`.
+At this stage, we also impose additional physical constraints, such as Maxwell's reciprocity.
 
-If we inspect the poles in ``sr.poles_``, we will see that the first two poles correspond to
-the poles found in the stabilization diagram, which are the mechanical poles of the system, and
-the rest of the poles are background poles.
+Inspecting ``sr.poles_``, the first two poles match the mechanical poles identified in the stabilization diagram,
+while the remaining poles are treated as background poles.
 
 .. plot::
     :context: close-figs
@@ -360,14 +356,14 @@ the rest of the poles are background poles.
         response='a')
     model.fit(irf_)
 
-We plot different estimates for the response of mass 1.
-We compare the FRF estimated by the classes :class:`LTIKernel` and :class:`Amplitudes`.
-Recall that :class:`LTIKernel` estimates an IRF for a general LTI system, while
-:class:`Amplitudes` estimates an IRF with a specific structure, which is an exponential sum.
+We now compare two FRF estimates for response at mass 1:
+:class:`LTIKernel` and :class:`Amplitudes`.
+Recall that :class:`LTIKernel` estimates a general LTI IRF,
+whereas :class:`Amplitudes` enforces the exponential-sum structure.
 
-We also plot the components of the IRF estimated by :class:`Amplitudes`, which
-are the predicted IRF of the tested structure and the background,
-where the background contains the noise and the mass-term of the accelerance.
+We also plot the two components from :class:`Amplitudes`:
+the predicted structural IRF and the background term,
+which contains noise and the mass-term of the accelerance.
 
 .. plot::
     :context: close-figs
@@ -404,11 +400,10 @@ where the background contains the noise and the mass-term of the accelerance.
     fig.tight_layout()
     plt.show()
 
-To find the mode shapes under the assumption of proportional damping,
-we use the class :py:class:`bcam.indar.ema.RealModes`, which
-uses a global minimizer that seeks to minimize the difference between the amplitudes :math:`A^l_{ij}`
-estimated by :py:class:`Amplitudes`,
-and the product of the mode shapes :math:`\varphi_{il} \varphi_{jl}`.
+To estimate mode shapes under proportional damping,
+we use :py:class:`bcam.indar.ema.RealModes`.
+It applies a global minimizer to match the amplitudes :math:`A^l_{ij}`
+estimated by :py:class:`Amplitudes` with the products :math:`\varphi_{il} \varphi_{jl}`.
 
 .. plot::
     :context: close-figs
@@ -428,9 +423,9 @@ and the product of the mode shapes :math:`\varphi_{il} \varphi_{jl}`.
         options_ncg={'disp': 0, 'gtol': 1e-5}, # Change disp to 1 to see details
     )
 
-Since the poles are close to each other, the system may exhibit significant modal coupling,
-so to refine the mode shapes we drop the assumption of proportional damping, and
-estimate the mode shapes using the class :py:class:`bcam.indar.ema.ComplexModes`.
+Because the poles are close, modal coupling can be significant.
+To refine the result, we drop the assumtion of proportional damping and
+estimate mode shapes with :py:class:`bcam.indar.ema.ComplexModes`.
 
 .. plot::
     :context: close-figs
@@ -452,14 +447,11 @@ estimate the mode shapes using the class :py:class:`bcam.indar.ema.ComplexModes`
         options={'verbose': 0, 'gtol': 1e-5, 'xtol': 1e-6} # Change verbose to 1 or 2 to see details
     )
 
-During the optimization process, the class ``ComplexModes`` may display warnings about
-some matrices not being positive definite, which
-is due to a violation of optimization constraints, but otherwise
-it is not something the user should worry about. However,
-if the optimization throws constantly warnings,
-it means that the optimization is struggling to find a solution.
+During optimization, ``ComplexModes`` may warn that some matrices are not positive definite.
+These warnings can appear when constraints are temporarily violated and are not always problematic.
+However, if warnings appear persistently, optimization is likely struggling to find a stable solution.
 
-We compare the estimated FRF with the real and complex mode shapes.
+We then compare FRFs reconstructed with real and complex mode shapes.
 
 .. plot::
     :context: close-figs
@@ -490,22 +482,20 @@ We compare the estimated FRF with the real and complex mode shapes.
     fig.tight_layout()
     plt.show()
 
-Even though the FRFs estimated using real and complex mode shapes are similar,
-the difference is still significant enough to be visible.
+Although both reconstructions are similar, their difference is still clearly visible.
 
 .. note::
-    In general, it is very difficult to estimate complex mode shapes.
-    It works well here because there are only two modes that are close to each other, but
-    if the system had at least a third complex pole with a very different natural frequency,
-    the optimization algorithm would likely fail to converge after many iterations. 
+    In general, estimating complex mode shapes is challenging.
+    It works well here because only two close modes are involved.
+    If a third complex pole were present at a very different natural frequency,
+    the optimizer would be more likely to stall after many iterations.
 
-    When all poles are clustered around a frequency and the damping is sufficiently high,
-    convergence of the optimization algorithm becomes more likely.
-    Lack of convergence, however, does not imply that the estimation cannot be substantially improved
-    by the use of complex mode shapes.
+    When poles are clustered and damping is sufficiently high,
+    convergence becomes more likely.
+    Lack of convergence, however, does not imply that the system has proportional damping.
 
-To assess the quality of the estimation,
-we compare the FRF with complex mode shapes and the true FRF of the system.
+To assess estimation quality,
+we compare the FRF reconstructed from complex mode shapes with the true system FRF.
 
 .. plot::
     :context: close-figs
@@ -544,8 +534,8 @@ we compare the FRF with complex mode shapes and the true FRF of the system.
     fig.tight_layout()
     plt.show()
 
-We see that there is a good agreement between both FRFs.
-We can further estimate the mass, damping, and stiffness matrices using the equations
+The two FRFs show good agreement.
+We can then estimate mass, damping, and stiffness matrices with
 
 .. math::
     M = \im\big(\varphi \Lambda \varphi^T\big)^{-1}, \quad
@@ -575,7 +565,7 @@ where :math:`\varphi` are the mode shapes (real or complex) arranged as an
     C_ = -np.imag((modes_*nat_freqs_[np.newaxis, :]**2)@modes_.T)
     C_ = M_ @ C_ @ M_
 
-We can compare the true matrices (at the left) with the estimated ones (at the right).
+Below, we compare the true matrices (left) with the estimated matrices (right).
 
 .. The hidden code block below writes a LaTeX-formatted comparison of
 .. true vs estimated matrices, included at the end of this page.
@@ -613,11 +603,11 @@ We can compare the true matrices (at the left) with the estimated ones (at the r
 
 .. include:: _private_generated/matrix_comparison.rst
 
-In this case it is possible to reconstruct the system matrices because
-the number of outputs equals the DoF, but
-oftentimes the number of outputs is smaller than the DoF, so
-only partial mode shapes can be estimated.
-In this last case, there are infinitely many systems that are compatible with the estimated mode shapes.
+In this example, full matrix reconstruction is possible because
+the number of outputs equals the number of DoFs.
+In many practical cases, the number of outputs is smaller than the number of DoFs,
+so only partial mode shapes can be estimated.
+Then infinitely many full systems are compatible with the identified modal information.
 
 The package `indar.ema` contains methods that help to find at least one extension to a complete set of mode shapes, but
 they are still insufficiently documented here.
