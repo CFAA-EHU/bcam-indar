@@ -2,55 +2,36 @@
 Getting Started
 ===============
 
-The purpose of the `indar` package is to collect those tools developed during our research, so
-it does not have a specific structure, and it is not intended to be a general-purpose package.
-For now, the package only offers methods for Experimental Modal Analysis (EMA), and
+The purpose of the `indar` package is to collect tools and methods developed during our research.
+The package does not have a specific structure, and it is not intended to be a general-purpose package.
+For now, `indar` only offers methods for Experimental Modal Analysis (EMA), and
 for solving eigenvalue problems of Delay Differential Equations (DDE) with a single delay.
 
-In the following example, we show how to use the package to perform a simple EMA analysis.
+In the following example, we show how to use the `indar` package to perform a simple EMA.
 
 Tuned Mass Damper
 =================
 
-We simulate a hammer test of the Tuned Mass Damper (TMD) in the figure below,
-which is a 2-DoF system.
+In this example you will learn how to use the basic utilities of the `indar.ema` module to estimate the modal parameters of a mechanical system.
+We will process data from a (simulated) hammer test of a Tuned Mass Damper (TMD), where
+the raw data are forces and accelerations measured at different points of the structure.
 
-.. image:: _images/TMD.png
-   :align: center
-   :width: 300px
+The first step is to load the data and inspect it, and then to estimate the Impulse Response Function (IRF) of the system.
+The IRF can be defined for any causal Linear Time-Invariant (LTI) system, and
+in general it does not have to have a specific structure.
+However, the IRF of a mechanical system is an exponential sum, and
+we will estimate the order and natural frequencies of the exponential sum.
 
-The system is excited at the first mass, and the response is measured at both masses.
-The equation of motion of the masses is
+Finally, we will estimate the mode shapes of the system, and compare the estimated modal parameters with the true ones.
 
-.. math::
-    \begin{gathered}
-    M\ddot{x} + C\dot{x} + Kx = f \\
-    M = \begin{bmatrix} m_1 & 0 \\ 0 & m_2 \end{bmatrix},\quad
-    C = \begin{bmatrix} c_1 + c_2 & -c_2 \\ -c_2 & c_2 \end{bmatrix},\quad
-    K = \begin{bmatrix} k_1 + k_2 & -k_2 \\ -k_2 & k_2 \end{bmatrix},
-    \end{gathered}
+For this example, we recommend to create an environment with the following dependencies:
 
-with parameters in the table below.
-
-+----------------------+----------------------+----------------------+
-| Mass                 | Damping              | Stiffness            |
-+======================+======================+======================+
-| :math:`m_1 = 1.0`    | :math:`c_1 = 0.5`    | :math:`k_1 = 50.0`   |
-+----------------------+----------------------+----------------------+
-| :math:`m_2 = 0.2`    | :math:`c_2 = 0.08`   | :math:`k_2 = 7.0`    |
-+----------------------+----------------------+----------------------+
-
-The test is repeated four times with a sampling interval of
-:math:`\Delta t = 0.02`, and the number of time samples is 256.
-
-To follow the example along,
-download the data files `2-dof-system_rep*.csv` from `this link <https://github.com/CFAA-EHU/bcam-indar/tree/main/docs/source/_downloads>`_ and
-save them in a `data` folder.
-Alternatively, execute the following command in your bash terminal:
-
-.. code-block:: bash
-
-    wget -nv -P data https://raw.githubusercontent.com/CFAA-EHU/bcam-indar/main/docs/source/_downloads/2-dof-system_rep{0..3}.csv
+- `numpy`
+- `pandas`
+- `matplotlib`
+- `scikit-learn`
+- `scipy`
+- `bcam-indar` (install with `pip install bcam-indar`)
 
 .. The next block of code creates a symbolic link to the data folder and sets the plot font size.
 .. plot::
@@ -92,6 +73,46 @@ Alternatively, execute the following command in your bash terminal:
             data_dir.symlink_to(source_dir, target_is_directory=True)
         except OSError:
             shutil.copytree(source_dir, data_dir)
+
+We simulate a hammer test of the Tuned Mass Damper (TMD) in the figure below,
+which is a 2-DoF system.
+
+.. image:: _images/TMD.png
+   :align: center
+   :width: 300px
+
+The system is excited at the first mass, and the response is measured at both masses.
+The equation of motion of the system is
+
+.. math::
+    \begin{gathered}
+    M\ddot{x} + C\dot{x} + Kx = f \\
+    M = \begin{bmatrix} m_1 & 0 \\ 0 & m_2 \end{bmatrix},\quad
+    C = \begin{bmatrix} c_1 + c_2 & -c_2 \\ -c_2 & c_2 \end{bmatrix},\quad
+    K = \begin{bmatrix} k_1 + k_2 & -k_2 \\ -k_2 & k_2 \end{bmatrix},
+    \end{gathered}
+
+with parameters in the table below.
+
++----------------------+----------------------+----------------------+
+| Mass                 | Damping              | Stiffness            |
++======================+======================+======================+
+| :math:`m_1 = 1.0`    | :math:`c_1 = 1.6`    | :math:`k_1 = 400.0`  |
++----------------------+----------------------+----------------------+
+| :math:`m_2 = 0.05`   | :math:`c_2 = 0.242`  | :math:`k_2 = 18.14`  |
++----------------------+----------------------+----------------------+
+
+The test is repeated four times with a sampling interval of
+:math:`\Delta t = 0.02`, and the number of time samples is 256.
+
+To follow the example along,
+download the data files `2-dof-system_rep*.csv` from `this link <https://github.com/CFAA-EHU/bcam-indar/tree/main/docs/source/_downloads>`_ and
+save them in a directory called `data`.
+Alternatively, execute the following command in your bash terminal:
+
+.. code-block:: bash
+
+    wget -nv -P data https://raw.githubusercontent.com/CFAA-EHU/bcam-indar/main/docs/source/_downloads/2-dof-system_rep{0..3}.csv
 
 To load and inspect the data, execute the following code in your Python environment:
 
@@ -138,6 +159,7 @@ To load and inspect the data, execute the following code in your Python environm
     axs[1].set_ylabel('Acceleration')
     axs[1].legend()
 
+    fig.tight_layout()
     plt.show()
 
 
@@ -147,7 +169,7 @@ Impulse Response Function
 We will not use the H1 estimator but the class :py:class:`bcam.indar.ema.LTIKernel`.
 The estimator used by this class is based on a time-domain model,
 which means that the estimation is not affected by leakage,
-so it is robust against any type of excitation and time-windowing.
+so it can be used with any type of excitation and time-window without introducing bias in the estimation.
 For example, in case of random excitations,
 it is not necessary to ensure periodicity.
 However, its downside is that the estimation takes considerably more time than the H1 estimator.
@@ -279,17 +301,19 @@ summarize the clusters of stable poles.
     :header-rows: 1
 
 The table shows, as expected, three clusters of stable poles.
-Two of them correspond to the complex conjugate poles of the system, and
+The first column is the number of poles in each cluster, where each pole
+corresponds to a different order of the exponential sum.
+The table also shows the mean values of the clusters of poles and the mean magnitude of the amplitudes,
+together with their coefficient of variation (cv).
+
+Two of the clusters correspond to the complex conjugate poles of the system, and
 the other is an approximation of the mass-term in the IRF for acceleration,
 which appears as a Dirac delta at time zero.
-
 The table shows that the complex poles have around the same amplitude, and
 that the Dirac delta has a large contribution.
-It is natural that the pole approximating the Dirac delta has a large 
-Coefficient of Variation (cv).
 
-The AAA algorithm is fast but not very robust with noisy signals, so
-we can use Vector Fitting (VF) to refine the estimation of the poles.
+The AAA algorithm is fast but not very robust against noise, so
+we use Vector Fitting (VF) to refine the estimation of the poles.
 
 .. plot::
     :context: close-figs
@@ -317,6 +341,8 @@ Mode shapes
 
 It remains to estimate the mode shapes of the system, and
 for that we will start estimating the amplitudes in the IRF using :py:class:`bcam.indar.ema.Amplitudes`.
+This estimation takes into account additional constraints such as Maxwell's reciprocity.
+
 If we inspect the poles in ``sr.poles_``, we will see that the first two poles correspond to
 the poles found in the stabilization diagram, which are the mechanical poles of the system, and
 the rest of the poles are background poles.
@@ -337,7 +363,7 @@ the rest of the poles are background poles.
 We plot different estimates for the response of mass 1.
 We compare the FRF estimated by the classes :class:`LTIKernel` and :class:`Amplitudes`.
 Recall that :class:`LTIKernel` estimates an IRF for a general LTI system, while
-:class:`Amplitudes` estimates an IRF with a specific structure, which is an exponential sum with fixed poles.
+:class:`Amplitudes` estimates an IRF with a specific structure, which is an exponential sum.
 
 We also plot the components of the IRF estimated by :class:`Amplitudes`, which
 are the predicted IRF of the tested structure and the background,
@@ -360,7 +386,7 @@ where the background contains the noise and the mass-term of the accelerance.
     axs[0].plot(freqs, np.abs(fft_pred[r, e]), label='Amplitudes')
     axs[0].set_xlabel('Frequency')
     axs[0].set_yscale('log')
-    axs[0].legend('lower right')
+    axs[0].legend(loc='lower right')
 
     # Plot the predicted IRF and background.
     # Since the background contains the mass-term,
@@ -380,9 +406,9 @@ where the background contains the noise and the mass-term of the accelerance.
 
 To find the mode shapes under the assumption of proportional damping,
 we use the class :py:class:`bcam.indar.ema.RealModes`, which
-uses a global minimizer that minimizes the difference between the amplitudes :math:`A^l_{ij}`
+uses a global minimizer that seeks to minimize the difference between the amplitudes :math:`A^l_{ij}`
 estimated by :py:class:`Amplitudes`,
-and the product of the mode shapes :math:`\varphi_{li} \varphi_{lj}`.
+and the product of the mode shapes :math:`\varphi_{il} \varphi_{jl}`.
 
 .. plot::
     :context: close-figs
@@ -426,11 +452,12 @@ estimate the mode shapes using the class :py:class:`bcam.indar.ema.ComplexModes`
         options={'verbose': 0, 'gtol': 1e-5, 'xtol': 1e-6} # Change verbose to 1 or 2 to see details
     )
 
-During the optimization process, the class ``ComplexModes`` may display warnings that
-some matrices are not positive definite, which
-is due to a violation of constraints in the optimization problem, but otherwise
-is not something the user should worry about. However,
-if the optimization throws many warnings it means that the optimization is struggling to find a solution.
+During the optimization process, the class ``ComplexModes`` may display warnings about
+some matrices not being positive definite, which
+is due to a violation of optimization constraints, but otherwise
+it is not something the user should worry about. However,
+if the optimization throws constantly warnings,
+it means that the optimization is struggling to find a solution.
 
 We compare the estimated FRF with the real and complex mode shapes.
 
@@ -466,15 +493,16 @@ We compare the estimated FRF with the real and complex mode shapes.
 Even though the FRFs estimated using real and complex mode shapes are similar,
 the difference is still significant enough to be visible.
 
-In general, it is very difficult to estimate complex mode shapes.
-It works well here because there are only two modes that are close to each other, but
-if the system had at least a third complex pole with a very different natural frequency,
-the optimization algorithm would likely fail to converge after many iterations.
+.. note::
+    In general, it is very difficult to estimate complex mode shapes.
+    It works well here because there are only two modes that are close to each other, but
+    if the system had at least a third complex pole with a very different natural frequency,
+    the optimization algorithm would likely fail to converge after many iterations. 
 
-When all poles are clustered around a frequency and the damping is sufficiently high,
-convergence of the optimization algorithm becomes more likely..
-Lack of convergence, however, does not imply that the estimation cannot be substantially improved
-by the use of complex mode shapes.
+    When all poles are clustered around a frequency and the damping is sufficiently high,
+    convergence of the optimization algorithm becomes more likely.
+    Lack of convergence, however, does not imply that the estimation cannot be substantially improved
+    by the use of complex mode shapes.
 
 To assess the quality of the estimation,
 we compare the FRF with complex mode shapes and the true FRF of the system.
@@ -484,7 +512,8 @@ we compare the FRF with complex mode shapes and the true FRF of the system.
     :format: python
     :include-source: True
 
-    # Compute modal representation of the system
+    # Compute modal representation of the system.
+    # The user must introduce the matrices M, C, and K manually before running this code.
     mode_shapes, nat_freqs = ema.system_to_modal(M, C, K)
     # The mode shapes are returned normalized by mass,
     # but we need them in the reduced normalization
@@ -521,7 +550,10 @@ We can further estimate the mass, damping, and stiffness matrices using the equa
 .. math::
     M = \im\big(\varphi \Lambda \varphi^T\big)^{-1}, \quad
     K = -\im\big(\varphi \Lambda^{-1} \varphi^T\big)^{-1}, \quad\text{and}\quad
-    C = -M\im\big(\varphi \Lambda^2 \varphi^T\big)M.
+    C = -M\im\big(\varphi \Lambda^2 \varphi^T\big)M,
+
+where :math:`\varphi` are the mode shapes (real or complex) arranged as an
+:math:`(n_\mathrm{out} \times \mathrm{dof})`-matrix.
 
 .. plot::
     :context: close-figs
@@ -589,3 +621,5 @@ In this last case, there are infinitely many systems that are compatible with th
 
 The package `indar.ema` contains methods that help to find at least one extension to a complete set of mode shapes, but
 they are still insufficiently documented here.
+For those interested in an example where partial mode shapes are estimated and then extended,
+see `this example <https://gitlab.bcamath.org/fponce/espira-for-ema/-/tree/main/src/high_damping>`_.
