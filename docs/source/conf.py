@@ -7,8 +7,10 @@
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
 import re
+from pathlib import Path
 
 import bcam.indar
+from sphinx.util import logging as sphinx_logging
 
 project = 'Indar'
 copyright = '2026, BCAM'
@@ -112,6 +114,23 @@ autodoc_type_aliases = {
 autodoc_typehints_format = 'short'
 
 
+def _ensure_png_from_svg(_app):
+    """Convert every SVG in _images to PNG (300 dpi) during docs build."""
+    images_dir = Path(__file__).resolve().parent / '_images'
+    if not images_dir.exists():
+        return
+
+    try:
+        import cairosvg
+    except ImportError:
+        return
+
+    for svg_path in images_dir.glob('*.svg'):
+        png_path = svg_path.with_suffix('.png')
+        if (not png_path.exists()) or (png_path.stat().st_mtime < svg_path.stat().st_mtime):
+            cairosvg.svg2png(url=str(svg_path), write_to=str(png_path), dpi=300)
+
+
 def _clean_type_alias_display(_app, _what, _name, _obj, _options, signature, return_annotation):
     """Normalize ForwardRef-style alias rendering in autodoc signatures."""
     # Example: TypeAliasForwardRef('array-like') -> array-like
@@ -126,4 +145,5 @@ def _clean_type_alias_display(_app, _what, _name, _obj, _options, signature, ret
 
 
 def setup(app):
+    app.connect('builder-inited', _ensure_png_from_svg)
     app.connect('autodoc-process-signature', _clean_type_alias_display)

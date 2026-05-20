@@ -8,10 +8,20 @@ alabaster==1.0.0
     # via sphinx
 babel==2.18.0
     # via sphinx
+cairocffi==1.7.1
+    # via cairosvg
+cairosvg==2.8.2
+    # via -r requirements/requirements-docs.in
 certifi==2026.4.22
     # via requests
+cffi==2.0.0
+    # via cairocffi
 charset-normalizer==3.4.7
     # via requests
+cssselect2==0.9.0
+    # via cairosvg
+defusedxml==0.7.1
+    # via cairosvg
 docutils==0.22.4
     # via sphinx
 idna==3.14
@@ -26,6 +36,10 @@ numpydoc==1.10.0
     # via -r requirements/requirements-docs.in
 packaging==26.2
     # via sphinx
+pillow==12.2.0
+    # via cairosvg
+pycparser==3.0
+    # via cffi
 pygments==2.20.0
     # via sphinx
 requests==2.33.1
@@ -56,5 +70,13 @@ sphinxcontrib-qthelp==2.0.0
     # via sphinx
 sphinxcontrib-serializinghtml==2.0.0
     # via sphinx
+tinycss2==1.5.1
+    # via
+    #   cairosvg
+    #   cssselect2
 urllib3==2.7.0
     # via requests
+webencodings==0.5.1
+    # via
+    #   cssselect2
+    #   tinycss2

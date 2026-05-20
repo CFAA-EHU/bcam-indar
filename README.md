@@ -12,4 +12,6 @@ To install it:
 pip install bcam-indar
 ```
 
+The Indar documentation can be found [here](https://indar.readthedocs.io/en/).
+
 Contributions, feedback, and support are welcome.
