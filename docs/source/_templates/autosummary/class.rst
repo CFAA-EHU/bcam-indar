@@ -3,19 +3,8 @@
 .. currentmodule:: {{ module }}
 
 .. autoclass:: {{ objname }}
-
-	{% block methods %}
-	{% if methods %}
-	.. rubric:: Methods
-
-	.. autosummary::
-		:toctree: .
-
-	{% for item in methods %}
-		~{{ fullname }}.{{ item }}
-	{% endfor %}
-	{% endif %}
-	{% endblock %}
+   :members:
+   :inherited-members:
 
 	{% block attributes %}
 	{% if attributes %}
@@ -25,7 +14,7 @@
 		:toctree: .
 
 	{% for item in attributes %}
-		~{{ fullname }}.{{ item }}
+		~{{ objname }}.{{ item }}
 	{% endfor %}
 	{% endif %}
 	{% endblock %}

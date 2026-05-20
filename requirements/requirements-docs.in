@@ -1,12 +1,5 @@
-numpy
-scipy
-pandas
-sympy
-symengine
-scikit-learn
-jitcode
-matplotlib
-attrs
-sphinx
-sphinx-nefertiti
-numpydoc
+sphinx>=9.0
+sphinx-nefertiti>=0.9
+sphinx-copybutton>=0.5
+numpydoc>=1.10
+cairosvg>=2.7

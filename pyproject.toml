@@ -7,7 +7,6 @@ packages = ["src/bcam"]
 
 [project]
 name = "bcam-indar"
-version = "1.0.0"
 authors = [
     { name = "Felipe Ponce-Vanegas", email = "fponce@bcamath.org"},
 ]
@@ -22,7 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering",
 ]
-requires-python = ">= 3.13"
+requires-python = ">= 3.11"
 dynamic = [
     "version", "dependencies", "optional-dependencies"]
 readme = "README.md"
@@ -33,10 +32,11 @@ license-files = ["LICEN[CS]E*"]
 path = "src/bcam/indar/__init__.py"
 
 [tool.hatch.metadata.hooks.requirements_txt]
-files = ["requirements.txt"]
+files = ["requirements/requirements.in"]
 
 [tool.hatch.metadata.hooks.requirements_txt.optional-dependencies]
-test = ["requirements-test.txt"]
+test = ["requirements/requirements-test.in"]
+docs = ["requirements/requirements-docs.in"]
 
 [project.urls]
-Repository = "https://gitlab.bcamath.org/fponce/indar.git"
+Repository = "https://github.com/CFAA-EHU/bcam-indar"

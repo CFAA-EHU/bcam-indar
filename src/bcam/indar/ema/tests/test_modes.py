@@ -3,7 +3,7 @@ import pytest
 import numpy as np
 import scipy
 
-from bcam.indar.ema import mechanical, derivatives
+from bcam.indar.ema import mechanical, derivatives, randomSystem
 
 # Derivatives tests
 # -----------------
@@ -130,8 +130,8 @@ def test_reshape_modes():
     z0 = 0.01*rng.normal(size=(n_out, dof))
     z0 = np.triu(z0, k=1)
     z0[:n_out, :n_out] = z0[:n_out, :n_out] - z0[:n_out, :n_out].T
-    x = mechanical.reshape_modes_output(x0, z0)
-    x0_, z0_ = mechanical.reshape_modes_input(x, dof, n_out)
+    x = mechanical._reshape_modes_output(x0, z0)
+    x0_, z0_ = mechanical._reshape_modes_input(x, dof, n_out)
 
     assert np.allclose(x0_, x0), np.allclose(z0_, z0)
 
@@ -254,8 +254,8 @@ class TestModesFitting:
 
         ns, fs = 210, 100
         modes = mechanical.RealModes(
-            np.exp(freqs/fs), amps_m, ns=ns, response='a', fs=fs, assume_delta=True)
-        modes_fit = modes.fit().modes_fit_
+            np.exp(freqs/fs), amps_m, ns=ns, response='a', fs=fs)
+        modes_fit = modes.fit().modes_
         # The result is unique up to a sign flip in each mode.
         modes_fit *= np.sign(modes_m[0, :]/modes_fit[0, :])[np.newaxis, :]
 
@@ -289,8 +289,8 @@ class TestModesFitting:
         # Fit as proportional as initial guess.
         model = mechanical.RealModes(
             np.exp(Lambda/fs), amps_m,
-            ns=ns, response='a', fs=fs, assume_delta=True)
-        modes_real = model.fit(options_ncg={'gtol': 1e-3}).modes_fit_
+            ns=ns, response='a', fs=fs)
+        modes_real = model.fit(options_ncg={'gtol': 1e-3}).modes_
 
         # Check that real modes are not good enough.
         # The result is unique up to a sign flip in each mode.
@@ -302,10 +302,10 @@ class TestModesFitting:
             poles=np.exp(Lambda/fs),
             coords=coords,
             amps=amps_m,
-            fs=fs, ns=ns, response='a', assume_delta=True)
+            fs=fs, ns=ns, response='a')
 
-        x0 = (modes_real, np.zeros_like(modes_real))
-        modes_nop = model_nop.fit(x0, options={'verbose': 2, 'gtol': 1.e-8}).modes_fit_
+        x0 = modes_real
+        modes_nop = model_nop.fit(x0, options={'verbose': 2, 'gtol': 1.e-8}).modes_
         # The result is unique up to a sign flip in each mode.
         modes_nop *= np.sign(np.real(modes[0, :]/modes_nop[0, :]))[np.newaxis, :]
 
@@ -320,8 +320,8 @@ def test_trig_fft():
     n = 10
     x = rng.normal(size=n)
     x = x - np.mean(x)
-    x_fft = mechanical.trig_fft(x)
-    x_ifft = mechanical.trig_ifft(x_fft)
+    x_fft = mechanical._trig_fft(x)
+    x_ifft = mechanical._trig_ifft(x_fft)
     assert np.allclose(x, x_ifft)
 
 class TestAmplitudes:
@@ -334,7 +334,7 @@ class TestAmplitudes:
         # Resonant part. Discretized kernel.
         dof = len(freqs[0])
         if dof != 0:
-            K1 = fs*freqs[0]*(np.exp(freqs[0]/fs) - 1)
+            K1 = freqs[0]**2
             K1 = a[0] * K1.reshape(1, 1, dof)
             K1 = np.expand_dims(K1, axis=2)
             K1 = K1 * np.exp(freqs[0][np.newaxis, :]*t[:, np.newaxis]).reshape(1, 1, ns, dof)
@@ -357,8 +357,8 @@ class TestAmplitudes:
 
         x = rng.normal(
             size=(n_in*(n_in+1)//2 + (n_out-n_in)*n_in, 2*dof - 1))
-        ix = mechanical.reshape_injection_sym(x, n_out=n_out, n_in=n_in)
-        pix = mechanical.reshape_projection_sym(ix)
+        ix = mechanical._reshape_injection_sym(x, n_out=n_out, n_in=n_in)
+        pix = mechanical._reshape_projection_sym(ix)
 
         assert np.allclose(x, pix)
 
@@ -368,9 +368,9 @@ class TestAmplitudes:
         n_out, n_in = 3, 2
         _amps, _freqs = [], []
 
-        dof = 3
+        dof = 4
         if dof > 0:
-            modal = mechanical.randomSystem(
+            modal = randomSystem(
                 masses=rng.uniform(0.1, 0.2, dof),
                 dampings=rng.uniform(0.02, 0.05, dof),
                 roots=rng.uniform(2*np.pi*1, 2*np.pi*20, dof),
@@ -385,7 +385,7 @@ class TestAmplitudes:
         _amps.append(m_amps)
         _freqs.append(m_freqs)
 
-        n_c, n_r = 4, 2
+        n_c, n_r = 2, 3
         c_freqs = -rng.uniform(0.1, 1, n_c) + 2j*np.pi*rng.uniform(1, 50, n_c)
         c_amps = rng.normal(scale=1., size=(n_out, n_in, n_c)).astype(np.complex128)
         c_amps += 1j * rng.normal(scale=1e-1, size=(n_out, n_in, n_c))

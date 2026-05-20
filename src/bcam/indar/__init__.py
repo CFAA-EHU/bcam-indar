@@ -1,12 +1,21 @@
 '''
 Indar
 =====
+
+This package provides resources for the analysis of vibrations.
+
+Available subpackages
+---------------------
+ema
+    Tools for Experimental Modal Analysis (EMA).
+dde
+    Tools for Delay Differential Equations (DDEs).
 '''
 
 from . import core
 from .core import *
 
-__version__ = '1.0.1'
+__version__ = '1.0.2'
 
 submodules = {
     'dde',

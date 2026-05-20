@@ -77,52 +77,53 @@ class ExpSum:
 
 
 class Kernel:
+    '''
+    Kernel or Impulse Response Function.
+
+    Parameters
+    ----------
+    nat_freqs : array-like
+        Natural frequencies of the system.
+    
+    amps : array-like
+        Amplitudes corresponding to each natural frequency. The last dimension should match the length of nat_freqs.
+
+    response : {'d', 'v', 'a'}, optional
+        Type of response to compute:
+        - 'd': Displacement response (default)
+        - 'v': Velocity response
+        - 'a': Acceleration response
+    '''
 
     def __init__(
         self,
-        roots,
+        nat_freqs,
         amps,
-        fs:float=1.0,
         response:str='a',
-        discrete:str='delta'
     ):
-        self.roots = np.atleast_1d(roots)
+        self.nat_freqs = np.atleast_1d(nat_freqs)
         self.amps = np.atleast_2d(amps)
         self.response = response
-        self.discrete = discrete
 
-        if roots.ndim > 1:
-            msg = 'Expected a 1D-array for roots.'
+        if self.nat_freqs.ndim > 1:
+            msg = 'Expected a 1D-array for nat_freqs.'
             raise ValueError(msg)
 
-        if amps.shape[-1] != len(roots):
-            msg = 'The last dimension of amps should match the length of roots.'
+        if self.amps.shape[-1] != len(self.nat_freqs):
+            msg = 'The last dimension of amps should match the length of nat_freqs.'
             raise ValueError(msg)
         
         if response not in ['d', 'v', 'a']:
             msg = f'Unknown response type: {response}'
             raise ValueError(msg)
 
-        if discrete not in ['delta', 'step']:
-            msg = f'Unknown discrete type: {discrete}'
-            raise ValueError(msg)
-
-        self._factor = np.ones_like(self.roots)
-        if discrete == 'delta':
-            if response == 'd':
-                pass
-            elif response == 'v':
-                self._factor *= self.roots
-            elif response == 'a':
-                self._factor *= self.roots**2
-        elif discrete == 'step':
-            self._factor *= (np.exp(self.roots/fs) - 1)*fs
-            if response == 'd':
-                self._factor *= 1 / self.roots
-            elif response == 'v':
-                pass
-            elif response == 'a':
-                self._factor *= self.roots
+        self._factor = np.ones_like(self.nat_freqs)
+        if response == 'd':
+            pass
+        elif response == 'v':
+            self._factor *= self.nat_freqs
+        elif response == 'a':
+            self._factor *= self.nat_freqs**2
 
     def __call__(self, t):
         t = np.atleast_1d(t)
@@ -133,7 +134,7 @@ class Kernel:
         K = np.einsum(
             '...j,tj->...t',
             self.amps,
-            self._factor[np.newaxis, :]*np.exp(self.roots[np.newaxis, :]*t[:, np.newaxis]),
+            self._factor[np.newaxis, :]*np.exp(self.nat_freqs[np.newaxis, :]*t[:, np.newaxis]),
             dtype=complex
         )
         K = np.imag(K)

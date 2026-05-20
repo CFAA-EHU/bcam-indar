@@ -5,3 +5,6 @@
 dist/
 docs/build/
 docs/source/generated/
+docs/source/_private_generated/
+*.png
+docs/source/data

@@ -1,11 +1,9 @@
-'''
-Functions for Linear Time Invariant (LTI) models.
-'''
-
+from __future__ import annotations
 import logging
 
 import numpy as np
 import scipy
+from numpy.typing import ArrayLike
 from sklearn.base import BaseEstimator, RegressorMixin
 from sklearn.utils.validation import validate_data
 
@@ -105,30 +103,110 @@ class _Dloss(scipy.sparse.linalg.LinearOperator):
         return v.T
 
 class LTIKernel(BaseEstimator, RegressorMixin):
-    '''
-    Fit Linear Time Invariant kernel.
+    r'''
+    Fit a Linear Time-Invariant (LTI) kernel.
 
-    A Linear Time Invariant (LTI) model assumes that
-    the response `y` to an input `x` is given by
-    
+    In a discrete LTI model, given an input :math:`x`,
+    the response :math:`y` at a given time :math:`k` is
+
     .. math::
-        y_t = \sum_{s\le t} K_{t-s} x_s + \epsilon_t,
+        y_k = dt\,\sum_{i=0}^k  h_{k-i}\,x_i + \varepsilon_k,
 
-    where `K` is the kernel to be estimated, and :math:`\epsilon` is a noise term.
+    where :math:`dt` is the time step, :math:`h` is the Impulse Response Function (IRF) to be estimated
+    (also known as the kernel), and :math:`\varepsilon` is white noise.
+    This class only admits SISO data, that is,
+    the input and response are scalar time series, and the kernel is a 1d-array.
+
+    This class uses the matrix-free algorithm `LSMR <https://doi.org/10.1137/10079687X>`_, as
+    implemented in :func:`scipy.sparse.linalg.lsmr`, to estimate the IRF.
 
     Parameters
     ----------
-    penalty : float, optional
-        Penalty parameter for the :math:`H^1` norm. Default is 0 (no penalty).
-    mode : {'g', 'a'}, optional
-        The mode of the penalty. For the `general` case, all points are taken into accout.
-        For the `acceleration` case, the first point is not penalized.
-        Maximum number of iterations for the CG solver. Default is None (no limit).
+    dt : float, default=1.0
+        Sampling time step.
+
+    alpha, beta : float, default=0.0
+        If `alpha` is positive, the :math:`\ell^2` norm of the kernel is penalized.
+        If `beta` is positive, the :math:`\ell^2` norm of the kernel's derivative is penalized.
+
+    mode : {'g', 'a'}, default='g'
+        When the mode is *general* (`g`), the derivative is penalized for all times, while
+        for *acceleration* (`a`) mode, time :math:`k = 0` is not penalized.
+
+    atol, btol : float, default=1e-6
+        `atol` is the relative tolerance in the entries of the input :math:`x`, and
+        `btol` is the relative tolerance in the entries of the response :math:`y`.
+
+    maxiter, conlim, show : int, float, bool
+        See :func:`scipy.sparse.linalg.lsmr` for details.
 
     Attributes
     ----------
-    kernel_ : ndarray
-        The estimated kernel after fitting the model.
+    kernel_ : np.ndarray of shape (n_samples,)
+        Estimated IRF, or kernel.
+
+    info_ : dict
+        Information about the optimization process, containing the following keys:
+
+        - `istop`: reason for stopping.
+
+        - `itn`: number of iterations.
+
+        - `normr`: the norm of the residual.
+
+        - `normar`: the norm of the projected residual.
+
+        - `norma`: the estimate of the Frobenius norm of the matrix.
+
+        - `conda`: the estimate of the condition number of the matrix.
+
+        - `normx`: the norm of the solution.
+
+        See :func:`scipy.sparse.linalg.lsmr` for details.
+
+    Notes
+    -----
+    This class is a sklearn `predictor <https://scikit-learn.org/stable/developers/develop.html>`_.
+
+    Examples
+    --------
+    We create synthetic data from a known kernel and fit the LTI model to check if the kernel is correctly estimated.
+
+    .. plot::
+        :context: reset
+        :format: doctest
+        :include-source: True
+
+        >>> import numpy as np
+        >>> from scipy.signal import fftconvolve
+        >>> from bcam.indar import ema
+        >>> # Create random input data.
+        >>> rng = np.random.default_rng(123)
+        >>> n_reps = 5 # Number of repetitions (trials)
+        >>> N = 100 # Number of time samples
+        >>> X = rng.normal(0, 1, size=(n_reps, N))
+        >>> # Create a kernel and generate response data.
+        >>> true_kernel = np.exp(-0.05*np.arange(N)) * np.cos(2*np.pi*0.1*np.arange(N))
+        >>> y = fftconvolve(
+        ...     X, true_kernel[np.newaxis, :], mode='full', axes=1)[:, :N]
+        >>> # Add noise to the response.
+        >>> y += rng.normal(0, .1, y.shape)
+        >>> # Fit kernel from input/output data.
+        >>> model = ema.LTIKernel(beta=5.)
+        >>> model.fit(X, y)
+
+    We check that the predicted response matches the true response.
+
+    .. plot::
+        :context:
+        :format: doctest
+        :include-source: True
+
+        >>> import matplotlib.pyplot as plt
+        >>> plt.plot(true_kernel, label='True kernel')
+        >>> plt.plot(model.kernel_, label='Estimated kernel')
+        >>> plt.legend()
+        >>> plt.show()
     '''
 
     def __init__(
@@ -142,7 +220,7 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         btol:float=1e-6,
         maxiter:int=None,
         conlim:float=1e8,
-        show:bool=False
+        show:bool=False,
     ):
         self.alpha = alpha
         self.beta = beta
@@ -154,21 +232,22 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         self.show = show
         self.dt = dt
 
-    def fit(self, X, y):
-        r'''
+    def fit(self, X: ArrayLike, y: ArrayLike) -> LTIKernel:
+        '''
         Fit LTI model.
 
         Parameters
         ----------
-        X : array-like of shape (n_repetitions, n_time_samples).
+
+        X : array-like of shape (n_repetitions, n_time_samples)
             Input data.
 
-        y : array-like of shape (n_repetitions, n_time_samples).
-            Response data with the same shape of `X`.
+        y : array-like of shape (n_repetitions, n_time_samples)
+            Response data with the same shape as `X`.
 
         Returns
         -------
-        self : object
+        self : LTIKernel
             Fitted estimator.
         '''
         # Validate inputs.
@@ -180,6 +259,11 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         if X.shape != y.shape:
             raise ValueError(
                 "X and y must have the same shape."
+            )
+        
+        if self.mode not in ['g', 'a']:
+            raise ValueError(
+                "Mode must be 'g' or 'a'."
             )
 
         # Set up minimization problem.
@@ -215,9 +299,20 @@ class LTIKernel(BaseEstimator, RegressorMixin):
 
         return self
 
-    def predict(self, X):
-        r'''
-        Predict response using the fitted LTI model.
+    def predict(self, X: ArrayLike) -> np.ndarray:
+        '''
+        Predict response using the LTI model.
+
+        Parameters
+        ----------
+
+        X : array-like of shape (n_repetitions, n_time_samples)
+            Input data.
+
+        Returns
+        -------
+        y_pred : np.ndarray of shape (n_repetitions, n_time_samples)
+            Predicted response data.
         '''
         # Check if fitted.
         if not hasattr(self, 'kernel_'):
@@ -233,22 +328,23 @@ class LTIKernel(BaseEstimator, RegressorMixin):
         return self.dt*scipy.signal.fftconvolve(
             X, self.kernel_[np.newaxis, :], mode='full', axes=1)[:, :X.shape[1]]
 
-    def score(self, X, y):
-        r'''
-        Compute the prediction RMS error.
+    def score(self, X: ArrayLike, y: ArrayLike) -> float:
+        '''
+        Return coefficient of determination on test data.
 
         Parameters
         ----------
-        X : array-like of shape (n_repetitions, n_time_samples).
+
+        X : array-like of shape (n_repetitions, n_time_samples)
             Input data.
 
-        y : array-like of shape (n_repetitions, n_time_samples).
+        y : array-like of shape (n_repetitions, n_time_samples)
             True response data.
 
         Returns
         -------
         score : float
-            RMS error.
+            :math:`R^2` of `self.predict(X)` with respect to `y`.
         '''
         # Validate inputs.
         X = np.asarray(X)
@@ -270,7 +366,42 @@ class LTIKernel(BaseEstimator, RegressorMixin):
             return 1.0 if ss_res == 0 else 0.0
         return 1-ss_res/ss_tot
 
-def H1(X, y):
+def H1(X: ArrayLike, y: ArrayLike) -> np.ndarray:
+    r'''
+    Compute the H1 estimator of the kernel.
+
+    This estimator models the response as
+
+    .. math::
+        \hat{y}(\omega) = \hat{h}(\omega)\hat{x}(\omega) + \varepsilon(\omega),
+
+    where :math:`\hat{y}(\omega)` is the continuous Fourier transform of the response,
+    and likewise for :math:`\hat{h}(\omega)`, :math:`\hat{x}(\omega)`, where
+    :math:`h` is the Impulse Response Function and :math:`x` is the input signal.
+    The term :math:`\varepsilon(\omega)` is white noise.
+
+    In practice, the continuous Fourier transform is approximated by the DFT, and
+    the H1 estimator is given by
+
+    .. math::
+        \hat{h}(\omega) = \frac{\sum_{r=1}^R \hat{y}_r(\omega)\hat{x}_r(\omega)^*}{\sum_{r=1}^R \hat{x}_r(\omega)\hat{x}_r(\omega)^*},
+
+    where :math:`R` is the number of repetitions (trials), and :math:`^*` denotes complex conjugation.
+
+    Parameters
+    ----------
+
+    X : array-like of shape (n_repetitions, n_time_samples)
+        Input data.
+
+    y : array-like of shape (n_repetitions, n_time_samples)
+        True response data.
+
+    Returns
+    -------
+    H1 : np.ndarray of shape (n_time_samples,)
+        H1 estimator of the kernel.
+    '''
     # Validate inputs.
     X = np.asarray(X)
     y = np.asarray(y)

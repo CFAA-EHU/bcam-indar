@@ -1,12 +1,8 @@
-#!/usr/bin/env python3
-'''
-This is ...
-'''
-
+from __future__ import annotations
 import logging
 
 import numpy as np
-import jitcode
+from numpy.typing import ArrayLike
 from sklearn.base import BaseEstimator
 import scipy
 
@@ -16,36 +12,6 @@ from bcam.indar import Kernel, ExpSum
 
 
 logger = logging.getLogger(__name__)
-
-# =================================
-# Helper Functions
-# =================================
-
-def _validate_dims(M, C, K, check_symmetry=True):
-    M, C, K = np.asarray(M), np.asarray(C), np.asarray(K)
-    
-    if M.ndim != 2:
-        msg = f'Expected a 2-darray, got {M.ndim}-darray.'
-        raise ValueError(msg)
-    
-    if M.shape[0] != M.shape[1]:
-        msg = 'M must be a square array.'
-        raise ValueError(msg)
-
-    if (M.shape != C.shape) or (M.shape != K.shape):
-        msg = 'Incompatible shapes for M, C, and K.'
-        raise ValueError(msg)
-
-    if check_symmetry:
-        if not np.allclose(M, M.T):
-            msg = 'M must be symmetric.'
-            raise ValueError(msg)
-
-        if not np.allclose(K, K.T):
-            msg = 'K must be symmetric.'
-            raise ValueError(msg)
-    
-    return M, C, K
 
 
 # =================================
@@ -58,7 +24,7 @@ def _sum_exp_weighted(z, ns:int):
     z[~sl] = sum((ns-i)*(z[~sl]**i) for i in range(ns))
     return z/ns**2
 
-def trig_fft(x):
+def _trig_fft(x):
     '''
     Trigonometric expansion of a real signal.
     '''
@@ -78,7 +44,7 @@ def trig_fft(x):
     x_hat = np.concatenate(x_hat, axis=-1)
     return x_hat
 
-def trig_ifft(x):
+def _trig_ifft(x):
     '''
     Inverse trigonometric expansion of a real signal.
     '''
@@ -94,8 +60,7 @@ def trig_ifft(x):
 
 
 def _metric_amps(
-        mech_poles:Poles, res_poles:Poles, ns, response='a',
-        assume_delta=False):
+        mech_poles:Poles, res_poles:Poles, ns, response='a'):
     '''
     Compute the metric for amplitude coefficients.
 
@@ -113,21 +78,12 @@ def _metric_amps(
         exp_x, exp_y = np.log(x), np.log(y)
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
-        if assume_delta:
-            if response == 'd':
-                pass
-            elif response == 'v':
-                r *= exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
-            elif response == 'a':
-                r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])**2
-        else:
-            r *= (x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
-            if response == 'd':
-                r *= 1/(exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
-            elif response == 'v':
-                pass
-            elif response == 'a':
-                r *= exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
+        if response == 'd':
+            pass
+        elif response == 'v':
+            r *= exp_x[np.newaxis, :]*exp_y[:, np.newaxis]
+        elif response == 'a':
+            r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])**2
 
         return r
 
@@ -137,9 +93,9 @@ def _metric_amps(
     dim_c = 2*dof - 1 if dof > 0 else 0
     m_r_r = np.zeros((dim_c, dim_c))
     m_r_r[:dof, :dof] = np.real(m1 - m2)
-    m_r_r[dof:, :dof] = trig_fft(np.imag(m1 + m2).T)[..., 1:].T
+    m_r_r[dof:, :dof] = _trig_fft(np.imag(m1 + m2).T)[..., 1:].T
     m_r_r[:dof, dof:] = m_r_r[dof:, :dof].T
-    m_r_r[dof:, dof:] = trig_fft(trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
+    m_r_r[dof:, dof:] = _trig_fft(_trig_fft(np.real(m1 + m2))[..., 1:].T)[..., 1:]
     m_r_r *= 0.5
 
     # Block (exps, roots).
@@ -147,21 +103,13 @@ def _metric_amps(
         exp_x = np.log(x)
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
-        if assume_delta:
-            if response == 'd':
-                pass
-            elif response == 'v':
-                r *= exp_x[np.newaxis, :]
-            elif response == 'a':
-                r *= exp_x[np.newaxis, :]**2
-        else:
-            r *= x[np.newaxis, :]-1
-            if response == 'd':
-                r *= 1/(exp_x[np.newaxis, :])
-            elif response == 'v':
-                pass
-            elif response == 'a':
-                r *= exp_x[np.newaxis, :]
+        if response == 'd':
+            pass
+        elif response == 'v':
+            r *= exp_x[np.newaxis, :]
+        elif response == 'a':
+            r *= exp_x[np.newaxis, :]**2
+
         return r
 
     m1 = _mult(mech_poles.cx, res_poles.cx)
@@ -170,8 +118,8 @@ def _metric_amps(
     m_r_f = np.zeros((2*n_c, dim_c))
     m_r_f[:n_c, :dof] = np.imag(m1 + m2)
     m_r_f[n_c:, :dof] = np.real(m1 - m2)
-    m_r_f[:n_c, dof:] = trig_fft(np.real(m1 + m2))[..., 1:]
-    m_r_f[n_c:, dof:] = trig_fft(np.imag(-m1 + m2))[..., 1:]
+    m_r_f[:n_c, dof:] = _trig_fft(np.real(m1 + m2))[..., 1:]
+    m_r_f[n_c:, dof:] = _trig_fft(np.imag(-m1 + m2))[..., 1:]
     m_r_f *= 0.5
 
     # Block (reals, roots).
@@ -179,7 +127,7 @@ def _metric_amps(
 
     m_r_fr = np.zeros((n_r, dim_c))
     m_r_fr[:, :dof] = np.imag(m1)
-    m_r_fr[:, dof:] = trig_fft(np.real(m1))[..., 1:]
+    m_r_fr[:, dof:] = _trig_fft(np.real(m1))[..., 1:]
 
     # Block (exps, exps).
     def _mult(x, y):
@@ -225,22 +173,19 @@ class _AmplitudesNormal:
         fs:float=1.,
         response:str='a',
         penalty:float=0.,
-        assume_delta:bool=False
     ):
         self.mech_poles = mech_poles
         self.res_poles = res_poles
         self.fs = fs
         self.response = response
         self.penalty = penalty
-        self.assume_delta = assume_delta
 
     def _matrix(self, ns):
         dof = len(self.mech_poles.cx)
         n_c, n_r = len(self.res_poles.cx), len(self.res_poles.real)
 
         m = _metric_amps(
-            self.mech_poles, self.res_poles,
-            ns, response=self.response, assume_delta=self.assume_delta)
+            self.mech_poles, self.res_poles, ns, response=self.response)
 
         if ((n_c == 0) & (n_r == 0)) or (dof == 0):
             m += self.penalty * np.eye(m.shape[0])
@@ -261,27 +206,18 @@ class _AmplitudesNormal:
             return m, m_
 
     def _rhs(self, y):
-        fs = self.fs
         n_out, n_in, ns = y.shape
 
         # Resonances.
         def prod(t):
             ft = 1.
-            if self.assume_delta:
-                if self.response == 'd':
-                    pass
-                elif self.response == 'v':
-                    ft *= np.log(self.mech_poles.cx)
-                elif self.response == 'a':
-                    ft *= np.log(self.mech_poles.cx)**2
-            else:
-                ft *= self.mech_poles.cx-1
-                if self.response == 'd':
-                    ft *= 1/(np.log(self.mech_poles.cx))
-                elif self.response == 'v':
-                    pass
-                elif self.response == 'a':
-                    ft *= np.log(self.mech_poles.cx)
+            if self.response == 'd':
+                pass
+            elif self.response == 'v':
+                ft *= np.log(self.mech_poles.cx)
+            elif self.response == 'a':
+                ft *= np.log(self.mech_poles.cx)**2
+
             t = t.reshape(1, -1)
             r_ = (self.mech_poles.cx[:, np.newaxis]**t)*(1-t/ns)
             r_ *= ft[:, np.newaxis]
@@ -293,7 +229,7 @@ class _AmplitudesNormal:
                 'ijt,kt->ijk',
                 y, prod(np.arange(ns)))
             r1 = np.concatenate(
-                [np.imag(r1), trig_fft(np.real(r1))[..., 1:]],
+                [np.imag(r1), _trig_fft(np.real(r1))[..., 1:]],
                 axis=-1)
         else:
             r1 = np.zeros((n_out, n_in, 0), dtype=y.dtype)
@@ -327,7 +263,7 @@ class _AmplitudesNormal:
         r1, r2, r3 = np.real(r1), np.real(r2), np.real(r3)
         if (n_c == 0) and (n_r == 0):
             # Project to space of 'symmetric' matrices.
-            return reshape_projection_sym(r1).T
+            return _reshape_projection_sym(r1).T
         elif dof == 0:
             r = np.concatenate([r2, r3], axis=-1)
             r = r.reshape(-1, 2*n_c+n_r)
@@ -374,7 +310,7 @@ class _AmplitudesNormal:
                 self._rhs(y),
                 assume_a='pos').T
 
-            r1 = reshape_injection_sym(r[:, :dim_c], n_out, n_in)
+            r1 = _reshape_injection_sym(r[:, :dim_c], n_out, n_in)
             r2, r3 = None, None
         elif dof == 0:
             r = scipy.linalg.solve(
@@ -436,7 +372,7 @@ class _AmplitudesNormal:
         else:
             r = np.concatenate(
                 [np.zeros((*r1.shape[:2], 1)), r1[..., dof:]], axis=-1)
-            r = trig_ifft(r).astype(np.complex128)
+            r = _trig_ifft(r).astype(np.complex128)
             self.tensor_modes_ = r1[..., :dof] + 1j*r
 
         # Store amplitudes for residual poles.
@@ -450,7 +386,7 @@ class _AmplitudesNormal:
         return self
 
 
-def reshape_injection_sym(x, n_out:int, n_in:int):
+def _reshape_injection_sym(x, n_out:int, n_in:int):
     '''
     2darray (n_in*(n_in+1)//2 + (n_out-n_in)*n_in, dof) to 3darray (n_out, n_in, dof).
 
@@ -473,7 +409,7 @@ def reshape_injection_sym(x, n_out:int, n_in:int):
         x_[n_in:, :] = x[c: c+(n_out-n_in)*n_in].reshape(n_out-n_in, n_in, -1)
     return x_
 
-def reshape_projection_sym(x):
+def _reshape_projection_sym(x):
     '''
     3darray (n_out, n_in, dof) to 2darray (flatten*, dof).
 
@@ -507,7 +443,7 @@ def reshape_projection_anti(x):
         x_[c:cn] = x[np.arange(n_in-i), i+np.arange(n_in-i)]
         x_[c:cn] -= x[i+np.arange(n_in-i), np.arange(n_in-i)]
         x_[c:cn] /= np.sqrt(2)
-    c = cn
+        c = cn
     return x_
 
 def reshape_injection_anti(x, n_out:int, n_in:int):
@@ -528,7 +464,7 @@ def reshape_injection_anti(x, n_out:int, n_in:int):
 
 def _fit_amplitudes_stable(
         y, mech_poles, res_poles, response,
-        cond, lapack_driver, assume_delta):
+        cond, lapack_driver):
 
     y = np.asarray(y, copy=True)
 
@@ -545,49 +481,45 @@ def _fit_amplitudes_stable(
 
     roots = np.log(mech_poles)
     v = 1.
-    if assume_delta:
-        if response == 'v':
-            v *= roots
-        elif response == 'a':
-            v *= roots**2
-    else:
-        v *= mech_poles - 1
-        if response == 'd':
-            v /= roots
-        elif response == 'a':
-            v *= roots
+    if response == 'v':
+        v *= roots
+    elif response == 'a':
+        v *= roots**2
 
     Vm = (mech_poles[np.newaxis, :])**(np.arange(ns)[:, np.newaxis])
     Vm *= v[np.newaxis, :]
     Vm *= np.sqrt((1 - np.arange(ns)[:, np.newaxis]/ns)/ns)
     Vm = np.concatenate(
-        (np.imag(Vm), trig_fft(np.real(Vm))[:, 1:]), axis=1)
+        (np.imag(Vm), _trig_fft(np.real(Vm))[:, 1:]), axis=1)
 
     y *= np.sqrt((1 - np.arange(ns)[np.newaxis, np.newaxis, :]/ns)/ns)
 
     # Symmetric part.
-    ys = reshape_projection_sym(y)
+    ys = _reshape_projection_sym(y)
     r = scipy.linalg.lstsq(
         np.concatenate((V, Vm), axis=1), ys.T,
         overwrite_a=True, overwrite_b=True,
         cond=cond, lapack_driver=lapack_driver)[0].T
     del ys
-    r = reshape_injection_sym(r, n_out, n_in)
+    r = _reshape_injection_sym(r, n_out, n_in)
 
     # Divide result between mechanical and residual matrices.
     r_r, r_m = r[..., :2*n_c+n_r], r[..., 2*n_c+n_r:]
     imag_r = np.pad(r_m[..., dof:], pad_width=((0, 0), (0, 0), (1, 0)))
-    r_m = r_m[..., :dof] + 1j*trig_ifft(imag_r).astype(np.complex128)
+    r_m = r_m[..., :dof] + 1j*_trig_ifft(imag_r).astype(np.complex128)
     tensor_modes_ = r_m
 
     # Antisymmetric part of residue.
     ya = reshape_projection_anti(y)
-    r = scipy.linalg.lstsq(
-        V, ya.T,
-        overwrite_a=True, overwrite_b=True,
-        cond=cond, lapack_driver=lapack_driver)[0].T
-    del ya
-    r = reshape_injection_anti(r, n_out, n_in)
+    if len(ya) > 0:
+        r = scipy.linalg.lstsq(
+            V, ya.T,
+            overwrite_a=True, overwrite_b=True,
+            cond=cond, lapack_driver=lapack_driver)[0].T
+        del ya
+        r = reshape_injection_anti(r, n_out, n_in)
+    else:
+        r = np.zeros_like(r_r)
     r_r = r_r + r
     amps_ = HCoeffs(
         real=r_r[..., :n_r],
@@ -597,17 +529,92 @@ def _fit_amplitudes_stable(
 
 
 class Amplitudes(BaseEstimator):
+    r'''
+    Fit amplitudes to MIMO exponential sums with fixed frequencies.
+
+    If :math:`h` is an exponential sum representing a noisy Impulse Response Function (IRF), then
+
+    .. math::
+        \begin{split}
+            h_{k, ij}
+            &= \im\Big(\sum_{l=1}^{n} A^l_{ij}\lambda_l^\nu s_l^k\Big) + \sum_{m}C^m_{ij}s_{b, m}^k \\
+            &= \text{estimated IRF} + \text{background},
+        \end{split}
+    
+    where :math:`n` are the number of Degrees of Freedom (DoF),
+    :math:`\lambda_l` are the frequencies representing the modes of the mechanical system,
+    :math:`s_l = e^{\lambda_l dt}` are the corresponding poles,
+    :math:`s_{b, m}` are the poles representing the background (includes the noise), and
+    :math:`A^l_{ij}` and :math:`C^m_{ij}` are the corresponding amplitudes.
+    The exponent :math:`\nu` depends on the type of response (displacement (0), velocity (1), or acceleration (2)).
+
+    The mechanical amplitudes :math:`A^l_{ij}` satisfy Maxwell's reciprocity theorem, that is,
+    :math:`A^l_{ij} = A^l_{ji}`, and
+    also the necessary condition :math:`\sum_l \im(A^l_{ij}) = 0` for all :math:`i, j`.
+
+    By convention, mechanical frequencies have positive imaginary part.
+    Since the IRF is real, the poles and amplitudes of the background should be either real or come in complex conjugate pairs.
+
+    Parameters
+    ----------
+    mech_poles : array-like of complex, shape (n_dof,), optional
+        Poles representing the mechanical modes. If None, no mechanical modes are fitted.
+
+    res_poles : tuple of array-like, optional
+        Poles representing the background (residual).
+        The first element is an array of real poles, and
+        the second element is an array of complex poles.
+        If None, no background is fitted.
+
+    fs : float, default=1.
+        Sampling frequency (:math:`1/dt`).
+
+    response : {'a', 'v', 'd'}, default='a'
+        Type of response: 'a' for acceleration, 'v' for velocity, 'd' for displacement.
+
+    cond : float or None, optional
+        Condition number for least-squares solver. If None, machine precision is used.
+
+    solver : {'normal', 'gelsd', 'gelss', 'gelsy'}, default='gelsd'
+        Solver to use for least-squares problems. 'normal' uses the normal equations, while
+        the others use different LAPACK drivers for more stable solutions.
+
+    Attributes
+    ----------
+    tensor_modes_ : array, shape (n_outputs, n_inputs, n_dof)
+        Amplitudes of the mechanical modes.
+
+    amps_ : HCoeffs
+        Amplitudes of the background (residual) poles,
+        with attributes 'real' and 'cx' for real and complex poles, respectively.
+
+    Notes
+    -----
+    If :math:`h` are the data, and :math:`\hat{h}` is the estimated noisy IRF, then
+    the least squares problem is solved using the Hilbert--Schmidt norm, that is,
+    the objective function is proportional to
+
+    .. math::
+        \norm{h - \hat{h}}^2_{\mathrm{HS}} = \sum_{i, j}\sum_{k=0}^{N-1} (N-k)(h_{k, ij} - \hat{h}_{k, ij})^2.
+
+    This norm gives more weight to the earlier part of the IRF, which
+    appear more often when computing the output given an input.
+
+    When the IRF is accelerance, then
+    the IRF contains a mass-term which introduces a Dirac delta at time zero,
+    so the background will also contain this term, but
+    the Dirac delta is approximated by frequencies with very high damping.
+    '''
 
     def __init__(
         self,
         *,
-        mech_poles=None,
-        res_poles=None,
-        fs:float=1.,
-        response:str='a',
-        cond=None,
-        solver:str='gelsd',
-        assume_delta:bool=False
+        mech_poles: ArrayLike | None = None,
+        res_poles: tuple[ArrayLike, ArrayLike] | None = None,
+        fs: float = 1.,
+        response: str = 'a',
+        cond: float | None = None,
+        solver: str = 'gelsd',
     ):
         self.mech_poles = mech_poles
         self.res_poles = res_poles
@@ -615,9 +622,21 @@ class Amplitudes(BaseEstimator):
         self.response = response
         self.cond = cond
         self.solver = solver
-        self.assume_delta = assume_delta
 
-    def fit(self, y):
+    def fit(self, y: ArrayLike) -> Amplitudes:
+        '''
+        Fit amplitudes.
+
+        Parameters
+        ----------
+        y : array-like, shape (n_outputs, n_inputs, n_samples)
+            Data to fit representing the IRF.
+
+        Returns
+        -------
+        self : Amplitudes
+            Fitted estimator.
+        '''
 
         self.mech_poles = np.array([], dtype=complex) if self.mech_poles is None \
             else np.asarray(self.mech_poles)
@@ -641,7 +660,6 @@ class Amplitudes(BaseEstimator):
             tensor_modes, amps = _fit_amplitudes_stable(
                 y, self.mech_poles, self.res_poles,
                 self.response, self.cond, self.solver,
-                self.assume_delta
             )
             ft = 1.
             if self.response == 'v':
@@ -658,18 +676,10 @@ class Amplitudes(BaseEstimator):
 
         # Define functions for predictions
         self._kernel = Kernel(
-            roots=np.log(self.mech_poles)*self.fs,
+            nat_freqs=np.log(self.mech_poles)*self.fs,
             amps=self.tensor_modes_,
             response=self.response
         )
-        if not self.assume_delta:
-            self._kernel_d = Kernel(
-                roots=np.log(self.mech_poles)*self.fs,
-                amps=self.tensor_modes_,
-                fs=self.fs,
-                response=self.response,
-                discrete='step'
-            )
 
         amps_ = np.concatenate(
             [self.amps_.real, self.amps_.cx/2, np.conj(self.amps_.cx)/2],
@@ -680,22 +690,36 @@ class Amplitudes(BaseEstimator):
 
         return self
 
-    def predict(self, X):
-        if self.assume_delta:
-            return self.irf_pred(X) + self.residual(X)
+    def predict(self, X: ArrayLike) -> np.ndarray:
+        '''
+        Predict the noisy IRF.
 
-        n_out, n_in = self.tensor_modes_.shape[:2]
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Time samples.
 
-        X = np.atleast_1d(X)
-        ns = X.shape[0]
-        K = np.zeros((n_out, n_in, ns), dtype=float)
+        Returns
+        -------
+        K : np.ndarray, shape (n_outputs, n_inputs, n_samples)
+            Predicted noisy IRF.
+        '''
+        return self.irf_pred(X) + self.residual(X)
 
-        if len(self.mech_poles) > 0:
-            K += self._kernel_d(X)
+    def residual(self, X: ArrayLike) -> np.ndarray:
+        '''
+        Predict background or residual.
 
-        return K + self.residual(X)
-
-    def residual(self, X):
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Time samples.
+        
+        Returns
+        -------
+        K : np.ndarray, shape (n_outputs, n_inputs, n_samples)
+            Predicted background.
+        '''
         n_out, n_in = self.tensor_modes_.shape[:2]
 
         X = np.atleast_1d(X)
@@ -708,7 +732,22 @@ class Amplitudes(BaseEstimator):
 
         return K
 
-    def irf_pred(self, X):
+    def irf_pred(self, X: ArrayLike) -> np.ndarray:
+        '''
+        Predict IRF.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Time samples.
+        
+        Returns
+        -------
+        K : np.ndarray, shape (n_outputs, n_inputs, n_samples)
+            Predicted IRF.
+            In case of accelerance, returns IRF without the mass-term.
+        '''
+
         n_out, n_in = self.tensor_modes_.shape[:2]
 
         X = np.atleast_1d(X)
@@ -720,7 +759,23 @@ class Amplitudes(BaseEstimator):
 
         return K
 
-    def score(self, X, y):
+    def score(self, X: ArrayLike, y: ArrayLike) -> float:
+        '''
+        Return the coefficient of determination R^2 of the prediction.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Time samples.
+        y : array-like, shape (n_outputs, n_inputs, n_samples)
+            True values.
+
+        Returns
+        -------
+        score : float
+            Coefficient of determination.
+        '''
+
         # y must have the same sampling rate.
         ns = X.shape[0]
         y_pred = self.predict(X)
@@ -731,7 +786,7 @@ class Amplitudes(BaseEstimator):
 # Modal Parameters
 # =================================
 
-def reshape_modes_input(x, dof:int, n_out:int):
+def _reshape_modes_input(x, dof:int, n_out:int):
     '''
     Transform 1darray into (x, z) for use in PartialModesMap.
     '''
@@ -751,7 +806,7 @@ def reshape_modes_input(x, dof:int, n_out:int):
 
     return X, Z
 
-def reshape_modes_output(X, Z):
+def _reshape_modes_output(X, Z):
     '''
     Transform (x, z) into 1darray compatible with scipy.optimize.
 
@@ -774,11 +829,11 @@ def reshape_modes_output(X, Z):
 
     return x
 
-def basis_iterator(n_out:int, dof:int):
+def _basis_iterator(n_out:int, dof:int):
     e = np.zeros(2*n_out*dof - n_out*(n_out+1)//2)
     e[0] = 1
     for _ in range(len(e)):
-        yield reshape_modes_input(e, dof, n_out)
+        yield _reshape_modes_input(e, dof, n_out)
         e = np.roll(e, 1)
 
 def mode_to_amps(modes, n_out, n_in):
@@ -1184,7 +1239,7 @@ def extend_couplings(x, z, coords=None):
     return -inv_qe(inv_qe(z_e).T)
 
 
-def _metric_amps_modes(poles, ns, response='a', assume_delta=False):
+def _metric_amps_modes(poles, ns, response='a'):
     '''
     Compute the metric for amplitude coefficients.
     '''
@@ -1198,21 +1253,12 @@ def _metric_amps_modes(poles, ns, response='a', assume_delta=False):
         exp_x, exp_y = np.log(x), np.log(y)
         r = x[np.newaxis, :] * y[:, np.newaxis]
         r = _sum_exp_weighted(r, ns)
-        if assume_delta:
-            if response == 'd':
-                pass
-            elif response == 'v':
-                r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
-            elif response == 'a':
-                r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])**2
-        else:
-            r *= (x[np.newaxis, :]-1)*(y[:, np.newaxis]-1)
-            if response == 'd':
-                r *= 1/(exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
-            elif response == 'v':
-                pass
-            elif response == 'a':
-                r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
+        if response == 'd':
+            pass
+        elif response == 'v':
+            r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])
+        elif response == 'a':
+            r *= (exp_x[np.newaxis, :]*exp_y[:, np.newaxis])**2
 
         return r
 
@@ -1229,15 +1275,71 @@ def _metric_amps_modes(poles, ns, response='a', assume_delta=False):
     return np.real(m_r_r)
 
 class RealModes:
+    r'''
+    Fit mode shapes with proportional damping.
+
+    After estimating the amplitudes :math:`A^l_{ij}` with :class:`Amplitudes`,
+    this class can be used to fit mode shapes assuming proportional damping.
+    The mode shapes are stored as an array :math:`\varphi` of shape (n_outputs, dof), and
+    they satisfy
+
+    .. math::
+        A^l_{ij} \approx \varphi_{il} \varphi_{jl},
+
+    where :math:`i=0, \ldots, n_\mathrm{out}-1`, :math:`j=0, \ldots, n_\mathrm{in}-1`, and :math:`l=0, \ldots, \mathrm{dof}-1`.
+
+    Parameters
+    ----------
+    poles : array-like, shape (dof,)
+        Natural frequencies.
+
+    amps : array-like, shape (n_outputs, n_inputs, dof)
+        Amplitudes for each measured output-input pair and mode.
+    
+    ns : int
+        Number of time samples in the fitted IRF.
+
+    response : str, default 'a'
+        Type of response. Must be one of 'a', 'v', or 'd', for accelerance, velocity, or displacement, respectively.
+
+    fs : float, default 1.
+        Sampling frequency (:math:`1/dt`) of the IRF.
+
+    Attributes
+    ----------
+    modes_ : np.ndarray, shape (n_outputs, dof)
+        Fitted (partial) mode shapes.
+
+    success_ : bool
+        Whether the optimization was successful.
+
+    message_ : str
+        Description of the cause of the termination.
+
+    Notes
+    -----
+    To compare amplitudes with mode shapes, we use a loss-function based on the Hilbert--Schmidt norm
+
+    .. math::
+        L(\varphi) = \sum_{i,j}\sum_{k=0}^{N-1} (N - k)\Big\lvert \im\Big(\sum_l(A^l_{ij}-\varphi_{il} \varphi_{jl})\lambda_l^\nu s_l^k\Big) \Big\rvert^2,
+
+    where :math:`N` is the number of time samples,
+    :math:`s_l = e^{\lambda_l\,dt}` are the poles of the structure, and
+    the exponent :math:`\nu` depends on the type of IRF (accelerance (2), velocity (1), or displacement (0)).
+
+    Since the loss-function is not convex, the optimization is performed with
+    the global minimizer :func:`scipy.optimize.dual_annealing` with local search by `trust-ncg`.
+    To define an initial guesss,
+    a determined subset of equations from the system :math:`A^l_{ij} = \varphi_{il} \varphi_{jl}` is solved.
+    '''
 
     def __init__(
         self,
-        poles,
-        amps,
-        ns:int,
-        response:str='a',
-        fs:float=1.,
-        assume_delta:bool=False
+        poles: ArrayLike,
+        amps: ArrayLike,
+        ns: int,
+        response: str = 'a',
+        fs: float = 1.,
     ):
         assert poles.ndim == 1, 'Expected a 1D-array for frequencies.'
         assert amps.ndim == 3, 'Expected a 3D-array for amplitudes.'
@@ -1251,19 +1353,13 @@ class RealModes:
         self.fs = fs
         self.ns = ns
         self.response = response
-        self.assume_delta = assume_delta
 
         self._rescale = np.max(np.abs(amps))
-        self.modes_fit_ = None
-        self.success_ = None
-        self.message_ = None
-
         self._get_metric()
 
     def _get_metric(self):
         m = _metric_amps_modes(
-            self.poles, self.ns,
-            response=self.response, assume_delta=self.assume_delta)
+            self.poles, self.ns, response=self.response)
         self._metric = m / np.max(m)
 
     def _fun(self, x):
@@ -1336,11 +1432,44 @@ class RealModes:
             [2*t1[:n_in] + t2, t1[n_in:]], axis=0)
         return (Ap + Bx).flatten()
 
-    def fit(self, options_ncg:dict=None):
+    def fit(
+        self,
+        options_ncg: dict | None = None,
+        dual_annealing_kwargs: dict | None = None,
+    ) -> RealModes:
+        '''
+        Fit the mode shapes.
+        
+        Parameters
+        ----------
+        options_ncg : dict, optional
+            Options for the local optimization by `trust-ncg`.
+            The options 'jac' and 'hessp' are ignored since they are passed in this class.
+            See :func:`scipy.optimize.minimize` for details. Default is None.
+        
+        dual_annealing_kwargs : dict, optional
+            Options for `scipy.optimize.dual_annealing`.
+            The options 'x0', 'bounds', and 'minimizer_kwargs' are ignored since they are defined in this class.
+            See :func:`scipy.optimize.dual_annealing` for details. Default is None.
+
+        Returns
+        -------
+        self : RealModes
+            Fitted model.
+        '''
         n_out, n_in, dof = self.amps.shape
         options_ncg = {} if options_ncg is None else options_ncg
+        # Remove keys 'jac' and 'hessp' from options_ncg if they exist.
+        options_ncg.pop('jac', None)
+        options_ncg.pop('hessp', None)
         if 'gtol' not in options_ncg.keys():
             options_ncg['gtol'] = 1.e-4
+
+        dual_annealing_kwargs = {} if dual_annealing_kwargs is None else dual_annealing_kwargs
+        # Remove keys 'x0', 'bounds', and 'minimizer_kwargs' from dual_annealing_kwargs if they exist.
+        dual_annealing_kwargs.pop('x0', None)
+        dual_annealing_kwargs.pop('bounds', None)
+        dual_annealing_kwargs.pop('minimizer_kwargs', None)
 
         x0 = np.real(amps_to_modes(self.amps/self._rescale))
         idx = np.nonzero(x0[0] < 0)[0]
@@ -1360,51 +1489,45 @@ class RealModes:
                 'jac': self._jac,
                 'hessp': self._hessp,
                 'options': options_ncg},
-            callback=None)
-        self.modes_fit_ = np.sqrt(self._rescale) * res.x.reshape(n_out, dof)
+            **dual_annealing_kwargs,
+            )
+        self.modes_ = np.sqrt(self._rescale) * res.x.reshape(n_out, dof)
         self.success_ = res.success
         self.message_ = res.message
 
         # Define functions for predictions
-        amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
+        amps_fit = mode_to_amps(self.modes_, n_out, n_in)
         self._irf = Kernel(
-            roots=np.log(self.poles)*self.fs,
+            nat_freqs=np.log(self.poles)*self.fs,
             amps=amps_fit,
             response=self.response
         )
-        if not self.assume_delta:
-            self._kernel_d = Kernel(
-                roots=np.log(self.poles)*self.fs,
-                amps=amps_fit,
-                fs=self.fs,
-                response=self.response,
-                discrete='step'
-            )
 
         return self
 
-    def predict(self, X):
-        if self.modes_fit_ is None:
-            msg = 'Call fit() before accessing modes_fit_.'
-            raise ValueError(msg)
+    def predict(self, X: ArrayLike) -> np.ndarray:
+        '''
+        Predict the impulse response function (IRF).
 
-        X = np.atleast_1d(X)
-        if self.assume_delta:
-            return self._irf(X)
-        else:
-            return self._kernel_d(X)
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Times at which to predict the IRF.
 
-    def irf_pred(self, X):
-        if self.modes_fit_ is None:
-            msg = 'Call fit() before accessing modes_fit_.'
+        Returns
+        -------
+        irf : np.ndarray, shape (n_outputs, n_inputs, n_samples)
+            Predicted IRF at the given times.
+        '''
+        if self.modes_ is None:
+            msg = 'Call fit() before accessing modes_.'
             raise ValueError(msg)
 
         X = np.atleast_1d(X)
         return self._irf(X)
 
 
-
-class ConstraintModifier:
+class _ConstraintModifier:
 
     def __init__(self, shift, scale):
         self.shift = shift
@@ -1443,7 +1566,7 @@ class ConstraintModifier:
                 return f((x - self.shift)/self.scale)/self.scale
             return f_
 
-class ScalarComposition:
+class _ScalarComposition:
 
     def __init__(self, scalar, f, df, d2f, dim):
         self.scalar = scalar
@@ -1494,16 +1617,95 @@ LinearOperator):
         return self
 
 class ComplexModes:
+    r'''
+    Fit mode shapes with non-proportional damping.
+
+    After estimating the amplitudes :math:`A^l_{ij}` with :class:`Amplitudes`,
+    this class can be used to fit mode shapes assuming non-proportional damping.
+    The algorithm needs an initial guess, which
+    may be taken from the fitted mode shapes by the class :class:`RealModes`.
+    The complex mode shapes are stored as an array :math:`\varphi` of shape (n_outputs, dof), and
+    they satisfy
+
+    .. math::
+        A^l_{ij} \approx \varphi_{il} \varphi_{jl},
+
+    where :math:`i=0, \ldots, n_\mathrm{out}-1`, :math:`j=0, \ldots, n_\mathrm{in}-1`, and :math:`l=0, \ldots, \mathrm{dof}-1`.
+
+    Parameters
+    ----------
+    poles : array-like, shape (dof,)
+        Natural frequencies.
+
+    amps : array-like, shape (n_outputs, n_inputs, dof)
+        Amplitudes for each measured output-input pair and mode.
+
+    ns : int
+        Number of time samples in the fitted IRF.
+
+    fs : float, default 1.
+        Sampling frequency (:math:`1/dt`) of the IRF.
+    
+    coords : array-like, shape (n_out,), optional
+        To solve the minimization problem,
+        the space of (partial) mode shapes is decomposed through the grassmannian space :math:`\mathrm{Gr}(n_\mathrm{out}, \mathrm{dof})` over the real field.
+        To parameterize the grassmannian,
+        we use a coordinate subspace :math:`\{e_{i_1}, \ldots, e_{i_{n_\mathrm{out}}}\}`, so
+        the array `coords` is ``np.array([i_1, \ldots, i_{out}])``.
+        If None, the first `n_out` standard basis vectors are used.
+
+    response : str, default 'a'
+        Type of response.
+        Must be one of 'a', 'v', or 'd', for accelerance, velocity, or displacement, respectively.
+
+    Attributes
+    ----------
+    modes_ : np.ndarray, shape (n_outputs, dof)
+        Fitted (partial) mode shapes.
+
+    success_ : bool
+        Whether the optimization was successful.
+
+    message_ : str
+        Description of the cause of the termination.
+
+    Notes
+    -----
+    We use a loss-function based on the Hilbert--Schmidt norm
+
+    .. math::
+        L(\varphi) = \sum_{i,j}\sum_{k=0}^{N-1} (N - k)\Big\lvert \im\Big(\sum_l(A^l_{ij}-\varphi_{il} \varphi_{jl})\lambda_l^\nu s_l^k\Big) \Big\rvert^2,
+
+    subject to the constraints
+
+    .. math::
+        \begin{split}
+        \im(\sum_l \varphi_{il} \varphi_{jl}) = 0,
+        \quad\text{for each } i = 0, \ldots, n_\mathrm{out}-1 \text{ and } j = 0, \ldots, n_\mathrm{in}-1, \\
+        \im(\sum_l \lambda_l\varphi_{il} \varphi_{jl}) > 0, \text{ and }
+        -\im(\sum_l \lambda_l^2\varphi_{il} \varphi_{jl}) > 0
+        \text{ for } i, j = 0, \ldots, n_\mathrm{in}-1.
+        \end{split}
+
+    Here, :math:`N` is the number of time samples,
+    :math:`s_l = e^{\lambda_l\,dt}` are the poles of the structure, and
+    the exponent :math:`\nu` depends on the type of IRF (accelerance (2), velocity (1), or displacement (0)).
+    The inequality constraints are to be understood as positive-definite matrices.
+
+    The optimization is performed by a local search with the minimizer :func:`scipy.optimize.minimize`
+    using the method `trust-constr`.
+    To speed up computations, the exact jacobian and hessian are passed, and
+    the functions are optimized to avoid redundant computations.
+    '''
 
     def __init__(
         self,
-        poles,
-        coords,
-        amps,
-        fs:int,
-        ns:int,
-        response:str='a',
-        assume_delta:bool=False
+        poles: ArrayLike,
+        amps: ArrayLike,
+        ns: int,
+        fs: float = 1.,
+        coords: ArrayLike | None = None,
+        response: str = 'a',
     ):
         self.poles = poles
         assert poles.ndim == 1, 'Expected 1D array for frequencies.'
@@ -1512,39 +1714,36 @@ class ComplexModes:
         assert amps.ndim == 3, 'Expected 3D array for amplitudes.'
         assert amps.shape[2] == len(poles), 'Incompatible shapes for frequencies and amplitudes.'
 
+        n_out = amps.shape[0]
+        self.coords = np.asarray(coords) if coords is not None else np.arange(n_out)
+
         self.fs = fs
         self.ns = ns
         self.response = response
-        self.assume_delta = assume_delta
 
         PartialModesMap.atol = 1e-10
         PartialModesMap.rtol = 1e-8
         roots = np.emath.log(poles)*fs
-        self._modes_map = PartialModesMap(roots, coords)
+        self._modes_map = PartialModesMap(roots, self.coords)
 
         self._rescale = np.max(np.abs(amps))
         self._get_metric()
 
-        self._raw_modes_fit = None
-        self.success_ = None
-        self.message_ = None
-
     @property
-    def modes_fit_(self):
+    def modes_(self):
         if self._raw_modes_fit is None:
-            msg = 'Call fit() before accessing modes_fit_.'
+            msg = 'Call fit() before accessing modes_.'
             raise ValueError(msg)
         return np.sqrt(self._rescale) * self._modes_map(*self._raw_modes_fit)
 
     def _get_metric(self):
         m = _metric_amps_modes(
-            self.poles, self.ns, self.response,
-            self.assume_delta)
+            self.poles, self.ns, response=self.response)
         self._metric = m / np.max(m)
 
     def _fun(self, x):
         n_out, n_in, dof = self.amps.shape
-        x_, z_ = reshape_modes_input(x, dof, n_out)
+        x_, z_ = _reshape_modes_input(x, dof, n_out)
 
         modes = self._modes_map(x_, z_)
         if isinstance(modes, float):
@@ -1566,7 +1765,7 @@ class ComplexModes:
 
     def _jac(self, x):
         n_out, n_in, dof = self.amps.shape
-        x_, z_ = reshape_modes_input(x, dof, n_out)
+        x_, z_ = _reshape_modes_input(x, dof, n_out)
 
         modes = self._modes_map(x_, z_)
         d_modes = self._modes_map.jac(x_, z_)
@@ -1578,7 +1777,7 @@ class ComplexModes:
         diff = 2*np.einsum('ijk,kl->ijl', diff, self._metric)
 
         jac = [np.einsum('ijl,ijl', diff, self._jac_amps(modes, d_modes(dx, dz)))
-               for dx, dz in basis_iterator(n_out, dof)]
+               for dx, dz in _basis_iterator(n_out, dof)]
         return np.array(jac)
 
     def _hessp_amp(self, modes, pd_modes, d_modes, d2_modes):
@@ -1595,8 +1794,8 @@ class ComplexModes:
 
     def _hessp(self, x, p):
         n_out, n_in, dof = self.amps.shape
-        x_, z_ = reshape_modes_input(x, dof, n_out)
-        px, pz = reshape_modes_input(p, dof, n_out)
+        x_, z_ = _reshape_modes_input(x, dof, n_out)
+        px, pz = _reshape_modes_input(p, dof, n_out)
 
         modes = self._modes_map(x_, z_)
         amps = mode_to_amps(modes, n_out, n_in)
@@ -1618,33 +1817,33 @@ class ComplexModes:
                 'ijk,kl,ijl->', pd_amps, self._metric, d_amps)
             return d2_dist
 
-        hessp = [hess_f(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+        hessp = [hess_f(dx, dz) for dx, dz in _basis_iterator(n_out, dof)]
         return np.array(hessp)
 
     def _get_constraints(self):
         n_out, _, dof = self.amps.shape
 
         def constr_fun(x):
-            x_, z_ = reshape_modes_input(x, dof, n_out)
+            x_, z_ = _reshape_modes_input(x, dof, n_out)
             return self._modes_map.constraints(x_, z_)
 
         def constr_jac(x):
-            x_, z_ = reshape_modes_input(x, dof, n_out)
+            x_, z_ = _reshape_modes_input(x, dof, n_out)
             jac = self._modes_map.jac_constraints(x_, z_)
-            jac = [jac(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+            jac = [jac(dx, dz) for dx, dz in _basis_iterator(n_out, dof)]
             return np.array(jac).T
 
         def constr_hessp(x, p):
-            x_, z_ = reshape_modes_input(x, dof, n_out)
-            px, pz = reshape_modes_input(p, dof, n_out)
+            x_, z_ = _reshape_modes_input(x, dof, n_out)
+            px, pz = _reshape_modes_input(p, dof, n_out)
             hessp = self._modes_map.hessp_constraints(x_, z_, px, pz)
-            hessp = [hessp(dx, dz) for dx, dz in basis_iterator(n_out, dof)]
+            hessp = [hessp(dx, dz) for dx, dz in _basis_iterator(n_out, dof)]
             return np.array(hessp).T
 
         dim = 2*n_out*dof - n_out*(n_out+1)//2
         shift = self._ref_constr + np.array([0.5, -1., -1.])
-        scalar_f = ConstraintModifier(shift, 0.1)
-        constraints = ScalarComposition(
+        scalar_f = _ConstraintModifier(shift, 0.1)
+        constraints = _ScalarComposition(
             scalar_f, constr_fun, constr_jac, constr_hessp, (3, dim))
 
         def constr_hess(x, v):
@@ -1662,10 +1861,49 @@ class ComplexModes:
         )
         return r
 
-    def fit(self, x0, options:dict=None, maxiter:int=1e3):
+    def fit(
+        self,
+        x0: ArrayLike | tuple[ArrayLike, ArrayLike],
+        options: dict | None = None,
+        maxiter: int = 1000,
+    ) -> ComplexModes:
+        r'''
+        Fit the mode shapes.
+
+        Parameters
+        ----------
+        x0 : array-like or 2-tuple of arrays with shape (n_outputs, dof)
+            Initial guess for the optimization.
+            If a single array is given, it is interpreted as real mode shapes.
+            If a tuple of two arrays is given, the arrays represent a parameterization
+            of the mode shapes, where the first array is the real part, and
+            the second array has the same shape but
+            the left-most :math:`(n_\mathrm{out}\times n_\mathrm{out})`-submatrix is antisymmetric.
+
+        options : dict, optional
+            Options for the optimization by `trust-constr`.
+
+        maxiter : int, optional
+            Maximum number of iterations for the optimization. Default is 1000.
+        
+        Returns
+        -------
+        self : ComplexModes
+            Fitted model.
+        '''
+
         options = {} if options is None else options
         if 'xtol' not in options.keys():
             options['xtol'] = 1e-5
+
+        if isinstance(x0, tuple) and len(x0) == 2:
+            pass
+        elif isinstance(x0, (list, np.ndarray)):
+            x0 = np.asarray(x0)
+            x0 = (x0, np.zeros_like(x0))
+        else:
+            msg = 'Expected x0 to be either a tuple of two arrays or a single array.'
+            raise ValueError(msg)
 
         x0 = tuple(e/np.sqrt(self._rescale) for e in x0)
 
@@ -1680,7 +1918,7 @@ class ComplexModes:
 
         res = scipy.optimize.minimize(
             self._fun,
-            x0=reshape_modes_output(*x0),
+            x0=_reshape_modes_output(*x0),
             method='trust-constr',
             jac=self._jac,
             hessp=self._hessp,
@@ -1689,41 +1927,35 @@ class ComplexModes:
             callback=callback
         )
         n_out, n_in, dof = self.amps.shape
-        self._raw_modes_fit = reshape_modes_input(res.x, dof, n_out)
+        self._raw_modes_fit = _reshape_modes_input(res.x, dof, n_out)
         self.optRes_ = res
 
         # Define functions for predictions
-        amps_fit = mode_to_amps(self.modes_fit_, n_out, n_in)
+        amps_fit = mode_to_amps(self.modes_, n_out, n_in)
         self._irf = Kernel(
-            roots=np.log(self.poles)*self.fs,
+            nat_freqs=np.log(self.poles)*self.fs,
             amps=amps_fit,
             response=self.response
         )
-        if not self.assume_delta:
-            self._kernel_d = Kernel(
-                roots=np.log(self.poles)*self.fs,
-                amps=amps_fit,
-                fs=self.fs,
-                response=self.response,
-                discrete='step'
-            )
 
         return self
 
-    def predict(self, X):
-        if self.modes_fit_ is None:
-            msg = 'Call fit() before accessing modes_fit_.'
-            raise ValueError(msg)
-
-        X = np.atleast_1d(X)
-        if self.assume_delta:
-            return self._irf(X)
-        else:
-            return self._kernel_d(X)
-
-    def irf_pred(self, X):
-        if self.modes_fit_ is None:
-            msg = 'Call fit() before accessing modes_fit_.'
+    def predict(self, X: ArrayLike) -> np.ndarray:
+        '''
+        Predict the impulse response function (IRF).
+        
+        Parameters
+        ----------
+        X : array-like, shape (n_samples,)
+            Times at which to predict the IRF.
+        
+        Returns
+        -------
+        irf : np.ndarray, shape (n_outputs, n_inputs, n_samples)
+            Predicted IRF at the given times.
+        '''
+        if self.modes_ is None:
+            msg = 'Call fit() before accessing modes_.'
             raise ValueError(msg)
 
         X = np.atleast_1d(X)
@@ -1817,128 +2049,3 @@ def system_to_modal(M, C, K):
     mode_shapes = mode_shapes @ np.diag(mu)
     
     return mode_shapes, Z
-
-# =================================
-# Systems
-# =================================
-
-def randomSystem(
-    masses, dampings, roots,
-    damping_type='prop', seed=None):
-    '''Generate a random linear vibrating system.
-
-    Parameters
-    ----------
-    dofs : int
-        Number of degrees of freedom.
-    masses : tuple, optional
-        Range for mass values.
-    dampings : tuple, optional
-        Range for damping ratios.
-    roots : tuple, optional
-        Range for natural frequencies.
-    damping_type : str, optional
-        Type of damping ('prop' for proportional, 'nop' for non-proportional).
-    seed : int, optional
-        Random seed for reproducibility.
-
-    Returns
-    -------
-    mechanical : dict
-        Dictionary containing mass, damping, and stiffness matrices.
-    modal : dict
-        Dictionary containing mode shapes (mass normalized) and roots.
-    '''
-    m = np.asarray(masses)
-    zeta = np.asarray(dampings)
-    freqs = np.asarray(roots)
-    dofs = len(freqs)
-    # Raise an exception if the lengths are different.
-    if (len(m) != dofs) or (len(zeta) != dofs):
-        msg = 'Incompatible lengths for masses, dampings, and roots.'
-        raise ValueError(msg)
-
-    # Generate rotation matrices.
-    if dofs > 1:
-        U = scipy.stats.ortho_group(dim=dofs, seed=seed)
-        Um = U.rvs()
-        Uk = U.rvs()
-        if damping_type == 'prop':
-            Uc = Uk
-        elif damping_type == 'nop':
-            Uc = U.rvs()
-        else:
-            msg = 'Invalid damping type. Choose between `prop` and `nop`.'
-            raise ValueError(msg)
-    else:
-        Um = np.array([[1]])
-        Uk, Uc = Um, Um
-    
-    modes_ = Um @ np.diag(1 / np.sqrt(m))
-    invModes_ = np.diag(np.sqrt(m)) @ Um.T
-    M = Um @ np.diag(m) @ Um.T
-    C = invModes_.T @ Uc @ np.diag(2*zeta*freqs) @ Uc.T @ invModes_
-    K = invModes_.T @ Uk @ np.diag(freqs**2) @ Uk.T @ invModes_
-    normal_modes = modes_ @ Uk
-
-    if damping_type == 'prop':
-        mode_shapes = normal_modes
-        Z = freqs*(-zeta + 1j*np.sqrt(1-zeta**2))
-    else:
-        A = normal_modes.T @ C @ normal_modes
-        B = np.diag(freqs**2)
-        mode_shapes, Z = system_to_modal(np.eye(dofs), A, B)
-        mode_shapes = normal_modes @ mode_shapes
-
-    # Sort by size of complex frequency.
-    idxs = np.argsort(np.abs(Z))
-    mode_shapes = mode_shapes[:, idxs]
-    Z = Z[idxs]
-
-    mechanical = {
-        'mass': M,
-        'damping': C,
-        'stiffness': K
-    }
-    modal = {
-        'frequencies': Z,
-        'mode_shapes': mode_shapes
-    }
-    return mechanical, modal
-
-
-class Spring:
-
-    def __init__(self, M, C, K, force=None):
-        '''Simulate a linear vibrating system.
-
-        Set up an object representing a linear system
-        to be used in JiTCODE.
-        '''
-        self.M, self.C, self.K = _validate_dims(M, C, K)
-        self.force = np.zeros(self.M.shape[0]) if force is None else np.array(force, ndmin=1)
-        if len(self.force) != self.M.shape[0]:
-            msg = f'Expected a force with {self.M.shape[0]}-DoF,\
-                got {len(self.force)} instead.'
-            raise ValueError(msg)
-
-        Minv = np.linalg.inv(self.M)
-        self._A = Minv @ C
-        self._B = Minv @ K
-        self._force = Minv @ self.force
-
-    def __iter__(self):
-        y = jitcode.y
-        dofs = self.M.shape[0]
-        q = [y(i) for i in range(dofs)]
-        p = [y(i + dofs) for i in range(dofs)]
-        for i in range(dofs):
-            yield p[i]
-        for i in range(dofs):
-            tmp = -sum(self._B[i, j] * q[j] for j in range(dofs))
-            tmp += -sum(self._A[i, j] * p[j] for j in range(dofs))
-            tmp += self._force[i]
-            yield tmp
-
-    def __len__(self):
-        return 2 * self.M.shape[0]

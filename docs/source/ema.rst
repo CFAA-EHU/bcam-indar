@@ -25,8 +25,6 @@ Pole Fitting
     VF
     SuperResolution
     StablePoles
-    pairing
-    dist
 
 Modal Analysis
 --------------
@@ -35,12 +33,12 @@ Modal Analysis
     :toctree: generated
 
     Amplitudes
-    PartialModesMap
     RealModes
     ComplexModes
-    modal_to_system
-    system_to_modal
-    randomSystem
-    mode_to_amps
-    amps_to_modes
-    extend_couplings
+
+.. toctree::
+    :hidden:
+
+    generated/bcam.indar.ema.SuperResolution.n_poles_
+    generated/bcam.indar.ema.SuperResolution.exps_
+    generated/bcam.indar.ema.ComplexModes.modes_

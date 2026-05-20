@@ -1,11 +1,12 @@
-#!/usr/bin/env python
-
+from __future__ import annotations
 import logging
 import bisect
 
 import numpy as np
 import scipy
 import pandas as pd
+from numpy.typing import ArrayLike
+from matplotlib.axes import Axes
 from sklearn.base import BaseEstimator
 import matplotlib.pyplot as plt
 
@@ -19,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Rational Approximation
 # ========================
 
-def pairing(A, B, ns:int, delta:float=None):
+def pairing(A, B, ns:int, delta: float | None = None):
 
     delta = 0.8 if delta is None else delta
 
@@ -48,7 +49,8 @@ def pairing(A, B, ns:int, delta:float=None):
 # Define helpers for rational fitting.
 
 def _get_residues(
-        y, parity, poles, d:bool=False, cond=None, lapack_driver=None):
+    y, parity, poles, d: bool = False, cond: float | None = None,
+    lapack_driver: str | None = None):
     N, rank = y.shape
     ns = 2*(N-1) + parity
 
@@ -116,17 +118,101 @@ def _update_sets(gS, gG, idx):
 
 
 class AAA(BaseEstimator):
+    r'''
+    Rational approximation using the AAA algorithm.
+
+    This is an extension of the `AAA algorithm <https://doi.org/10.1137/16M1106122>`_
+    to vector-valued functions using a common-denominator representation.
+    Since this class was created for subsequent use in spectral estimation,
+    it is assumed that the data to be approximated is the DFT of a real signal.
+    Hence, if the data :math:`y` has length :math:`n`, then
+    the rational function :math:`R(z)` satisfies
+
+    .. math:: R\big(e^{2\pi i k / n}\big) \approx y_k,\quad\text{for } k = 0, \ldots, n-1,
+
+    where :math:`y_k = y_{n-k}^*`, and :math:`R(z) = R(z^*)^*`.
+    Because of the symmetry of the data,
+    instead of :math:`\{y_k\}_{k=0}^{n-1}` we work with :math:`\{y_k\}_{k=0}^{N-1}` and
+    the parity :math:`\sigma := n \mod 2` so that :math:`n = 2(N-1) + \sigma`.
+
+    This class is a `sklearn` estimator.
+
+    Parameters
+    ----------
+    order : int
+        Number of poles of the rational function;
+        recall that complex poles come in conjugate pairs.
+        If `order` > `max_order`, where `max_order` :math:`= \lfloor \frac{r\cdot n}{r+1} \rfloor`, and
+        :math:`r` is the rank of the data, that is, :math:`y_k \in \mathbb{C}^r`, then
+        `order` is set to `max_order` and a warning is raised.
+
+    compute_r : bool, default True
+        Whether to compute residues and constant term after fitting poles.
+    
+    prune_tol : float, default 0.
+        Tolerance for pruning poles based on the norm of their residues.
+        If compute_r=False, then residues are computed for pruning, but not updated or stored.
+
+    d : bool, default False
+        Whether to include a constant term in the rational function.
+    
+    lapack_driver : str, default None
+        LAPACK driver to use for least-squares problems. Should be one of "gelsd", "gelss", or "gelsy". 
+        If None, the default driver is used.
+    
+    cond : float, default None
+        Condition number threshold for rank estimation in least-squares problems.
+        If None, the default threshold is used.
+
+    Attributes
+    ----------
+    poles_ : Poles
+        Poles of the fitted rational function.
+        To access the real or complex poles, use the attributes `poles_.real` and `poles_.cx`, respectively.
+        Only complex poles with positive imaginary part are returned.
+    
+    r_ : HCoeffs
+        Residues of the fitted rational function; only computed if compute_r=True.
+        To access the real or complex residues, use the attributes `r_.real` and `r_.cx`, respectively.
+        Only complex residues associated with complex poles with positive imaginary part are returned.
+    
+    d_ : np.ndarray
+        Constant term of the fitted rational function; only computed if compute_r=True.
+
+    Notes
+    -----
+    A rational function :math:`R(z) = p(z)/q(z)` is of type :math:`(l, m)`
+    if :math:`p(z)` is a vector-valued polynomial of degree :math:`l`, and
+    :math:`q(z)` is a scalar polynomial of degree :math:`m`.
+    When :math:`l = m`, the :math:`R` can be written as
+
+    .. math:: R(z) = d + \frac{p_0(z)}{q(z)},
+
+    where :math:`d` is a constant vector, and :math:`p_0(z)` has degree at most :math:`m-1`;
+    by symmetry, :math:`d` is real.
+    For spectral estimation :math:`d = 0`, however,
+    if the parameter `d` is set to `True`, then :math:`d` is not forced to vanish.
+
+    In the computation of the poles, it is assumed that the (generic) condition that
+    all the roots of :math:`q(z)` are simple is satisfied.
+
+    The AAA algorithm is iterative in the number of poles, and
+    at each step it adds a new support point, so
+    this class stores the indices of the support points for further reuse
+    if the `order` is increased in a subsequent fit.
+    This property is exploited in the construction of stabilization diagrams.
+    '''
 
     def __init__(
-            self,
-            *,
-            order:int=None,
-            compute_r:bool=True,
-            prune_tol:float=0.,
-            d:bool=False,
-            lapack_driver:str=None,
-            cond:float=None
-        ):
+        self,
+        *,
+        order: int | None = None,
+        compute_r:bool=True,
+        prune_tol:float=0.,
+        d:bool=False,
+        lapack_driver: str | None = None,
+        cond: float | None = None
+    ):
         self.order = order
         self.compute_r = compute_r
         self.prune_tol = prune_tol
@@ -135,7 +221,7 @@ class AAA(BaseEstimator):
         self.cond = cond
 
     @staticmethod
-    def count_freqs(idxs, N, parity):
+    def _count_freqs(idxs, N, parity):
         idxs = np.array(idxs)
         idxs = np.sort(idxs)
         n_freqs = 0
@@ -289,7 +375,7 @@ class AAA(BaseEstimator):
     def _fit(self, y, parity, indices):
         N = y.shape[0]
         gS, gG = self._initialize_sets(y, indices)
-        n_freqs = self.count_freqs(gS['index'], N, parity)
+        n_freqs = self._count_freqs(gS['index'], N, parity)
 
         step = 1
         while n_freqs-1 < self.order:
@@ -326,7 +412,26 @@ class AAA(BaseEstimator):
 
         return poles
 
-    def fit(self, y, parity:bool=None):
+    def fit(self, y: ArrayLike, parity: bool | None = None) -> AAA:
+        r'''
+        Fit rational function.
+
+        Parameters
+        ----------
+
+        y : array-like, shape (N, n_channels)
+            The data to fit, where for each frequency :math:`k = 0, \ldots, N-1`, the value :math:`y_k` is a vector of length `n_channels`.
+
+
+        parity : bool, optional
+            Parity of the data as explained in the class docstring.
+            If not given, it is deduced from the imaginary part of the last frequency:
+            if it is negligible, then parity is set to 0, otherwise it is set to 1.
+
+        Returns
+        -------
+        self : AAA
+        '''
         y = np.asarray(y)
 
         # Determine parity if not given.
@@ -342,13 +447,13 @@ class AAA(BaseEstimator):
         if self.order is None:
             self.order = rank
         elif self.order > max_order:
-            msg = f'The order exceeds the maximum recommended order {max_order}.'
+            msg = f'The order exceeds the maximum order {max_order}.'
             logger.warning(msg, stacklevel=2)
 
         # If there are already indices from a previous fit, we reuse them.
         if hasattr(self, 'indices_'):
             indices = self.indices_
-            n_freqs = self.count_freqs(indices, N, parity)
+            n_freqs = self._count_freqs(indices, N, parity)
             if n_freqs-1 > self.order:
                 n_freqs = 0
                 i = 0
@@ -390,27 +495,125 @@ class AAA(BaseEstimator):
 
         return self
 
-    def predict(self, X):
+    def predict(self, X: ArrayLike) -> np.ndarray:
+        '''
+        Predict using the rational function.
+
+        Parameters
+        ----------
+
+        X : array-like, shape (n_eval_points,)
+            Complex points at which to evaluate the rational function.
+
+        Returns
+        -------
+        R : np.ndarray, shape (n_eval_points, n_channels)
+            Predicted values.
+        '''
         if self.r_ is None:
             msg = 'Cannot compute rational function values without residues. \
                 Set compute_r=True when initializing the estimator.'
             logger.warning(msg)
-        
+
         return self._predict(X).T
 
 class VF(BaseEstimator):
+    r'''
+    Rational approximation using Vector Fitting (VF).
 
+    This is an implementation of the `VF algorithm <https://doi.org/10.1109/SPI.2006.289202>`_
+    for vector-valued functions using a common-denominator representation.
+    Since this class was created for subsequent use in spectral estimation,
+    it is assumed that the data to be approximated is the DFT of a real signal.
+    Hence, if the data :math:`y` has length :math:`n`, then
+    the rational function :math:`R(z)` satisfies
+
+    .. math:: R\big(e^{2\pi i k / n}\big) \approx y_k,\quad\text{for } k = 0, \ldots, n-1,
+
+    where :math:`y_k = y_{n-k}^*`, and :math:`R(z) = R(z^*)^*`.
+    Because of the symmetry of the data,
+    instead of :math:`\{y_k\}_{k=0}^{n-1}` we work with :math:`\{y_k\}_{k=0}^{N-1}` and
+    the parity :math:`\sigma := n \mod 2` so that :math:`n = 2(N-1) + \sigma`.
+
+    This class is a `sklearn` estimator.
+
+    Parameters
+    ----------
+    order : int, default 1
+        Number of poles of the rational function;
+        recall that complex poles come in conjugate pairs.
+        If `order` > `max_order`, where `max_order` :math:`= \lfloor \frac{r\cdot n}{r+1} \rfloor`, and
+        :math:`r` is the rank of the data, that is, :math:`y_k \in \mathbb{C}^r`, then
+        `order` is set to `max_order` and a warning is raised.
+    
+    poles : array-like, shape (n_poles,), default None
+        Initial poles for the VF iteration.
+        If None, then equally spaced poles on the circle of radius 0.9 are used.
+
+    niter : int, default 1
+        Number of VF iterations to perform.
+
+    compute_r : bool, default True
+        Whether to compute residues and constant term after fitting poles.
+    
+    prune_tol : float, default 0.
+        Tolerance for pruning poles based on the norm of their residues.
+        If compute_r=False, then residues are computed for pruning, but not updated or stored.
+
+    d : bool, default False
+        Whether to include a constant term in the rational function.
+    
+    lapack_driver : str, default None
+        LAPACK driver to use for least-squares problems. Should be one of "gelsd", "gelss", or "gelsy". 
+        If None, the default driver is used.
+    
+    cond : float, default None
+        Condition number threshold for rank estimation in least-squares problems.
+        If None, the default threshold is used.
+
+    Attributes
+    ----------
+    poles_ : Poles
+        Poles of the fitted rational function.
+        To access the real or complex poles, use the attributes `poles_.real` and `poles_.cx`, respectively.
+        Only complex poles with positive imaginary part are returned.
+    
+    r_ : HCoeffs
+        Residues of the fitted rational function; only computed if compute_r=True.
+        To access the real or complex residues, use the attributes `r_.real` and `r_.cx`, respectively.
+        Only complex residues associated with complex poles with positive imaginary part are returned.
+    
+    d_ : np.ndarray
+        Constant term of the fitted rational function; only computed if compute_r=True.
+
+    Notes
+    -----
+    A rational function :math:`R(z) = p(z)/q(z)` is of type :math:`(l, m)`
+    if :math:`p(z)` is a vector-valued polynomial of degree :math:`l`, and
+    :math:`q(z)` is a scalar polynomial of degree :math:`m`.
+    When :math:`l = m`, the :math:`R` can be written as
+
+    .. math:: R(z) = d + \frac{p_0(z)}{q(z)},
+
+    where :math:`d` is a constant vector, and :math:`p_0(z)` has degree at most :math:`m-1`;
+    by symmetry, :math:`d` is real.
+    For spectral estimation :math:`d = 0`, however,
+    if the parameter `d` is set to `True`, then :math:`d` is not forced to vanish.
+
+    In the computation of the poles, it is assumed that the (generic) condition that
+    all the roots of :math:`q(z)` are simple is satisfied.
+    '''
     def __init__(
         self,
         *,
         order:int=1,
-        poles:np.typing.ArrayLike=None,
+        poles: ArrayLike | None = None,
         niter:int=1,
         compute_r:bool=True,
         d:bool=False,
         prune_tol:float=0.,
-        cond:float=None,
-        lapack_driver:str=None
+        cond: float | None = None,
+        lapack_driver: str | None = None
     ):
         self.order = order
         self.poles = poles
@@ -539,7 +742,22 @@ class VF(BaseEstimator):
 
         return poles
 
-    def fit(self, y, parity:bool=None):
+    def fit(self, y: ArrayLike, parity: bool | None = None) -> VF:
+        r'''
+        Fit rational function.
+
+        Parameters
+        ----------
+
+        y : array-like, shape (N, n_channels)
+            The data to fit, where for each frequency :math:`k = 0, \ldots, N-1`, the value :math:`y_k` is a vector of length `n_channels`.
+        
+
+        parity : bool, optional
+            Parity of the data as explained in the class docstring.
+            If not given, it is deduced from the imaginary part of the last frequency:
+            if it is negligible, then parity is set to 0, otherwise it is set to 1.
+        '''
         y = np.asarray(y)
         N, rank = y.shape
         ns = 2*(N-1)+parity
@@ -600,7 +818,21 @@ class VF(BaseEstimator):
 
         return self
 
-    def predict(self, X):
+    def predict(self, X: ArrayLike) -> np.ndarray:
+        '''
+        Predict using the rational function.
+
+        Parameters
+        ----------
+
+        X : array-like, shape (n_eval_points,)
+            Complex points at which to evaluate the rational function.
+
+        Returns
+        -------
+        R : np.ndarray, shape (n_eval_points, n_channels)
+            Predicted values.
+        '''
         if self.r_ is None:
             msg = 'Cannot compute rational function values without residues. \
                 Set compute_r=True when initializing the estimator.'
@@ -614,6 +846,61 @@ class VF(BaseEstimator):
 # ===============================
 
 class SuperResolution(BaseEstimator):
+    r'''
+    Spectral estimation based on rational fitting.
+
+    This class approximate a signal with an exponential sum.
+    If
+    
+    .. math::
+        f_k = \sum_{j=0}^{M-1} a_j e^{\lambda_j k\,dt},\quad k = 0, \ldots, n-1,
+    
+    where :math:`a_j` are the amplitudes, and :math:`\lambda_j` are complex exponents, then
+    the DFT is
+
+    .. math::
+        e^{-2\pi i k/n}\hat{f}_k = \sum_{j=0}^{M-1} \frac{a_j(1-e^{\lambda_j n\,dt})}{e^{2\pi i k/n}-e^{\lambda_j\,dt}},\quad k = 0, \ldots, n-1,
+
+    which enables the use of rational approximation.
+    The algorithm follows a similar pattern as in `ESPIRA <https://doi.org/10.1093/imanum/drab108>`_.
+
+    Parameters
+    ----------
+    order : int, default 2
+        Number of poles used by the internal rational fitter.
+
+    rational_fitter : dict, default {'method': 'AAA'}
+        Configuration dictionary for the rational fitter.
+        It must include the key ``method`` with value ``'AAA'`` or ``'VF'``.
+        Any additional keys are forwarded to the selected estimator constructor.
+
+    damping : float, default 0.
+        Exponential damping factor applied to the time signal before fitting.
+        Set to ``0.`` to disable damping.
+
+    fs : float, default 1.
+        Sampling frequency (:math:`= 1/dt`) used to scale continuous-time exponents.
+
+    prune_tol : float, default 0.
+        Tolerance for pruning poles based on the norm of the fitted amplitudes.
+
+    compute_amps : bool, default True
+        Whether to compute and store amplitudes after fitting poles.
+
+    Attributes
+    ----------
+    poles_ : Poles
+        Estimated stable poles after optional pruning.
+
+    amps_ : HCoeffs or None
+        Estimated amplitudes if ``compute_amps=True``; otherwise ``None``.
+
+    exps_ : HCoeffs
+        Continuous-time exponents computed as ``log(poles_) * fs``.
+
+    n_poles_ : int
+        Number of poles identified by the internal rational fitter.
+    '''
 
     def __init__(
             self,
@@ -638,7 +925,10 @@ class SuperResolution(BaseEstimator):
 
     @property
     def exps_(self):
-        return np.emath.log(self.poles_.full())*self.fs
+        e = HCoeffs(
+            real=np.emath.log(self.poles_.real)*self.fs,
+            cx=np.emath.log(self.poles_.cx)*self.fs)
+        return e
 
     def _get_amps(self, y):
         ns = y.shape[0]
@@ -658,7 +948,21 @@ class SuperResolution(BaseEstimator):
 
         return amps
 
-    def fit(self, y):
+    def fit(self, y: ArrayLike) -> SuperResolution:
+        '''
+        Fit exponential sum.
+
+        Parameters
+        ----------
+
+        y : array-like, shape (n_samples, n_channels)
+            Time-domain signal to fit, where :math:`y_k` is a vector of length `n_channels` for each time index :math:`k = 0, \ldots, n-1`.
+            
+        Returns
+        -------
+        self : SuperResolution
+            Fitted estimator.
+        '''
         y = np.asarray(y)
         ns = y.shape[0]
         N = ns//2+1
@@ -710,7 +1014,22 @@ class SuperResolution(BaseEstimator):
 
         return self
 
-    def predict(self, X):
+    def predict(self, X: ArrayLike) -> np.ndarray:
+        '''
+        Predict using the exponential sum.
+        
+        Parameters
+        ----------
+
+        X : array-like, shape (n_eval_points,)
+            Time points at which to evaluate the exponential sum.
+
+        Returns
+        -------
+        f : np.ndarray, shape (n_eval_points, n_channels)
+            Predicted values.
+            If compute_amps=False, then the returned values are NaN.
+        '''
         if self.amps_ is None:
             msg = 'Cannot compute exponential sum values without amplitudes. \
                 Set compute_amps=True when initializing the estimator.'
@@ -760,7 +1079,7 @@ def _geometric_sum(r, ns:int):
 
     return r
 
-def _inner_prod(ns:int, x, y=None):
+def _inner_prod(ns: int, x, y: ArrayLike | None = None):
     if y is None:
         r = np.abs(x)**2
     else:
@@ -806,13 +1125,135 @@ def _std_new(x, ns):
     return np.sqrt(np.mean(dist(x, mean, ns)**2))
 
 class StablePoles:
+    r'''
+    Stabilization diagram.
+
+    This class helps to identify stable poles across different orders of spectral estimation.
+    Since the algorithm tends to find more stable poles than really exist,
+    post-processing is recommended.
+
+    Parameters
+    ----------
+    model: BaseEstimator
+        Model for spectral estimation.
+        The class is designed to work with `SuperResolution`, but
+        it also accepts custom models as long as they behave similarly to `SuperResolution`.
+
+    max_order: int
+        Maximum order of the exponential sum.
+        Recall that complex poles come in conjugate pairs, so they count as two.
+
+    radius: float, optional
+        Maximum threshold for adding poles to a cluster.
+        If None, the radius is set to :math:`d(0, 0.5)`; see Notes for details.
+
+    min_scale: int, default=-10
+        Lowest amplitude level for clustering; see Notes for details.
+
+    Attributes
+    ----------
+
+    clusters_ : list of dict
+        List of clusters of poles.
+        Each cluster is a dictionary where the keys are the orders of the poles and the values are the poles themselves.
+        The clusters are sorted by decreasing number of poles.
+        If two clusters have the same size, then they are sorted increasing
+        standard deviation of the poles.
+
+    clusters_amps_ : list of dict
+        List of clusters of amplitudes corresponding to the poles in `clusters_`.
+        Only the norm of the amplitudes is stored.
+    
+    Notes
+    -----
+    The clustering algorithm first groups poles by the norm of the amplitudes, so
+    if :math:`A` is the largest amplitude accross all orders, then
+    the levels are defined as the (non-disjoint) intervals :math:`[A/2^{l+3}, A/2^l]` for :math:`l = 0, 1, \ldots`.
+    Then, the algorithm sets all the poles at order `max_order` as seeds for clustering.
+    At each step, starting from the highest order and downwards, all the poles at
+    the given order --- and within the same amplitude level --- are added to
+    their closest cluster if they are within the given `radius` from it;
+    unassigned poles are set as seeds for new clusters.
+    Finally, clusters with less than 25% of the total number of orders are discarded.
+
+    To measure the distance between poles, we use the following metric:
+
+    .. math::
+
+        d(p, q) = \sqrt{\frac{1}{n}\sum_{k=0}^{n-1} |p^k - q^k|^2}
+
+    where :math:`n` is the length of the signal to be approximated.
+    This distance is motivated by the fact that the poles are used to construct exponential sums, so
+    it is more meaningful to measure the distance between poles in terms of their effect on the exponential sum
+    rather than their Euclidean distance in the complex plane.
+
+    Examples
+    --------
+    We generate a signal with two natural frequencies, and
+    use the stabilization diagram to identify them.
+    The maximum order we fit is 40, which roughly corresponds to 20 pairs of poles (ignoring real ones).
+
+    .. plot::
+        :context: reset
+        :format: doctest
+        :include-source: True
+
+        >>> import numpy as np
+        >>> import matplotlib.pyplot as plt
+        >>> from bcam.indar import ema
+        >>> # Set the parameters of the exponential sum.
+        >>> freqs = np.array([-0.8 + 1j*20.3, -1.3 + 1j*42.5])
+        >>> amps = np.array([0.5+1j*0.8, 0.3-1j*0.1])
+        >>> # Set the sampling parameters.
+        >>> dt = 0.02
+        >>> t = np.arange(0, 100) * dt
+        >>> # Generate the signal and add noise.
+        >>> y = np.sum(
+        ...     amps[np.newaxis, :]*np.exp(freqs[np.newaxis, :]*t[:, np.newaxis]),
+        ...     axis=1)
+        >>> y = np.real(y)
+        >>> rng = np.random.default_rng(1234)
+        >>> y += rng.normal(0, 0.05, size=y.shape)
+        >>> # Define the model for spectral estimation.
+        >>> model = ema.SuperResolution(
+        ...    rational_fitter={'method': 'AAA'}, fs=1/dt)
+        >>> # Construct stabilization diagram.
+        >>> sp = ema.StablePoles(model=model, max_order=40)
+        >>> sp.fit(y)
+
+    The algorithm detects three clusters, we can discard one of them because
+    its number of poles and amplitudes are small.
+    The method :func:`StablePoles.plot_clusters` also annotates the order of each pole.
+
+    .. plot::
+        :context:
+        :format: doctest
+        :include-source: True
+
+        >>> fig, ax = plt.subplots(ncols=2)
+        >>> sp.plot_clusters(ax=ax[0])
+        >>> sp.plot_clusters(ax=ax[1])
+        >>> # Plot true poles in red.
+        >>> true_poles = np.exp(freqs*dt)
+        >>> for i, p_ in enumerate(true_poles):
+        >>>    ax[i].scatter(p_.real, p_.imag, color='red')
+        >>>    ax[i].legend().remove()
+        >>> # Zoom in to the clusters.
+        >>> ax[0].set_xlim(0.9, 0.91)
+        >>> ax[0].set_ylim(0.385, 0.395)
+        >>> ax[1].set_xlim(0.64, 0.65)
+        >>> ax[1].set_ylim(0.73, 0.74)
+        >>> # Increase spacing between subplots.
+        >>> plt.subplots_adjust(wspace=0.3)
+        >>> plt.show()
+    '''
 
     def __init__(
         self,
         model,
         max_order,
         *,
-        radius=None,
+        radius: float | None = None,
         min_scale:int=-10
     ):
         self.model = model
@@ -931,7 +1372,23 @@ class StablePoles:
 
         return clusters
 
-    def fit(self, y):
+    def fit(self, y: ArrayLike) -> StablePoles:
+        '''
+        Fit exponential sums and find clusters.
+
+        Parameters
+        ----------
+
+        y : array-like, shape (n_time_samples, n_channels)
+            Time series to be approximated by exponential sums.
+
+        Returns
+        -------
+        self : StablePoles
+        '''
+        y = np.asarray(y)
+        if y.ndim == 1:
+            y = y[:, np.newaxis]
         ns, rank = y.shape
         self._ns = ns
 
@@ -996,10 +1453,23 @@ class StablePoles:
                 amps_c[order] = self.amps_set_[order][idx]
             amps.append(amps_c)
         return amps
-    
+
     def clusters_stats(self):
+        '''
+        Get statistics of the clusters.
+        
+        Returns
+        -------
+        stats : pandas.DataFrame
+            DataFrame containing the statistics of the clusters.
+
+        Raises
+        ------
+        ValueError
+            If fit() has not been run.
+        '''
         if not hasattr(self, 'clusters_'):
-            raise ValueError('You must run find_clusters() first.')
+            raise ValueError('You must run fit() first.')
 
         columns = ['number', 'pole', 'pole cv.', 'amp.', 'amp. cv.', 'highest order', 'lowest order']
         stats = {c: [] for c in columns}
@@ -1015,9 +1485,24 @@ class StablePoles:
 
         return pd.DataFrame(stats)
 
-    def plot_poles(self, scale, ax=None):
+    def plot_poles(self, level: float, ax: Axes | None = None):
+        '''
+        Plot poles at a given level.
+        
+        Parameters
+        ----------
+        level : float
+            Level to plot poles.
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot on. If None, a new figure and axes are created.
+
+        Raises
+        ------
+        ValueError
+            If fit() has not been run.
+        '''
         if not hasattr(self, 'amps_set_'):
-            raise ValueError('You must run find_clusters() first.')
+            raise ValueError('You must run fit() first.')
 
         if ax is None:
             _, ax = plt.subplots(nrows=1)
@@ -1028,7 +1513,7 @@ class StablePoles:
 
         # Compute maximum amplitude across all orders.
         grand_max = np.max([e[0] for e in self.amps_set_.values()])
-        level = grand_max / (2**scale)
+        level = grand_max / (2**level)
 
         poles_scale = {}
         for order, set_ in self.amps_set_.items():
@@ -1060,9 +1545,24 @@ class StablePoles:
         if show:
             plt.show()
 
-    def plot_clusters(self, clusters=None, ax=None):
+    def plot_clusters(self, clusters: list[int] | None = None, ax: Axes | None = None):
+        '''
+        Plot clusters of poles.
+        
+        Parameters
+        ----------
+        clusters : list of int, optional
+            List of cluster indices to plot. If None, all clusters are plotted.
+        ax : matplotlib.axes.Axes, optional
+            Axes to plot on. If None, a new figure and axes are created.
+
+        Raises
+        ------
+        ValueError
+            If fit() has not been run.
+        '''
         if not hasattr(self, 'clusters_'):
-            raise ValueError('You must run find_clusters() first.')
+            raise ValueError('You must run fit() first.')
 
         clusters = clusters if clusters is not None else range(len(self.clusters_))
         if ax is None:

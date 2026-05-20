@@ -11,8 +11,8 @@ Indar Documentation
 **Date:** |today|
 
 **Links:**
-`Source repository <https://gitlab.bcamath.org/fponce/indar/-/tree/main>`_ \|
-`Issues <https://gitlab.bcamath.org/fponce/indar/-/issues>`_
+`Source repository <https://github.com/CFAA-EHU/bcam-indar>`_ \|
+`Issues <https://github.com/CFAA-EHU/bcam-indar/issues>`_
 
 Indar (from the Basque word for *force*) is an open-source Python package created by researchers at
 the `Basque Center for Applied Mathematics <https://www.bcamath.org/en>`_ (BCAM)
@@ -32,5 +32,6 @@ As usual, we recommend installing Indar in a virtual environment using tools suc
    :maxdepth: 1
    :caption: Contents:
    
+   Getting started <getting_started>
    API Reference <api_reference>
 
