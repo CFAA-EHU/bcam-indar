@@ -39,4 +39,4 @@ test = ["requirements/requirements-test.in"]
 docs = ["requirements/requirements-docs.in"]
 
 [project.urls]
-Repository = "https://gitlab.bcamath.org/fponce/indar.git"
+Repository = "https://github.com/CFAA-EHU/bcam-indar"
