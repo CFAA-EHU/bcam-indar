@@ -1,4 +1,4 @@
-name: Publish Indar to TestPyPI
+name: Publish Indar to PyPI
 
 on:
   push:
@@ -36,7 +36,6 @@ jobs:
   publish-to-pypi:
     name: >-
       Publish Indar to PyPI
-    if: startsWith(github.ref, 'refs/tags/') # Only run this job for tag pushes
     needs:
     - build
     runs-on: ubuntu-latest
