@@ -105,13 +105,13 @@ The test is repeated four times with a sampling interval of
 :math:`\Delta t = 0.02`, and the number of time samples is 256.
 
 To follow the example along,
-download the data files `2-dof-system_rep*.csv` from `this link <https://github.com/CFAA-EHU/bcam-indar/tree/main/docs/source/_downloads>`_ and
+download the data files `2-dof-system_rep*.csv` from `this link <https://github.com/CFAA-EHU/bcam-indar/tree/main/docs/source/_documents>`_ and
 save them in a directory called `data`.
 Alternatively, execute the following command in your bash terminal:
 
 .. code-block:: bash
 
-    wget -nv -P data https://raw.githubusercontent.com/CFAA-EHU/bcam-indar/main/docs/source/_downloads/2-dof-system_rep{0..3}.csv
+    wget -nv -P data https://raw.githubusercontent.com/CFAA-EHU/bcam-indar/main/docs/source/_documents/2-dof-system_rep{0..3}.csv
 
 To load and inspect the data, execute the following code in your Python environment:
 

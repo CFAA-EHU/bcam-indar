@@ -949,7 +949,7 @@ class SuperResolution(BaseEstimator):
         return amps
 
     def fit(self, y: ArrayLike) -> SuperResolution:
-        '''
+        r'''
         Fit exponential sum.
 
         Parameters
